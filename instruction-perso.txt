@@ -1,0 +1,11 @@
+Démarrer l'environement python : 
+
+-> venv\Scripts\activate
+
+créer un environement pour le projet : 
+
+-> python -m venv venv
+
+Modif le readme :
+
+-> npm i readme-md-generator et npx readme-md-generator

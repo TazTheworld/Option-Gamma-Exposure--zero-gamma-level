@@ -9,3 +9,7 @@ __pycache__/
 # Configurations d'éditeur
 .vscode/
 .idea/
+
+# Environnements virtuels
+node_modules/
+.node_modules/
