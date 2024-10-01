@@ -6,7 +6,8 @@
   </a>
 </p>
 
-> Le projet a pour but de rendre option gamma exposure et zero gamma level accessible à tous 
+> Le projet a pour but de rendre option gamma exposure et zero gamma level accessible à tous, seulement pour EUR/USD 
+> Pour ça je scrap le site barchart.com, et j'utilise le script de https://perfiliev.com/author/perfiliev/.
 
 ### 🏠 [Homepage](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level)
 
