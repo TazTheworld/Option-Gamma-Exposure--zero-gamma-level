@@ -1,4 +1,4 @@
-<h1 align="center">Welcome to Option-Gamma-Exposure--zero-gamma-level 👋</h1>
+<h1 align="center">Bienvenue pour l'Option Gamma Exposure et zero gamma level 👋</h1>
 <p>
   <img alt="Version" src="https://img.shields.io/badge/version-1.0-blue.svg?cacheSeconds=2592000" />
   <a href="#" target="_blank">
@@ -13,7 +13,7 @@
 ## Install
 
 ```sh
-npm install
+git clone https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level.git
 ```
 
 ## Author
