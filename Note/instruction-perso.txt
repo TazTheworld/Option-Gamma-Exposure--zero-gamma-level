@@ -9,3 +9,11 @@ créer un environement pour le projet :
 Modif le readme :
 
 -> npm i readme-md-generator et npx readme-md-generator
+
+install requirements.txt 
+
+-> pip install -r requirements.txt
+
+creer le requirements.txt 
+
+-> pip freeze > requirements.txt

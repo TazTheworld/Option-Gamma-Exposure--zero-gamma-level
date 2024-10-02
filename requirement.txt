@@ -1,8 +1,0 @@
-numpy
-datetime
-pandas
-scipy
-matplotlib
-requests
-selenium 
-webdriver-manager
