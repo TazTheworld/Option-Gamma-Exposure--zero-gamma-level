@@ -11,26 +11,26 @@
 
 ### 🏠 [Homepage](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level)
 
-## Install
+## Installation
 
 ```sh
 git clone https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level.git
 ```
 
-## Author
+## Auteur
 
 👤 **Taz**
 
-* Website: https://github.com/TazTheworld
+* Site web: https://github.com/TazTheworld
 * Github: [@TazTheWorld](https://github.com/TazTheWorld)
 
-## 🤝 Contributing
+## 🤝 Contribuer
 
-Contributions, issues and feature requests are welcome!<br />Feel free to check [issues page](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level/issues). 
+Les contributions, les problèmes et les demandes de fonctionnalités sont les bienvenus !<br />N'hésitez pas à consulter [issues page](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level/issues). 
 
-## Show your support
+## Montrez votre soutien
 
-Give a ⭐️ if this project helped you!
+Donnez un ⭐️ si ce projet vous a aidé !
 
 ***
 _This README was generated with ❤️ by [readme-md-generator](https://github.com/kefranabg/readme-md-generator)_
