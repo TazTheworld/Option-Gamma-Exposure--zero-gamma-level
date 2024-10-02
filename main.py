@@ -60,8 +60,8 @@ todayDate = todayDate.replace(day=day, year=year)
 # Get SPX Options Data
 df = pd.read_csv(filename, sep=",", header=None, skiprows=4)
 df.columns = ['ExpirationDate','Calls','CallLastSale','CallNet','CallBid','CallAsk','CallVol',
-              'CallIV','CallDelta','CallGamma','CallOpenInt','StrikePrice','Puts','PutLastSale',
-              'PutNet','PutBid','PutAsk','PutVol','PutIV','PutDelta','PutGamma','PutOpenInt']
+            'CallIV','CallDelta','CallGamma','CallOpenInt','StrikePrice','Puts','PutLastSale',
+            'PutNet','PutBid','PutAsk','PutVol','PutIV','PutDelta','PutGamma','PutOpenInt']
 
 df['ExpirationDate'] = pd.to_datetime(df['ExpirationDate'], format='%a %b %d %Y')
 df['ExpirationDate'] = df['ExpirationDate'] + timedelta(hours=16)
@@ -115,7 +115,7 @@ levels = np.linspace(fromStrike, toStrike, 60)
 
 # For 0DTE options, I'm setting DTE = 1 day, otherwise they get excluded
 df['daysTillExp'] = [1/262 if (np.busday_count(todayDate.date(), x.date())) == 0 \
-                           else np.busday_count(todayDate.date(), x.date())/262 for x in df.ExpirationDate]
+else np.busday_count(todayDate.date(), x.date())/262 for x in df.ExpirationDate]
 
 nextExpiry = df['ExpirationDate'].min()
 
@@ -130,10 +130,10 @@ totalGammaExFri = []
 # For each spot level, calc gamma exposure at that point
 for level in levels:
     df['callGammaEx'] = df.apply(lambda row : calcGammaEx(level, row['StrikePrice'], row['CallIV'], 
-                                                          row['daysTillExp'], 0, 0, "call", row['CallOpenInt']), axis = 1)
+        row['daysTillExp'], 0, 0, "call", row['CallOpenInt']), axis = 1)
 
     df['putGammaEx'] = df.apply(lambda row : calcGammaEx(level, row['StrikePrice'], row['PutIV'], 
-                                                         row['daysTillExp'], 0, 0, "put", row['PutOpenInt']), axis = 1)    
+        row['daysTillExp'], 0, 0, "put", row['PutOpenInt']), axis = 1)    
 
     totalGamma.append(df['callGammaEx'].sum() - df['putGammaEx'].sum())
 

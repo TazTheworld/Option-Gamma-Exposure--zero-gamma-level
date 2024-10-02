@@ -1,0 +1,43 @@
+Calls:
+{'Strike': '1.06500', 'Type': 'Call', 'Last': '0.04720s', 'IV': '8.65%', 'Delta': '0.8684', 'Gamma': '5.0221', 'Theta': '-0.0001', 'Vega': '0.0010', 'IV Skew': '+1.51%', 'Last Trade': '10/01/24'}
+{'Strike': '1.07000', 'Type': 'Call', 'Last': '0.04280s', 'IV': '8.50%', 'Delta': '0.8445', 'Gamma': '5.7719', 'Theta': '-0.0001', 'Vega': '0.0011', 'IV Skew': '+1.36%', 'Last Trade': '10/01/24'}
+{'Strike': '1.07500', 'Type': 'Call', 'Last': '0.03840s', 'IV': '8.24%', 'Delta': '0.8196', 'Gamma': '6.5893', 'Theta': '-0.0001', 'Vega': '0.0012', 'IV Skew': '+1.11%', 'Last Trade': '10/01/24'}
+{'Strike': '1.08000', 'Type': 'Call', 'Last': '0.03430s', 'IV': '8.15%', 'Delta': '0.7861', 'Gamma': '7.4358', 'Theta': '-0.0001', 'Vega': '0.0013', 'IV Skew': '+1.01%', 'Last Trade': '10/01/24'}
+{'Strike': '1.08500', 'Type': 'Call', 'Last': '0.03020s', 'IV': '7.92%', 'Delta': '0.7517', 'Gamma': '8.3485', 'Theta': '-0.0001', 'Vega': '0.0015', 'IV Skew': '+0.78%', 'Last Trade': '10/01/24'}
+{'Strike': '1.09000', 'Type': 'Call', 'Last': '0.02640s', 'IV': '7.80%', 'Delta': '0.7100', 'Gamma': '9.2078', 'Theta': '-0.0001', 'Vega': '0.0016', 'IV Skew': '+0.66%', 'Last Trade': '10/01/24'}
+{'Strike': '1.09500', 'Type': 'Call', 'Last': '0.02270s', 'IV': '7.60%', 'Delta': '0.6651', 'Gamma': '10.0798', 'Theta': '-0.0001', 'Vega': '0.0017', 'IV Skew': '+0.46%', 'Last Trade': '10/01/24'}
+{'Strike': '1.10000', 'Type': 'Call', 'Last': '0.01930s', 'IV': '7.45%', 'Delta': '0.6148', 'Gamma': '10.8280', 'Theta': '-0.0001', 'Vega': '0.0018', 'IV Skew': '+0.31%', 'Last Trade': '10/01/24'}
+{'Strike': '1.10500', 'Type': 'Call', 'Last': '0.01620s', 'IV': '7.33%', 'Delta': '0.5601', 'Gamma': '11.3727', 'Theta': '-0.0001', 'Vega': '0.0018', 'IV Skew': '+0.19%', 'Last Trade': '10/01/24'}
+{'Strike': '1.11000', 'Type': 'Call', 'Last': '0.01340s', 'IV': '7.21%', 'Delta': '0.5025', 'Gamma': '11.7093', 'Theta': '-0.0002', 'Vega': '0.0019', 'IV Skew': '+0.08%', 'Last Trade': '10/01/24'}
+{'Strike': '1.11500', 'Type': 'Call', 'Last': '0.01100s', 'IV': '7.16%', 'Delta': '0.4438', 'Gamma': '11.6879', 'Theta': '-0.0002', 'Vega': '0.0018', 'IV Skew': '+0.03%', 'Last Trade': '10/01/24'}
+{'Strike': '1.12000', 'Type': 'Call', 'Last': '0.00890s', 'IV': '7.12%', 'Delta': '0.3857', 'Gamma': '11.4075', 'Theta': '-0.0002', 'Vega': '0.0018', 'IV Skew': '-0.02%', 'Last Trade': '10/01/24'}
+{'Strike': '1.12500', 'Type': 'Call', 'Last': '0.00720s', 'IV': '7.13%', 'Delta': '0.3311', 'Gamma': '10.7965', 'Theta': '-0.0002', 'Vega': '0.0017', 'IV Skew': 'unch', 'Last Trade': '10/01/24'}
+{'Strike': '1.13000', 'Type': 'Call', 'Last': '0.00550', 'IV': '7.00%', 'Delta': '0.2759', 'Gamma': '10.1507', 'Theta': '-0.0002', 'Vega': '0.0016', 'IV Skew': '-0.14%', 'Last Trade': '17:30 CT'}
+{'Strike': '1.13500', 'Type': 'Call', 'Last': '0.00450s', 'IV': '7.14%', 'Delta': '0.2332', 'Gamma': '9.1088', 'Theta': '-0.0002', 'Vega': '0.0014', 'IV Skew': '+0.01%', 'Last Trade': '10/01/24'}
+{'Strike': '1.14000', 'Type': 'Call', 'Last': '0.00360s', 'IV': '7.23%', 'Delta': '0.1941', 'Gamma': '8.0893', 'Theta': '-0.0002', 'Vega': '0.0013', 'IV Skew': '+0.09%', 'Last Trade': '10/01/24'}
+{'Strike': '1.14500', 'Type': 'Call', 'Last': '0.00280s', 'IV': '7.27%', 'Delta': '0.1586', 'Gamma': '7.0816', 'Theta': '-0.0002', 'Vega': '0.0011', 'IV Skew': '+0.13%', 'Last Trade': '10/01/24'}
+{'Strike': '1.15000', 'Type': 'Call', 'Last': '0.00180', 'IV': '6.92%', 'Delta': '0.1149', 'Gamma': '5.9693', 'Theta': '-0.0002', 'Vega': '0.0009', 'IV Skew': '-0.22%', 'Last Trade': '00:27 CT'}
+{'Strike': '1.15500', 'Type': 'Call', 'Last': '0.00170s', 'IV': '7.41%', 'Delta': '0.1040', 'Gamma': '5.1928', 'Theta': '-0.0002', 'Vega': '0.0008', 'IV Skew': '+0.27%', 'Last Trade': '10/01/24'}
+{'Strike': '1.16000', 'Type': 'Call', 'Last': '0.00130s', 'IV': '7.45%', 'Delta': '0.0823', 'Gamma': '4.3470', 'Theta': '-0.0002', 'Vega': '0.0007', 'IV Skew': '+0.31%', 'Last Trade': '10/01/24'}
+
+Puts:
+{'Strike': '1.06500', 'Type': 'Put', 'Last': '0.00220', 'IV': '8.30%', 'Delta': '-0.1141', 'Gamma': '4.9516', 'Theta': '0.0000', 'Vega': '0.0009', 'IV Skew': '+1.16%', 'Last Trade': '21:47 CT'}
+{'Strike': '1.07000', 'Type': 'Put', 'Last': '0.00260s', 'IV': '8.03%', 'Delta': '-0.1342', 'Gamma': '5.7355', 'Theta': '0.0000', 'Vega': '0.0010', 'IV Skew': '+0.89%', 'Last Trade': '10/01/24'}
+{'Strike': '1.07500', 'Type': 'Put', 'Last': '0.00330s', 'IV': '7.96%', 'Delta': '-0.1642', 'Gamma': '6.6166', 'Theta': '0.0000', 'Vega': '0.0012', 'IV Skew': '+0.82%', 'Last Trade': '10/01/24'}
+{'Strike': '1.08000', 'Type': 'Put', 'Last': '0.00400s', 'IV': '7.76%', 'Delta': '-0.1947', 'Gamma': '7.5570', 'Theta': '0.0000', 'Vega': '0.0013', 'IV Skew': '+0.62%', 'Last Trade': '10/01/24'}
+{'Strike': '1.08500', 'Type': 'Put', 'Last': '0.00490s', 'IV': '7.60%', 'Delta': '-0.2315', 'Gamma': '8.5278', 'Theta': '0.0000', 'Vega': '0.0014', 'IV Skew': '+0.46%', 'Last Trade': '10/01/24'}
+{'Strike': '1.09000', 'Type': 'Put', 'Last': '0.00600s', 'IV': '7.47%', 'Delta': '-0.2739', 'Gamma': '9.4828', 'Theta': '0.0000', 'Vega': '0.0016', 'IV Skew': '+0.33%', 'Last Trade': '10/01/24'}
+{'Strike': '1.09500', 'Type': 'Put', 'Last': '0.00740s', 'IV': '7.38%', 'Delta': '-0.3223', 'Gamma': '10.3275', 'Theta': '0.0000', 'Vega': '0.0017', 'IV Skew': '+0.24%', 'Last Trade': '10/01/24'}
+{'Strike': '1.10000', 'Type': 'Put', 'Last': '0.00890s', 'IV': '7.20%', 'Delta': '-0.3735', 'Gamma': '11.1612', 'Theta': '0.0000', 'Vega': '0.0018', 'IV Skew': '+0.07%', 'Last Trade': '10/01/24'}
+{'Strike': '1.10500', 'Type': 'Put', 'Last': '0.01080s', 'IV': '7.12%', 'Delta': '-0.4302', 'Gamma': '11.7067', 'Theta': '0.0000', 'Vega': '0.0018', 'IV Skew': '-0.02%', 'Last Trade': '10/01/24'}
+{'Strike': '1.11000', 'Type': 'Put', 'Last': '0.01290s', 'IV': '6.97%', 'Delta': '-0.4895', 'Gamma': '12.1174', 'Theta': '0.0000', 'Vega': '0.0019', 'IV Skew': '-0.17%', 'Last Trade': '10/01/24'}
+{'Strike': '1.11500', 'Type': 'Put', 'Last': '0.01550s', 'IV': '6.94%', 'Delta': '-0.5500', 'Gamma': '12.0558', 'Theta': '0.0000', 'Vega': '0.0018', 'IV Skew': '-0.20%', 'Last Trade': '10/01/24'}
+{'Strike': '1.12000', 'Type': 'Put', 'Last': '0.01830s', 'IV': '6.85%', 'Delta': '-0.6106', 'Gamma': '11.8036', 'Theta': '0.0000', 'Vega': '0.0018', 'IV Skew': '-0.28%', 'Last Trade': '10/01/24'}
+{'Strike': '1.12500', 'Type': 'Put', 'Last': '0.02160s', 'IV': '6.88%', 'Delta': '-0.6667', 'Gamma': '11.1106', 'Theta': '0.0000', 'Vega': '0.0017', 'IV Skew': '-0.26%', 'Last Trade': '10/01/24'}
+{'Strike': '1.13000', 'Type': 'Put', 'Last': '0.02510s', 'IV': '6.87%', 'Delta': '-0.7197', 'Gamma': '10.2678', 'Theta': '0.0000', 'Vega': '0.0015', 'IV Skew': '-0.26%', 'Last Trade': '10/01/24'}
+{'Strike': '1.13500', 'Type': 'Put', 'Last': '0.02880s', 'IV': '6.82%', 'Delta': '-0.7693', 'Gamma': '9.2909', 'Theta': '0.0000', 'Vega': '0.0014', 'IV Skew': '-0.31%', 'Last Trade': '10/01/24'}
+{'Strike': '1.14000', 'Type': 'Put', 'Last': '0.03280s', 'IV': '6.83%', 'Delta': '-0.8116', 'Gamma': '8.1789', 'Theta': '0.0000', 'Vega': '0.0012', 'IV Skew': '-0.30%', 'Last Trade': '10/01/24'}
+{'Strike': '1.14500', 'Type': 'Put', 'Last': '0.03700s', 'IV': '6.84%', 'Delta': '-0.8482', 'Gamma': '7.0452', 'Theta': '0.0000', 'Vega': '0.0011', 'IV Skew': '-0.29%', 'Last Trade': '10/01/24'}
+{'Strike': '1.15000', 'Type': 'Put', 'Last': '0.04130s', 'IV': '6.79%', 'Delta': '-0.8816', 'Gamma': '5.9110', 'Theta': '0.0001', 'Vega': '0.0009', 'IV Skew': '-0.35%', 'Last Trade': '10/01/24'}
+{'Strike': '1.15500', 'Type': 'Put', 'Last': '0.04580s', 'IV': '6.79%', 'Delta': '-0.9075', 'Gamma': '4.8569', 'Theta': '0.0001', 'Vega': '0.0007', 'IV Skew': '-0.35%', 'Last Trade': '10/01/24'}
+{'Strike': '1.16000', 'Type': 'Put', 'Last': '0.05040s', 'IV': '6.79%', 'Delta': '-0.9284', 'Gamma': '3.9041', 'Theta': '0.0001', 'Vega': '0.0006', 'IV Skew': '-0.35%', 'Last Trade': '10/01/24'}
