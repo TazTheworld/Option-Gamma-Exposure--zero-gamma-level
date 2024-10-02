@@ -23,63 +23,67 @@ try:
 
     # Récupérer le texte brut de l'élément principal
     text_content = root1.text
-    print(text_content)  # Pour voir la structure du texte récupéré
+    #print(text_content)  # Pour voir la structure du texte récupéré
 
     # Diviser le texte en lignes
     lines = text_content.split('\n')
 
-    # Initialiser les listes pour les calls et puts
+        # Initialiser les listes pour les calls et puts
     calls = []
     puts = []
 
     # Itérer sur les lignes et structurer les données
-    for i in range(len(lines)):
-        if "Call" in lines[i]:  # Identifier les lignes des calls
+    i = 0
+    while i < len(lines):
+        # Ignorer les lignes vides
+        if lines[i].strip() == "":
+            i += 1
+            continue
+
+        # Identifier les lignes des calls ou puts
+        if "Call" in lines[i] or "Put" in lines[i]:
             try:
-                call_data = lines[i:i+10]  # Récupérer les 10 lignes suivantes
-                if len(call_data) >= 10:  # Vérifier qu'il y a suffisamment de données
-                    calls.append({
-                        "Strike": call_data[9],
-                        "Type": call_data[0],
-                        "Last": call_data[1],
-                        "IV": call_data[2],
-                        "Delta": call_data[3],
-                        "Gamma": call_data[4],
-                        "Theta": call_data[5],
-                        "Vega": call_data[6],
-                        "IV Skew": call_data[7],
-                        "Last Trade": call_data[8],
-                    })
+                # Le strike est dans la ligne précédente
+                strike = lines[i - 1].strip() if i > 0 else "N/A"
+                
+                # Récupérer les 9 lignes suivantes (car le strike est déjà récupéré)
+                data = lines[i:i+9]
+                
+                if len(data) >= 9:
+                    entry = {
+                        "Strike": strike,
+                        "Type": data[0].strip(),
+                        "Last": data[1].strip(),
+                        "IV": data[2].strip(),
+                        "Delta": data[3].strip(),
+                        "Gamma": data[4].strip(),
+                        "Theta": data[5].strip(),
+                        "Vega": data[6].strip(),
+                        "IV Skew": data[7].strip(),
+                        "Last Trade": data[8].strip(),
+                    }
+                    
+                    # Ajouter aux calls ou puts en fonction du type
+                    if "Call" in data[0]:
+                        calls.append(entry)
+                    elif "Put" in data[0]:
+                        puts.append(entry)
+                        
+                # Avancer l'index de 9 (en plus du call/put lui-même)
+                i += 9
             except IndexError:
-                print(f"Erreur d'accès aux données des calls à la ligne {i}.")
-        
-        elif "Put" in lines[i]:  # Identifier les lignes des puts
-            try:
-                put_data = lines[i:i+10]  # Récupérer les 10 lignes suivantes
-                if len(put_data) >= 10:  # Vérifier qu'il y a suffisamment de données
-                    puts.append({
-                        "Strike": put_data[9],
-                        "Type": put_data[0],
-                        "Last": put_data[1],
-                        "IV": put_data[2],
-                        "Delta": put_data[3],
-                        "Gamma": put_data[4],
-                        "Theta": put_data[5],
-                        "Vega": put_data[6],
-                        "IV Skew": put_data[7],
-                        "Last Trade": put_data[8],
-                    })
-            except IndexError:
-                print(f"Erreur d'accès aux données des puts à la ligne {i}.")
+                print(f"Erreur d'accès aux données à la ligne {i}.")
+        else:
+            i += 1  # Passer à la ligne suivante
 
     # Afficher les données collectées
-    #print("\nCalls:")
-    #for call in calls:
-        #print(call)
+    print("\nCalls:")
+    for call in calls:
+        print(call)
 
-    #print("\nPuts:")
-    #for put in puts:
-        #print(put)
+    print("\nPuts:")
+    for put in puts:
+        print(put)
 
 except Exception as e:
     print(f'Une erreur s\'est produite : {e}')
