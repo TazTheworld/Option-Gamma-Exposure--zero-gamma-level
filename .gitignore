@@ -6,6 +6,9 @@ venv/
 *.pyc
 __pycache__/
 
+# Graphiques générés
+charts/
+
 # Configurations d'éditeur
 .vscode/
 .idea/
