@@ -15,18 +15,23 @@ import pandas as pd
 from scipy.stats import norm
 
 import cboe_data
+from cme_data import CONTRACT_SIZES
 
 pd.options.display.float_format = "{:,.4f}".format
 
-CONTRACT_SIZE = 100
+CONTRACT_SIZE = 100          # actions et ETF US ; 125 000 pour le 6E (Euro FX)
 TRADING_DAYS = 262
 
 
-def calc_gamma_ex(S, K, vol, T, r, q, opt_type, OI):
+def calc_gamma_ex(S, K, vol, T, r, q, opt_type, OI, contract_size=CONTRACT_SIZE):
     """Gamma Black-Scholes ($ par mouvement de 1% du sous-jacent), vectorisé.
 
     S peut être un scalaire ou un vecteur de niveaux de spot ; K, vol, T et OI
     sont des vecteurs de même longueur (une entrée par contrat).
+
+    Avec r = q = 0 cette formule est identiquement égale au gamma de Black-76,
+    donc elle s'applique telle quelle aux options sur futures (6E, ES...) :
+    seule la taille du contrat change.
     """
     S = np.asarray(S, dtype=float)
     K, vol, T, OI = (np.asarray(x, dtype=float) for x in (K, vol, T, OI))
@@ -42,7 +47,7 @@ def calc_gamma_ex(S, K, vol, T, r, q, opt_type, OI):
         dm = dp - vol_s * np.sqrt(T_s)
         gamma = K_s * np.exp(-r * T_s) * norm.pdf(dm) / (S * S * vol_s * np.sqrt(T_s))
 
-    return np.where(valid, OI * CONTRACT_SIZE * S * S * 0.01 * gamma, 0.0)
+    return np.where(valid, OI * contract_size * S * S * 0.01 * gamma, 0.0)
 
 
 def is_third_friday(d):
@@ -66,7 +71,8 @@ def find_zero_gamma(levels, profile):
     return pos_strike - ((pos_strike - neg_strike) * pos_gamma / (pos_gamma - neg_gamma))
 
 
-def annotate_levels(ax, spot, ticker, zero_gamma=None, call_wall=None, put_wall=None):
+def annotate_levels(ax, spot, ticker, zero_gamma=None, call_wall=None, put_wall=None,
+                    decimals=2):
     """Trace les niveaux clés (spot, zero gamma, murs) sur un axe.
 
     Les xlim doivent déjà être fixées : un niveau situé en dehors de la fenêtre
@@ -79,7 +85,7 @@ def annotate_levels(ax, spot, ticker, zero_gamma=None, call_wall=None, put_wall=
             return
         suffix = "" if lo <= value <= hi else "  (hors plage)"
         ax.axvline(x=value, color=color, lw=width, ls=style,
-                   label=f"{name} : {value:,.2f}{suffix}")
+                   label=f"{name} : {value:,.{decimals}f}{suffix}")
 
     draw(spot, "r", "-", f"{ticker} Spot", 1.2)
     draw(zero_gamma, "g", "--", "Zero Gamma", 1.6)
@@ -92,14 +98,32 @@ def main():
     parser.add_argument("ticker", nargs="?", default="SPCX",
                         help="ticker du sous-jacent (SPCX, TSLA, _SPX...)")
     parser.add_argument("--csv", help="utiliser un export CSV CBOE au lieu de l'API JSON")
+    parser.add_argument("--cme", help="export de règlement CME (options sur futures, ex. 6E)")
+    parser.add_argument("--futures-price", type=float,
+                        help="prix du future ; déduit par parité call-put si omis")
+    parser.add_argument("--expiry", help="échéance AAAA-MM-JJ, si absente du fichier CME")
+    parser.add_argument("--quote-date", help="date de valorisation AAAA-MM-JJ (défaut : aujourd'hui)")
     parser.add_argument("--outdir", default="charts", help="dossier de sortie des graphiques")
     parser.add_argument("--no-show", action="store_true", help="enregistrer sans ouvrir les fenêtres")
     parser.add_argument("--range", type=float, default=0.2,
                         help="demi-plage de strikes autour du spot (0.2 = +/-20%%)")
+    parser.add_argument("--contract-size", type=float,
+                        help="multiplicateur du contrat (défaut : 100, ou 125000 avec --cme)")
     args = parser.parse_args()
 
+    # Les options sur futures ont un multiplicateur tout autre que les actions
+    contract_size = args.contract_size
+    if contract_size is None:
+        contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if args.cme else CONTRACT_SIZE
+
     # ---=== CHARGEMENT DES DONNÉES ===---
-    if args.csv:
+    if args.cme:
+        import cme_data
+        df, spot_price, today_date = cme_data.load_settlement(  # noqa: F811
+            args.cme, futures_price=args.futures_price, expiry=args.expiry,
+            quote_date=args.quote_date, product=args.ticker)
+        ticker = args.ticker
+    elif args.csv:
         df, spot_price, today_date = cboe_data.load_from_csv(args.csv)
         ticker = args.ticker
     else:
@@ -108,12 +132,14 @@ def main():
 
     from_strike = (1 - args.range) * spot_price
     to_strike = (1 + args.range) * spot_price
-    print(f"{ticker} | spot {spot_price:,.2f} | {len(df)} strikes | {today_date:%Y-%m-%d %H:%M}")
+    decimals = 4 if spot_price < 10 else 2   # les paires FX se lisent en pips
+    print(f"{ticker} | sous-jacent {spot_price:,.{decimals}f} | {len(df)} strikes "
+          f"| {today_date:%Y-%m-%d} | contrat x{contract_size:,.0f}")
 
     # ---=== GAMMA EXPOSURE PAR STRIKE ===---
     # GEX = gamma unitaire * OI * taille du contrat * spot, ramené à un mouvement de 1%
-    df["CallGEX"] = df.CallGamma * df.CallOpenInt * CONTRACT_SIZE * spot_price ** 2 * 0.01
-    df["PutGEX"] = df.PutGamma * df.PutOpenInt * CONTRACT_SIZE * spot_price ** 2 * 0.01 * -1
+    df["CallGEX"] = df.CallGamma * df.CallOpenInt * contract_size * spot_price ** 2 * 0.01
+    df["PutGEX"] = df.PutGamma * df.PutOpenInt * contract_size * spot_price ** 2 * 0.01 * -1
     df["TotalGamma"] = df.CallGEX + df.PutGEX
 
     df_agg = df.groupby("StrikePrice")[["CallGEX", "PutGEX", "TotalGamma"]].sum()
@@ -157,9 +183,9 @@ def main():
 
     for i, level in enumerate(levels):
         call_ex = calc_gamma_ex(level, df.StrikePrice, df.CallIV, df.daysTillExp,
-                                0, 0, "call", df.CallOpenInt)
+                                0, 0, "call", df.CallOpenInt, contract_size)
         put_ex = calc_gamma_ex(level, df.StrikePrice, df.PutIV, df.daysTillExp,
-                               0, 0, "put", df.PutOpenInt)
+                               0, 0, "put", df.PutOpenInt, contract_size)
         net = call_ex - put_ex
         for label, mask in masks.items():
             profiles[label][i] = net[mask].sum()
@@ -171,9 +197,9 @@ def main():
               f"({from_strike:,.2f} - {to_strike:,.2f}) — élargis avec --range.")
 
     print(f"Total GEX  : {total_gex / scale:,.2f} {unit} $ / mouvement de 1%")
-    print(f"Zero Gamma : {zero_gamma:,.2f}" if zero_gamma else "Zero Gamma : introuvable")
-    print(f"Call Wall  : {call_wall:,.2f}" if call_wall else "Call Wall  : n/a")
-    print(f"Put Wall   : {put_wall:,.2f}" if put_wall else "Put Wall   : n/a")
+    print(f"Zero Gamma : {zero_gamma:,.{decimals}f}" if zero_gamma else "Zero Gamma : introuvable")
+    print(f"Call Wall  : {call_wall:,.{decimals}f}" if call_wall else "Call Wall  : n/a")
+    print(f"Put Wall   : {put_wall:,.{decimals}f}" if put_wall else "Put Wall   : n/a")
 
     os.makedirs(args.outdir, exist_ok=True)
     title_suffix = f"{ticker}, {today_date:%d %b %Y}"
@@ -189,7 +215,7 @@ def main():
                  fontweight="bold", fontsize=15)
     ax.set_xlabel("Strike", fontweight="bold")
     ax.set_ylabel(unit_label, fontweight="bold")
-    annotate_levels(ax, spot_price, ticker, zero_gamma, call_wall, put_wall)
+    annotate_levels(ax, spot_price, ticker, zero_gamma, call_wall, put_wall, decimals)
     ax.axhline(y=0, color="grey", lw=1)
     ax.legend()
     fig.tight_layout()
@@ -206,7 +232,7 @@ def main():
     ax.set_title(f"Gamma calls vs puts — {title_suffix}", fontweight="bold", fontsize=15)
     ax.set_xlabel("Strike", fontweight="bold")
     ax.set_ylabel(unit_label, fontweight="bold")
-    annotate_levels(ax, spot_price, ticker, zero_gamma, call_wall, put_wall)
+    annotate_levels(ax, spot_price, ticker, zero_gamma, call_wall, put_wall, decimals)
     ax.axhline(y=0, color="grey", lw=1)
     ax.legend()
     fig.tight_layout()
@@ -222,7 +248,7 @@ def main():
     ax.set_xlabel("Prix du sous-jacent", fontweight="bold")
     ax.set_ylabel(unit_label, fontweight="bold")
     ax.set_xlim([from_strike, to_strike])
-    annotate_levels(ax, spot_price, ticker, zero_gamma)
+    annotate_levels(ax, spot_price, ticker, zero_gamma, decimals=decimals)
     ax.axhline(y=0, color="grey", lw=1)
 
     # Zones de régime : gamma négatif (déstabilisant) à gauche, positif à droite
@@ -232,7 +258,7 @@ def main():
                         transform=trans, label="Gamma négatif")
         ax.fill_between([zero_gamma, to_strike], 0, 1, facecolor="green", alpha=0.1,
                         transform=trans, label="Gamma positif")
-        ax.annotate(f"Zero Gamma\n{zero_gamma:,.2f}", xy=(zero_gamma, 0.95), xycoords=trans,
+        ax.annotate(f"Zero Gamma\n{zero_gamma:,.{decimals}f}", xy=(zero_gamma, 0.95), xycoords=trans,
                     ha="center", va="top", fontweight="bold", color="darkgreen",
                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="darkgreen", alpha=0.85))
     ax.legend(loc="best")
