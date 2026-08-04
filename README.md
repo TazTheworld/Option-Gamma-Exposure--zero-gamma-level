@@ -65,6 +65,28 @@ La détection des colonnes est tolérante (formats large et long, alias, casse l
 code sert donc aux actions et aux options sur futures, seul le multiplicateur change
 (100 par défaut, 125 000 pour le 6E).
 
+### Databento : le 6E sans téléchargement manuel
+
+[Databento](https://databento.com) redistribue légalement les données CME Globex,
+donc la chaîne complète est récupérable par API — sans scraping.
+
+```sh
+pip install databento
+export DATABENTO_API_KEY=db-xxxxxxxx      # $env:DATABENTO_API_KEY="db-..." sous PowerShell
+
+python main.py 6E --databento             # dernière séance close
+python main.py 6E --databento --date 2026-08-03
+python main.py ES --databento --contract-size 50
+```
+
+Deux requêtes par appel : le schéma `definition` fournit strike, échéance et
+call/put, le schéma `statistics` fournit l'open interest (`stat_type` 9), le prix
+de règlement et, quand le CME le publie, la volatilité implicite. Le prix du
+future vient du règlement de première échéance, à défaut de la parité call-put.
+
+Chaque requête est facturée au volume de données : une séance d'options 6E reste
+modeste, mais évite les boucles sur de longues périodes.
+
 ### Sources de données
 
 | Module | Source | Accès |
@@ -72,6 +94,7 @@ code sert donc aux actions et aux options sur futures, seul le multiplicateur ch
 | `cboe_data.py` | `cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json` | libre, sans clé, différé |
 | `cboe_data.load_from_csv()` | export CSV du site CBOE | téléchargement manuel |
 | `cme_data.load_settlement()` | export du CME Option Settlement Tool | téléchargement manuel |
+| `databento_data.fetch_chain()` | Databento GLBX.MDP3 | clé API, facturé à l'usage |
 
 Le JSON CBOE fournit strike, expiration, OI, IV et gamma. `to_cboe_csv()` permet de
 réécrire une chaîne au format CSV historique pour d'autres outils.

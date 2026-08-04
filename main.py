@@ -99,6 +99,9 @@ def main():
                         help="ticker du sous-jacent (SPCX, TSLA, _SPX...)")
     parser.add_argument("--csv", help="utiliser un export CSV CBOE au lieu de l'API JSON")
     parser.add_argument("--cme", help="export de règlement CME (options sur futures, ex. 6E)")
+    parser.add_argument("--databento", action="store_true",
+                        help="récupérer la chaîne CME via Databento (DATABENTO_API_KEY)")
+    parser.add_argument("--date", help="séance à charger AAAA-MM-JJ (défaut : dernière close)")
     parser.add_argument("--futures-price", type=float,
                         help="prix du future ; déduit par parité call-put si omis")
     parser.add_argument("--expiry", help="échéance AAAA-MM-JJ, si absente du fichier CME")
@@ -114,10 +117,17 @@ def main():
     # Les options sur futures ont un multiplicateur tout autre que les actions
     contract_size = args.contract_size
     if contract_size is None:
-        contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if args.cme else CONTRACT_SIZE
+        futures = args.cme or args.databento
+        contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if futures else CONTRACT_SIZE
 
     # ---=== CHARGEMENT DES DONNÉES ===---
-    if args.cme:
+    if args.databento:
+        import databento_data
+        df, spot_price, today_date = databento_data.fetch_chain(args.ticker, day=args.date)
+        if args.futures_price:
+            spot_price = args.futures_price
+        ticker = args.ticker
+    elif args.cme:
         import cme_data
         df, spot_price, today_date = cme_data.load_settlement(  # noqa: F811
             args.cme, futures_price=args.futures_price, expiry=args.expiry,
