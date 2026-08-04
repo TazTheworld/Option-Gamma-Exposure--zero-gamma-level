@@ -87,6 +87,23 @@ future vient du règlement de première échéance, à défaut de la parité cal
 Chaque requête est facturée au volume de données : une séance d'options 6E reste
 modeste, mais évite les boucles sur de longues périodes.
 
+### Barchart (options sur futures, gratuit mais aléatoire)
+
+```sh
+python Scrap-data.py E6U26 --expiry aug-26 --out barchart_6E.csv
+python main.py 6E --cme barchart_6E.csv --expiry 2026-08-28
+```
+
+Le script fusionne deux vues — `volatility-greeks` (IV, gamma) et `options`
+(volume, **open interest**, indispensable au GEX) — sur (strike, type), et écrit
+un CSV que `cme_data.py` relit tel quel.
+
+Barchart rend ses tableaux dans un shadow DOM (`<bc-data-grid>`) : le texte n'est
+pas accessible par `.text`, il faut descendre dans le `shadowRoot`. Surtout, le
+site **sert des cellules vides aux navigateurs automatisés selon l'adresse IP** :
+les en-têtes chargent, les valeurs non. Le script échoue alors avec un message
+explicite plutôt que d'écrire un fichier vide. Essayer `--visible` le cas échéant.
+
 ### Sources de données
 
 | Module | Source | Accès |

@@ -33,7 +33,9 @@ CONTRACT_SIZES = {"6E": 125_000, "6B": 62_500, "6J": 12_500_000, "6A": 100_000,
 ALIASES = {
     "strike": ["strike price", "strike", "exercise price"],
     "type": ["put/call", "call/put", "type", "cp", "option type"],
-    "settle": ["settlement price", "settlement", "settle", "prior settle", "last price", "last"],
+    # "latest" en dernier : c'est le nom Barchart, il ne doit pas primer sur un vrai règlement
+    "settle": ["settlement price", "settlement", "settle", "prior settle", "last price",
+               "last", "latest"],
     "oi": ["prior day oi", "open interest", "prior int", "at close", "oi"],
     "iv": ["implied volatility", "implied vol", "volatility", "impl vol", "iv"],
     "volume": ["est. volume", "estimated volume", "volume", "est vol", "vol"],

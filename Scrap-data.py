@@ -1,104 +1,172 @@
+"""Récupération d'une chaîne d'options sur futures depuis Barchart.
+
+Deux vues sont nécessaires et fusionnées sur (strike, type) :
+  - volatility-greeks : IV, delta, gamma
+  - options           : volume et open interest  <- indispensable au calcul de GEX
+
+Le résultat est un CSV directement lisible par cme_data.py, donc par le pipeline :
+
+    python Scrap-data.py E6U26 --expiry aug-26 --out barchart_6E.csv
+    python main.py 6E --cme barchart_6E.csv --expiry 2026-08-28
+
+Barchart rend ses tableaux dans un shadow DOM (<bc-data-grid>) : le texte n'est
+pas accessible par .text, il faut descendre dans le shadowRoot. Le site sert par
+ailleurs des cellules vides aux navigateurs automatisés selon l'adresse IP — le
+script échoue alors bruyamment plutôt que d'écrire un fichier vide.
+"""
+
+import argparse
+import sys
+import time
+
+import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
-# Mots à filtrer
-keywords_to_filter = [
-    "Strike", "Type", "Last", "IV", "Delta", "Gamma", "Theta", "Vega", "IV Skew", "Time", "Links"
-]
+BASE = "https://www.barchart.com/futures/quotes/{sym}/{vue}/{exp}?futuresOptionsView=merged"
 
-# Fonction pour accéder au shadow root
-def expand_shadow_element(element):
-    return driver.execute_script('return arguments[0].shadowRoot', element)
+# Extrait les lignes de toutes les <bc-data-grid> de la page, en-têtes compris
+JS_GRILLES = r"""
+const out = [];
+document.querySelectorAll('bc-data-grid').forEach((g, gi) => {
+  const sr = g.shadowRoot; if (!sr) return;
+  const heads = [...sr.querySelectorAll('div._header_cell')]
+                  .map(e => e.textContent.trim().split('\n')[0]);
+  const cells = [...sr.querySelectorAll('div._cell')].map(e => e.textContent.trim());
+  const n = heads.length; if (!n) return;
+  const rows = [];
+  for (let i = 0; i + n <= cells.length; i += n) rows.push(cells.slice(i, i + n));
+  out.push({index: gi, heads: heads, rows: rows.filter(r => r.some(c => c.length > 0))});
+});
+return out;
+"""
 
-# Initialiser le navigateur
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+CONSENT = ["#CybotCookiebotDialogBodyButtonDecline",
+           "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll"]
 
-# Accéder à la page cible
-driver.get('https://www.barchart.com/futures/quotes/E6Z24/volatility-greeks/dec-24?futuresOptionsView=merged')
 
-# Attendre que l'élément principal soit présent
-try:
-    root1 = WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.XPATH, '//*[@id="main-content-column"]/div/div[5]'))
-    )
+def make_driver(headless=True):
+    opts = Options()
+    args = ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1920,4000",
+            "--disable-blink-features=AutomationControlled", "--log-level=3"]
+    if headless:
+        args.insert(0, "--headless=new")
+    for a in args:
+        opts.add_argument(a)
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    driver = webdriver.Chrome(options=opts)
+    driver.set_page_load_timeout(90)
+    driver.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"})
+    return driver
 
-    # Récupérer le texte brut de l'élément principal
-    text_content = root1.text
-    # Diviser le texte en lignes
-    lines = text_content.split('\n')
 
-    # Initialiser les listes pour les calls et puts
-    calls = []
-    puts = []
-
-    # Itérer sur les lignes et structurer les données
-    i = 0
-    while i < len(lines):
-        # Ignorer les lignes vides et mots-clés spécifiques
-        if lines[i].strip() == "" or any(keyword in lines[i] for keyword in keywords_to_filter):
-            i += 1
+def scrape_view(driver, symbol, expiry, vue, wait=12):
+    """Renvoie un DataFrame des lignes de la vue, avec une colonne Type."""
+    url = BASE.format(sym=symbol, vue=vue, exp=expiry)
+    print(f"  -> {url}")
+    driver.get(url)
+    time.sleep(6)
+    for sel in CONSENT:
+        try:
+            driver.execute_script("arguments[0].click();",
+                                  driver.find_element(By.CSS_SELECTOR, sel))
+            break
+        except Exception:
             continue
+    time.sleep(wait)
+    # Les grilles sont chargées à l'affichage : on les fait défiler
+    for y in (800, 1600, 2400):
+        driver.execute_script(f"window.scrollTo(0,{y});")
+        time.sleep(3)
 
-        # Identifier les lignes des calls ou puts
-        if "Call" in lines[i] or "Put" in lines[i]:
-            try:
-                # Le strike est dans la ligne précédente
-                strike = lines[i - 1].strip() if i > 0 else "N/A"
-                
-                # Récupérer les 9 lignes suivantes (car le strike est déjà récupéré)
-                data = lines[i:i+9]
-                
-                if len(data) >= 9:
-                    entry = {
-                        "Strike": strike,
-                        "Type": data[0].strip(),
-                        "Last": data[1].strip(),
-                        "IV": data[2].strip(),
-                        "Delta": data[3].strip(),
-                        "Gamma": data[4].strip(),
-                        "Theta": data[5].strip(),
-                        "Vega": data[6].strip(),
-                        "IV Skew": data[7].strip(),
-                        "Last Trade": data[8].strip(),
-                    }
+    grids = driver.execute_script(JS_GRILLES)
+    frames = []
+    for g in grids:
+        if not g["rows"]:
+            continue
+        block = pd.DataFrame(g["rows"], columns=g["heads"])
+        if "Type" not in block.columns:
+            # Barchart sépare les tables : la première porte les calls, la seconde les puts
+            block["Type"] = "Call" if g["index"] == 0 else "Put"
+        frames.append(block)
 
-                    # Ignorer l'entrée si c'est le premier enregistrement avec des valeurs non valides
-                    if (entry['Strike'] == 'N/A' and entry['Type'] == 'Calls') or \
-                        (entry['Strike'] == '10/01/24' and entry['Type'] == 'Puts'):
-                        i += 9  # Avancer l'index sans ajouter à calls ou puts
-                        continue
-                    
-                    # Ajouter aux calls ou puts en fonction du type
-                    if "Call" in data[0]:
-                        calls.append(entry)
-                    elif "Put" in data[0]:
-                        puts.append(entry)
-                        
-                # Avancer l'index de 9 (en plus du call/put lui-même)
-                i += 9
-            except IndexError:
-                print(f"Erreur d'accès aux données à la ligne {i}.")
-        else:
-            i += 1  # Passer à la ligne suivante
+    if not frames:
+        vides = sum(1 for g in grids if not g["rows"])
+        raise RuntimeError(
+            f"Aucune donnée dans la vue '{vue}' ({len(grids)} grilles, {vides} vides).\n"
+            "Les en-têtes chargent mais les cellules reviennent vides : Barchart sert la\n"
+            "page sans valeurs à ce navigateur. Essaie --visible, ou depuis une autre\n"
+            "connexion. Ce n'est pas un problème d'URL ni d'attente."
+        )
+    return pd.concat(frames, ignore_index=True)
 
-    # Enregistrer les données dans un fichier .txt
-    with open("options_data.txt", "w") as file:
-        file.write("Calls:\n")
-        for call in calls:
-            file.write(str(call) + "\n")
-        
-        file.write("\nPuts:\n")
-        for put in puts:
-            file.write(str(put) + "\n")
 
-    print("Données enregistrées dans 'options_data.txt'.")
+def _num(series):
+    """'1,234.5' / '12.3%' / 'N/A' -> float."""
+    return pd.to_numeric(
+        series.astype(str).str.replace(",", "", regex=False)
+                          .str.replace("%", "", regex=False)
+                          .str.strip().replace({"N/A": None, "-": None, "": None}),
+        errors="coerce")
 
-except Exception as e:
-    print(f'Une erreur s\'est produite : {e}')
 
-finally:
-    driver.quit()  # Fermer le navigateur à la fin
+def scrape_chain(symbol, expiry, headless=True):
+    """Fusionne les deux vues et renvoie un DataFrame prêt pour cme_data."""
+    driver = make_driver(headless)
+    try:
+        print("vue volatility-greeks (IV, gamma) :")
+        greeks = scrape_view(driver, symbol, expiry, "volatility-greeks")
+        print(f"   {len(greeks)} lignes")
+        print("vue options (volume, open interest) :")
+        chain = scrape_view(driver, symbol, expiry, "options")
+        print(f"   {len(chain)} lignes")
+    finally:
+        driver.quit()
+
+    for frame in (greeks, chain):
+        frame["Strike"] = _num(frame["Strike"])
+        frame["Type"] = frame["Type"].astype(str).str.strip().str.title().str[:4]
+
+    keep_g = ["Strike", "Type"] + [c for c in ("Latest", "IV", "Delta", "Gamma") if c in greeks]
+    keep_c = ["Strike", "Type"] + [c for c in ("Open Int", "Volume") if c in chain]
+    merged = pd.merge(greeks[keep_g], chain[keep_c], on=["Strike", "Type"], how="outer")
+
+    for col in merged.columns:
+        if col != "Type":
+            merged[col] = _num(merged[col])
+    if "Open Int" in merged:
+        merged = merged.rename(columns={"Open Int": "Open Interest"})
+    return merged.dropna(subset=["Strike"]).sort_values(["Type", "Strike"])
+
+
+def main():
+    p = argparse.ArgumentParser(description="Scraper Barchart pour options sur futures")
+    p.add_argument("symbol", nargs="?", default="E6U26",
+                   help="contrat Barchart (E6U26 = Euro FX sept. 2026)")
+    p.add_argument("--expiry", default="aug-26", help="échéance des options (aug-26, sep-26...)")
+    p.add_argument("--out", default="barchart_options.csv", help="fichier CSV de sortie")
+    p.add_argument("--visible", action="store_true", help="ouvrir un vrai navigateur")
+    args = p.parse_args()
+
+    try:
+        df = scrape_chain(args.symbol, args.expiry, headless=not args.visible)
+    except RuntimeError as err:
+        raise SystemExit(f"\nEchec : {err}")
+
+    df.to_csv(args.out, index=False)
+    oi = df["Open Interest"].sum() if "Open Interest" in df else 0
+    print(f"\n{len(df)} lignes -> {args.out}   (open interest total : {oi:,.0f})")
+    if not oi:
+        print("ATTENTION : open interest vide, le GEX ne pourra pas être calculé.")
+    else:
+        print(f"Ensuite : python main.py 6E --cme {args.out} --expiry AAAA-MM-JJ")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
