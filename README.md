@@ -104,6 +104,33 @@ site **sert des cellules vides aux navigateurs automatisés selon l'adresse IP**
 les en-têtes chargent, les valeurs non. Le script échoue alors avec un message
 explicite plutôt que d'écrire un fichier vide. Essayer `--visible` le cas échéant.
 
+### Suivi du flux (qui achète, qui vend)
+
+Le GEX dit *où* sont les positions, pas *qui* les a initiées. Pour ça il faut
+comparer chaque transaction à la fourchette bid/ask du moment : au-dessus du mid
+l'acheteur était à l'initiative, en dessous c'est le vendeur.
+
+`flow_tracker.py` approche ça gratuitement en échantillonnant le CBOE : entre
+deux relevés, un contrat dont le volume a augmenté **et** dont l'horodatage du
+dernier trade a avancé fournit un trade neuf, situable dans sa fourchette.
+
+```sh
+python flow_tracker.py ORCL --interval 300 --duration 6h
+python flow_tracker.py SPCX --interval 180 --out flux_spcx.csv
+```
+
+À lancer **pendant la séance** (9h30–16h ET), en comptant 15 minutes de plus :
+le flux CBOE est différé d'autant, et hors séance volume et derniers trades
+restent figés sur la clôture précédente. Le script prévient si le marché est
+fermé. L'horodatage du payload CBOE est en UTC, celui des trades en heure de
+New York — la classification compare les horodatages entre relevés plutôt qu'à
+l'heure courante, ce qui rend le décalage sans effet.
+
+Ses limites, à garder en tête : on ne voit que le **dernier** trade de chaque
+fenêtre, dont le côté est appliqué à tout le volume de la fenêtre. Le signal
+n'a de sens qu'agrégé sur de nombreux contrats. Pour de vrais prints il faut le
+tape OPRA — Tradier (gratuit avec un compte), Polygon ou Databento.
+
 ### Sources de données
 
 | Module | Source | Accès |
