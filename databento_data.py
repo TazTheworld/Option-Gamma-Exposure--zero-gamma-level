@@ -135,8 +135,13 @@ def build_chain(defs_df, stats_df, futures_price=None, quote_date=None, rate=0.0
 
     # --- définitions : un contrat par instrument_id ---
     defs = defs_df.copy()
-    if "instrument_class" not in defs.columns:
-        raise ValueError(f"Schéma 'definition' inattendu : {list(defs.columns)}")
+    manquantes = {"instrument_class", "strike_price", "expiration",
+                  "instrument_id"} - set(defs.columns)
+    if manquantes:
+        raise ValueError(
+            f"Schéma 'definition' inattendu, colonnes absentes : {sorted(manquantes)}. "
+            f"Reçu : {list(defs.columns)}"
+        )
     defs["cp"] = defs.instrument_class.astype(str).str.upper().str[0]
     defs = defs[defs.cp.isin(["C", "P"])]          # exclut futures et spreads
     defs = defs.drop_duplicates("instrument_id", keep="last")

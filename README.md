@@ -110,6 +110,44 @@ recalcul du delta dollar du book complet à un jour d'intervalle (écart 3 %, d'
 
 Le quatrième graphique, `<TICKER>_4_charm_vanna.png`, les trace strike par strike.
 
+### Historique
+
+Chaque exécution ajoute une ligne à `history.csv` — sans quoi chaque analyse reste un
+instantané et les séries n'existent nulle part.
+
+```sh
+python history.py              # dernier relevé de chaque ticker
+python history.py SPCX         # la trajectoire d'un sous-jacent
+python history.py SPCX --last 5
+python main.py SPCX --no-history      # ne pas enregistrer
+```
+
+```
+ticker                date       spot        GEX   zero gam   call w.    put w.    charm/j
+SPCX      2026-08-03 16:00     114.85     -58.7M     137.51    160.00    100.00    -120.0M
+SPCX      2026-08-06 16:00     110.48    -147.8M     124.02    115.00    110.00    -180.0M
+SPCX      2026-08-10 16:00     134.10      +3.1M     132.02    150.00    150.00    -150.0M
+
+variation sur 3 relevés :
+  GEX              -58.7M ->        +3.1M       +61.8M   changement de signe
+  le régime a changé de signe sur la période (gamma positif <-> négatif)
+```
+
+Le périmètre (`dte_max`) est enregistré avec chaque ligne : deux relevés du même jour sur
+des horizons différents ne sont pas comparables, et rien d'autre ne les distinguerait.
+
+### Tests
+
+```sh
+python -m pytest tests -q        # 77 tests, aucun accès réseau
+```
+
+Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
+même formule que le code et ne prouveraient rien. Charm et vanna sont recoupés par
+**différences finies** sur le delta, le gamma Black-Scholes contre Black-76, et les parsers
+contre des jeux construits depuis des paramètres connus (on vérifie qu'on retrouve le prix
+du future, l'IV et le gamma injectés).
+
 ### Options sur futures (EUR/USD via le 6E, ES, ...)
 
 Le CME interdit l'accès automatisé à son site (Data Terms of Use) : il n'y a donc pas

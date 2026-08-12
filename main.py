@@ -179,6 +179,10 @@ def main():
                              "plus large que les murs gamma, qui restent collés à la monnaie")
     parser.add_argument("--contract-size", type=float,
                         help="multiplicateur du contrat (défaut : 100, ou 125000 avec --cme)")
+    parser.add_argument("--history", default="history.csv",
+                        help="fichier d'historique des relevés (défaut : history.csv)")
+    parser.add_argument("--no-history", action="store_true",
+                        help="ne pas enregistrer ce relevé dans l'historique")
     args = parser.parse_args()
 
     # Les options sur futures ont un multiplicateur tout autre que les actions
@@ -348,6 +352,21 @@ def main():
     # pour chaque jour qui passe, à prix inchangé.
     print(f"Charm      : {total_charm / gscale:+,.2f} {gunit} $ de delta / jour de bourse")
     print(f"Vanna      : {total_vanna / gscale:+,.2f} {gunit} $ de delta / point de vol")
+
+    # ---=== HISTORIQUE ===---
+    # Une ligne par exécution : sans ça chaque analyse est un instantané, et les
+    # séries n'existent nulle part. Le périmètre d'échéance est enregistré avec,
+    # deux relevés du même jour sur des horizons différents n'étant pas comparables.
+    if not args.no_history:
+        import history
+        history.record(args.history, timestamp=today_date, ticker=ticker,
+                       dte_max="all" if args.dte_max is None else args.dte_max,
+                       spot=spot_price, total_gex=total_gex, zero_gamma=zero_gamma,
+                       call_wall=call_wall, put_wall=put_wall,
+                       call_wall_oi=call_wall_oi, put_wall_oi=put_wall_oi,
+                       charm=total_charm, vanna=total_vanna,
+                       strikes=df.StrikePrice.nunique(),
+                       expiries=df.ExpirationDate.nunique())
 
     os.makedirs(args.outdir, exist_ok=True)
     # L'horizon figure dans le titre : deux graphiques du même jour sur des périmètres
