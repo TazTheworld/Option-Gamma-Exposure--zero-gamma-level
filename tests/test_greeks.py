@@ -5,6 +5,7 @@ que le code. On dérive donc numériquement le delta et le prix, et on compare.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.stats import norm
 
@@ -111,3 +112,50 @@ def test_pick_scale_bascule_au_milliard():
     assert M.pick_scale([5e8])[1] == "millions"
     assert M.pick_scale([2e9])[1] == "milliards"
     assert M.pick_scale([])[1] == "millions"
+
+
+# ---=== convention de temps ===---
+
+def test_time_to_expiry_heures_compte_le_temps_reel_restant():
+    """Un 0DTE à 10h du matin, c'est ~0,25 jour, pas 1."""
+    asof = pd.Timestamp("2026-08-12 14:00")            # 10h00 New York (EDT)
+    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])  # échéance 16h NY le jour même
+    T, div = M.time_to_expiry(exp, asof, "heures")
+    assert div == 365.0
+    assert T[0] * 365 == pytest.approx(6 / 24, abs=0.02)   # 6 heures restantes
+
+
+def test_time_to_expiry_bourse_applique_le_plancher_d_un_jour():
+    asof = pd.Timestamp("2026-08-12 14:00")
+    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])
+    T, div = M.time_to_expiry(exp, asof, "bourse")
+    assert div == M.TRADING_DAYS
+    assert T[0] == pytest.approx(1 / M.TRADING_DAYS)       # plancher, pas 0,25 jour
+
+
+def test_le_plancher_surestime_massivement_les_0dte():
+    """C'est la raison d'être du changement de convention par défaut."""
+    asof = pd.Timestamp("2026-08-12 14:00")
+    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])
+    t_reel = M.time_to_expiry(exp, asof, "heures")[0][0]
+    t_plancher = M.time_to_expiry(exp, asof, "bourse")[0][0]
+    assert t_plancher > 5 * t_reel                         # plus de 5 fois trop
+
+
+def test_time_to_expiry_croit_avec_l_echeance():
+    asof = pd.Timestamp("2026-08-12 14:00")
+    exp = pd.Series(pd.to_datetime(["2026-08-13 16:00", "2026-08-20 16:00",
+                                    "2026-09-18 16:00"]))
+    for convention in ("heures", "bourse"):
+        T, _ = M.time_to_expiry(exp, asof, convention)
+        assert np.all(np.diff(T) > 0)
+        assert np.all(T > 0)
+
+
+def test_charm_suit_le_diviseur_de_la_convention():
+    """Un charm exprimé par jour doit utiliser le diviseur ayant servi à T."""
+    par_bourse = float(M.calc_charm_ex(100, 105, 0.25, 0.1, OI=1, contract_size=1,
+                                       jours_par_an=M.TRADING_DAYS))
+    par_calendaire = float(M.calc_charm_ex(100, 105, 0.25, 0.1, OI=1, contract_size=1,
+                                           jours_par_an=365.0))
+    assert par_bourse / par_calendaire == pytest.approx(365.0 / M.TRADING_DAYS)

@@ -156,26 +156,44 @@ quoi que ce soit, et le dit. Il faut donc laisser l'historique s'accumuler — u
 par séance. Ce n'est pas un backtest de stratégie : on vérifie que la description du
 terrain est exacte, pas qu'on peut en tirer de l'argent.
 
-### Fiabilité des greeks proches de l'échéance
+### Mesure du temps restant (`--time-convention`)
 
-Le gamma publié par le CBOE et celui recalculé depuis l'IV s'accordent bien au-delà de
-quelques jours, et divergent violemment sur les 0-1 DTE : sur le SPX, écart médian de
-25 % et 82 % des contrats à plus de 10 %. C'est intrinsèque — près de l'échéance le
-gamma explose et dépend du spot à la minute, que des données différées ne donnent pas.
+Le script de référence de Perfiliev compte le temps en **jours ouvrés / 262, avec un
+plancher à 1 jour** pour les 0DTE. Ce plancher les surestime lourdement : un 0DTE à 10h
+du matin, c'est 0,23 jour, pas 1. Le gamma variant en 1/√T, l'erreur est massive.
 
-Le script le signale quand ces échéances pèsent plus de 20 % du GEX **ou du charm** :
+Mesuré sur le SPX, en comparant le gamma recalculé au gamma publié par le CBOE :
+
+| convention | médiane | écart > 10 % |
+|---|---|---|
+| plancher 1 jour (Perfiliev) | 1,134 | 77 % |
+| **heures restantes réelles** | **1,000** | **38 %** |
+
+Par tranche, avec la convention correcte : 0j → 0,983, 1j → 1,012, 2j → 1,005, 5j → 0,986.
+Le défaut est donc `heures` : temps réel jusqu'à 16h00 New York, rapporté à 365 jours.
+`--time-convention bourse` restaure l'ancienne, pour reproduire le script de référence.
+
+Sur le SPX cela déplace le zero gamma de 7 698 à 7 710 et le charm de −42,9 à −36,8 Md$.
+Le charm est ramené au jour avec le diviseur de la convention active : `time_to_expiry()`
+renvoie T et ce diviseur ensemble, précisément pour éviter de les désaccorder.
+
+Indépendamment de la convention, le script signale les échéances très proches quand elles
+pèsent plus de 20 % du GEX **ou du charm** — ce dernier bien plus exposé, variant en 1/T :
 
 ```
-Attention : les échéances à 0-1 jour portent 15% du GEX, 67% du charm.
+Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ```
 
-Le charm y est bien plus exposé que le gamma, puisqu'il varie en 1/T. `--dte-min 2`
-les exclut ; comparer les deux lectures avant de conclure.
+`--dte-min 2` les exclut ; comparer les deux lectures avant de conclure.
+
+> Les greeks du CBOE, eux, **ne sont pas périmés** : mesuré en séance, le delta bouge sur
+> 85 % des contrats et l'IV sur 96 % en trois minutes. Seul l'open interest est quotidien,
+> et aucun fournisseur ne le publie en intraday.
 
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 88 tests, aucun accès réseau
+python -m pytest tests -q        # 93 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la

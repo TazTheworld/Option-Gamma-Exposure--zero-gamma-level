@@ -60,15 +60,17 @@ def _d1_d2(S, K, vol, T):
     return d1, d1 - vol_s * np.sqrt(T_s), valid, vol_s, T_s
 
 
-def calc_charm_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
-    """Charm exposure : dollars de delta gagnés par jour de bourse, à prix constant.
+def calc_charm_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE, jours_par_an=TRADING_DAYS):
+    """Charm exposure : dollars de delta gagnés par jour, à prix constant.
 
     charm = phi(d1) * d2 / (2T). À q = 0 il est identique pour calls et puts
     (le -1 du delta put ne s'écoule pas).
 
-    T étant exprimé en années DE BOURSE (jours ouvrés / 262), la dérivée est par
-    année de bourse : on divise donc par TRADING_DAYS et non par 365. Vérifié par
-    différence finie sur le delta dollar du book complet.
+    La dérivée est par unité de T : `jours_par_an` doit donc valoir le même
+    diviseur que celui ayant servi à calculer T — 365 en convention "heures",
+    TRADING_DAYS en convention "bourse". time_to_expiry() renvoie les deux
+    ensemble pour éviter de les désaccorder. Vérifié par différence finie sur le
+    delta dollar du book complet.
 
     Interprétation : un charm exposure positif signifie que le delta du book
     dealer grossit avec le temps, donc qu'il doit vendre pour rester neutre.
@@ -78,7 +80,7 @@ def calc_charm_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
     d1, d2, valid, _, T_s = _d1_d2(S, K, vol, T)
     charm = norm.pdf(d1) * d2 / (2 * T_s)
     OI = np.asarray(OI, dtype=float)
-    return np.where(valid, OI * contract_size * np.asarray(S, float) * charm / TRADING_DAYS, 0.0)
+    return np.where(valid, OI * contract_size * np.asarray(S, float) * charm / jours_par_an, 0.0)
 
 
 def calc_vanna_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
@@ -94,6 +96,41 @@ def calc_vanna_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
     vanna = -norm.pdf(d1) * d2 / vol_s
     OI = np.asarray(OI, dtype=float)
     return np.where(valid, OI * contract_size * np.asarray(S, float) * vanna / 100.0, 0.0)
+
+
+def time_to_expiry(expirations, asof, convention="heures"):
+    """Temps restant jusqu'à l'échéance, en années. Renvoie aussi le diviseur
+    permettant de ramener une dérivée temporelle à la journée.
+
+    "heures" (défaut) : temps réel restant jusqu'à 16h00 New York le jour de
+        l'échéance, rapporté à 365 jours. C'est la convention du CBOE.
+    "bourse" : jours ouvrés / 262 avec un plancher à 1 jour, la convention du
+        script de référence de Perfiliev.
+
+    Le plancher à 1 jour surestime lourdement les 0DTE — un 0DTE à 10h du matin,
+    c'est 0,23 jour, pas 1 — et le gamma variant en 1/racine(T), l'écart est
+    massif. Mesuré sur le SPX : gamma recalculé / gamma publié passe d'une médiane
+    de 1,134 (77 % des contrats à plus de 10 % d'écart) à 1,000 (38 %).
+    """
+    exp = pd.to_datetime(pd.Series(expirations).values)
+    if convention == "bourse":
+        jours = np.busday_count(
+            np.full(len(exp), pd.Timestamp(asof).date(), dtype="datetime64[D]"),
+            exp.to_numpy().astype("datetime64[D]"))   # pandas ne caste pas en [D]
+        return np.where(jours == 0, 1, jours) / TRADING_DAYS, TRADING_DAYS
+
+    from zoneinfo import ZoneInfo
+    # ExpirationDate porte déjà 16h00, entendues en heure de New York ; l'horodatage
+    # de la source est en UTC. On aligne les deux avant de soustraire.
+    ny = ZoneInfo("America/New_York")
+    exp_utc = (pd.DatetimeIndex(exp).tz_localize(ny, nonexistent="shift_forward",
+                                                 ambiguous=True).tz_convert("UTC")
+               .tz_localize(None))
+    maintenant = pd.Timestamp(asof)
+    maintenant = maintenant.tz_convert("UTC").tz_localize(None) if maintenant.tz else maintenant
+    restant = (exp_utc - maintenant).total_seconds().to_numpy()
+    # une minute de plancher : à T stricly nul le gamma diverge
+    return np.maximum(restant, 60.0) / (365.0 * 24 * 3600), 365.0
 
 
 def is_third_friday(d):
@@ -172,6 +209,9 @@ def main():
     parser.add_argument("--dte-max", type=dte_arg, default=30, metavar="N",
                         help="ne garder que les échéances à N jours calendaires ou moins "
                              "(défaut : 30 ; 'all' pour toute la chaîne)")
+    parser.add_argument("--time-convention", choices=("heures", "bourse"), default="heures",
+                        help="mesure du temps restant : 'heures' (réel, convention CBOE) "
+                             "ou 'bourse' (jours ouvrés/262, convention Perfiliev)")
     parser.add_argument("--dte-min", type=int, default=0, metavar="N",
                         help="exclure les échéances à moins de N jours (0DTE instables "
                              "avec des données différées ; essayer 2)")
@@ -290,12 +330,8 @@ def main():
     # ---=== PROFIL DE GAMMA / ZERO GAMMA LEVEL ===---
     levels = np.linspace(from_strike, to_strike, 60)
 
-    # Les 0DTE sont ramenées à 1 jour, sinon elles sortent du calcul (T = 0)
-    busdays = np.busday_count(
-        np.full(len(df), today_date.date(), dtype="datetime64[D]"),
-        df.ExpirationDate.values.astype("datetime64[D]"),
-    )
-    df["daysTillExp"] = np.where(busdays == 0, 1, busdays) / TRADING_DAYS
+    df["daysTillExp"], jours_par_an = time_to_expiry(df.ExpirationDate, today_date,
+                                                     args.time_convention)
     df = df[df.daysTillExp > 0]
 
     next_expiry = df.ExpirationDate.min()
@@ -325,10 +361,11 @@ def main():
     # Même convention de signe que le GEX : dealers longs calls, shorts puts.
     # Calculés après le filtre d'échéance, donc sur le même périmètre que le reste.
     for nom, fonction in (("Charm", calc_charm_ex), ("Vanna", calc_vanna_ex)):
+        extra = {"jours_par_an": jours_par_an} if fonction is calc_charm_ex else {}
         c = fonction(spot_price, df.StrikePrice, df.CallIV, df.daysTillExp,
-                     df.CallOpenInt, contract_size)
+                     df.CallOpenInt, contract_size, **extra)
         p = fonction(spot_price, df.StrikePrice, df.PutIV, df.daysTillExp,
-                     df.PutOpenInt, contract_size)
+                     df.PutOpenInt, contract_size, **extra)
         df[f"Call{nom}"] = c
         df[f"Put{nom}"] = -p
         df[f"Total{nom}"] = c - p
@@ -374,7 +411,7 @@ def main():
     print(f"Put Wall   : {fmt(put_wall):>12} (gamma)   {fmt(put_wall_oi):>12} (open interest)")
     # Charm : delta que les dealers doivent racheter (négatif) ou revendre (positif)
     # pour chaque jour qui passe, à prix inchangé.
-    print(f"Charm      : {total_charm / gscale:+,.2f} {gunit} $ de delta / jour de bourse")
+    print(f"Charm      : {total_charm / gscale:+,.2f} {gunit} $ de delta / jour")
     print(f"Vanna      : {total_vanna / gscale:+,.2f} {gunit} $ de delta / point de vol")
 
     # ---=== HISTORIQUE ===---
@@ -461,8 +498,8 @@ def main():
     # ---=== GRAPHIQUE 4 : charm et vanna par strike ===---
     fig, (ax_c, ax_v) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
     for ax, col, titre, ylab in (
-            (ax_c, "TotalCharm", f"Charm : {total_charm/gscale:+,.2f} {gunit} $ de delta par jour de bourse",
-             f"$ {gunit} de delta / jour de bourse"),
+            (ax_c, "TotalCharm", f"Charm : {total_charm/gscale:+,.2f} {gunit} $ de delta par jour",
+             f"$ {gunit} de delta / jour"),
             (ax_v, "TotalVanna", f"Vanna : {total_vanna/gscale:+,.2f} {gunit} $ de delta par point de vol",
              f"$ {gunit} de delta / pt de vol")):
         ax.grid(alpha=0.3)
