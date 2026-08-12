@@ -221,6 +221,11 @@ def _duree(txt):
     return int(val * {"h": 3600, "m": 60, "s": 1, "": 1}[unit])
 
 
+# main.py --watch attend la même écriture des durées : un seul analyseur, pour que
+# "5m" ne veuille pas dire deux choses selon le script qui le lit.
+duree = _duree
+
+
 def track(ticker, interval=300, duration=6 * 3600, out=None, contract_size=CONTRACT_SIZE):
     """Boucle d'échantillonnage. Écrit le flux classifié au fil de l'eau."""
     out = out or f"flux_{ticker.lower()}.csv"

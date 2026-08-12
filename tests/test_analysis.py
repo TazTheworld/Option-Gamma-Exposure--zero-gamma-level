@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 import analysis
+import cboe_data
 import greeks as G
 import plots
 import snapshots
@@ -25,7 +26,7 @@ IV = 0.25
 
 
 def chaine(spot=SPOT, quote_date=QUOTE, jours=(30,), strikes=None,
-           call_oi=None, put_oi=None, iv=IV, facteur_gamma_publie=1.0):
+           call_oi=None, put_oi=None, iv=IV, facteur_gamma_publie=1.0, skew=0.0):
     """Chaîne synthétique au format COLUMNS, avec un gamma publié cohérent avec l'IV.
 
     L'open interest par défaut est volontairement ASYMÉTRIQUE entre calls et puts :
@@ -51,8 +52,11 @@ def chaine(spot=SPOT, quote_date=QUOTE, jours=(30,), strikes=None,
                                 len(jours))
     df["PutOpenInt"] = np.tile(defaut_put if put_oi is None else np.asarray(put_oi, float),
                                len(jours))
-    df["CallIV"] = iv
-    df["PutIV"] = iv
+    # skew : pente dIV/d(ln K/S). Négative sur actions et indices — les puts
+    # hors de la monnaie se paient plus cher que les calls.
+    smile = iv + skew * np.log(df.StrikePrice.values / spot)
+    df["CallIV"] = np.maximum(smile, 0.01)
+    df["PutIV"] = np.maximum(smile, 0.01)
 
     # Gamma unitaire vrai, celui qu'une source honnête publierait
     T, _ = analysis.time_to_expiry(df.ExpirationDate, quote_date)
@@ -252,6 +256,91 @@ def test_profil_vectorise_egale_la_boucle():
         assert matrice[i] == pytest.approx(attendu, rel=1e-12)
 
 
+# ---=== Régime de volatilité ===---
+
+def test_pente_skew_retrouve_la_pente_injectee():
+    """Le smile est construit avec une pente connue : on doit la retrouver."""
+    df = chaine(jours=(30,), skew=-0.40)
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    df = analysis.expositions(df, SPOT, T, 100)
+    assert analysis.pente_skew(df, SPOT)[0] == pytest.approx(-0.40, rel=1e-6)
+
+
+def test_sans_skew_les_deux_regimes_coincident():
+    """Un smile plat n'a rien à décaler : les deux profils doivent être identiques."""
+    df = chaine(jours=(30,), skew=0.0)
+    a = analysis.analyser(df, spot=SPOT, quote_date=QUOTE, regime_vol="sticky-strike")
+    b = analysis.analyser(df, spot=SPOT, quote_date=QUOTE, regime_vol="sticky-moneyness")
+    assert b.profiles["All Expiries"] == pytest.approx(a.profiles["All Expiries"], rel=1e-9)
+    assert b.zero_gamma == pytest.approx(a.zero_gamma, rel=1e-9)
+
+
+def _livre_qui_croise(skew=0.0):
+    """Puts chargés en dessous, calls au-dessus : le profil traverse zéro au milieu."""
+    strikes = np.arange(70.0, 131.0, 5.0)
+    return chaine(strikes=strikes, jours=(30,), skew=skew,
+                  put_oi=np.where(strikes < SPOT, 5_000.0, 100.0),
+                  call_oi=np.where(strikes > SPOT, 5_000.0, 100.0))
+
+
+def test_le_decalage_de_vol_est_nul_au_spot():
+    """Propriété exacte du régime : ln(S0/S') = 0 quand S' = S0.
+
+    C'est ce qui borne sa portée. Le régime remodèle les ailes du profil sans
+    toucher au voisinage du spot — donc il ne corrige PAS un zero gamma proche
+    du spot, contrairement à ce qu'on pourrait attendre d'un « profil plus
+    réaliste ».
+    """
+    df = _livre_qui_croise(skew=-0.60)
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    df = analysis.expositions(df, SPOT, T, 100)
+    fige = analysis.profil_gamma(df, [SPOT], 100, SPOT, "sticky-strike")
+    suivi = analysis.profil_gamma(df, [SPOT], 100, SPOT, "sticky-moneyness")
+    assert suivi == pytest.approx(fige, rel=1e-12)
+
+
+def test_sticky_moneyness_remodele_les_ailes():
+    """Loin du spot, le décalage mord — et d'autant plus que le skew est marqué."""
+    df = _livre_qui_croise(skew=-0.60)
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    df = analysis.expositions(df, SPOT, T, 100)
+    niveaux = np.array([80.0, SPOT, 120.0])
+    fige = analysis.profil_gamma(df, niveaux, 100, SPOT, "sticky-strike").sum(axis=1)
+    suivi = analysis.profil_gamma(df, niveaux, 100, SPOT, "sticky-moneyness").sum(axis=1)
+
+    assert suivi[1] == pytest.approx(fige[1], rel=1e-12)      # au spot, rien ne bouge
+    assert not np.isclose(suivi[0], fige[0], rtol=1e-3)       # aile gauche
+    assert not np.isclose(suivi[2], fige[2], rtol=1e-3)       # aile droite
+
+
+def test_le_regime_de_vol_ne_touche_pas_au_gex_au_spot():
+    """Le GEX affiché est mesuré au spot : aucun régime de profil ne doit le changer."""
+    df = _livre_qui_croise(skew=-0.60)
+    fige = analysis.analyser(df, spot=SPOT, quote_date=QUOTE, regime_vol="sticky-strike")
+    suivi = analysis.analyser(df, spot=SPOT, quote_date=QUOTE, regime_vol="sticky-moneyness")
+    assert suivi.total_gex == pytest.approx(fige.total_gex, rel=1e-12)
+    assert suivi.call_wall == fige.call_wall and suivi.put_wall == fige.put_wall
+
+
+def test_regime_de_volatilite_inconnu_refuse():
+    df = chaine()
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    df = analysis.expositions(df, SPOT, T, 100)
+    with pytest.raises(ValueError, match="régime de volatilité"):
+        analysis.profil_gamma(df, [SPOT], 100, SPOT, "sticky-tout-ce-qu-on-veut")
+
+
+def test_sticky_moneyness_sans_spot_retombe_sur_sticky_strike():
+    """Sans spot de référence, aucun décalage n'est défini : pas d'invention."""
+    df = chaine(skew=-0.60)
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    df = analysis.expositions(df, SPOT, T, 100)
+    niveaux = np.linspace(80, 120, 9)
+    sans = analysis.profil_gamma(df, niveaux, 100, None, "sticky-moneyness")
+    fige = analysis.profil_gamma(df, niveaux, 100, SPOT, "sticky-strike")
+    assert sans == pytest.approx(fige, rel=1e-12)
+
+
 def test_zero_gamma_retient_le_croisement_le_plus_proche_du_spot():
     """L'ancien code prenait le premier croisement de la fenêtre, donc le plus bas.
 
@@ -343,13 +432,43 @@ def test_snapshot_aller_retour(tmp_path):
     """Rejouer une séance archivée doit redonner exactement la même analyse."""
     df = chaine(jours=(1, 8, 25))
     chemin = snapshots.sauver(df, "TEST", SPOT, QUOTE, str(tmp_path))
-    relu, spot, quote_date = snapshots.charger(chemin)
+    relu, spot, quote_date, marche = snapshots.charger(chemin)
 
     assert spot == SPOT and pd.Timestamp(quote_date) == QUOTE
+    assert marche == {}                     # rien n'a été archivé, rien n'est inventé
     avant = analysis.analyser(df, spot=SPOT, quote_date=QUOTE)
     apres = analysis.analyser(relu, spot=spot, quote_date=quote_date)
     assert apres.total_gex == pytest.approx(avant.total_gex, rel=1e-9)
     assert apres.zero_gamma == pytest.approx(avant.zero_gamma, rel=1e-9)
+
+
+def test_snapshot_transporte_le_contexte_de_marche(tmp_path):
+    """Sans le contexte archivé, une séance rejouée perd le ratio au volume."""
+    marche = {"open": 135.0, "high": 146.1, "low": 134.0, "close": 144.9,
+              "volume": 95_310_234.0, "dollar_volume": 1.3808e10, "iv30": 70.2}
+    chemin = snapshots.sauver(chaine(), "TEST", SPOT, QUOTE, str(tmp_path), marche)
+    _, _, _, relu = snapshots.charger(chemin)
+    assert relu == pytest.approx(marche)
+
+
+def test_gex_sur_volume_rapporte_le_flux_a_ce_qui_s_echange():
+    """120 M$ de couverture face à 13,8 Md$ échangés : un frottement, pas le moteur."""
+    a = analysis.analyser(chaine(), spot=SPOT, quote_date=QUOTE,
+                          marche={"dollar_volume": 1.3808e10})
+    assert a.gex_sur_volume == pytest.approx(abs(a.total_gex) / 1.3808e10)
+    assert analysis.analyser(chaine(), spot=SPOT, quote_date=QUOTE).gex_sur_volume is None
+
+
+def test_marche_depuis_payload_lit_la_seance_et_calcule_le_volume_en_dollars():
+    """Le payload CBOE porte déjà l'OHLCV : le projet le téléchargeait sans le lire."""
+    payload = {"data": {"current_price": 144.865, "open": 135.05, "high": 146.13,
+                        "low": 134.01, "close": 144.865, "prev_day_close": 133.29,
+                        "volume": 95_310_234, "iv30": 70.242, "options": []}}
+    m = cboe_data.marche_depuis_payload(payload)
+    assert m["high"] == 146.13 and m["iv30"] == 70.242
+    assert m["dollar_volume"] == pytest.approx(95_310_234 * 144.865)
+    # Un champ absent vaut None, jamais une valeur inventée
+    assert cboe_data.marche_depuis_payload({"data": {"current_price": 1.0}})["volume"] is None
 
 
 def test_snapshot_permet_de_changer_d_horizon_apres_coup():

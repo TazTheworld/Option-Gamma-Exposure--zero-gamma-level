@@ -1,9 +1,11 @@
 """Le GEX tient-il ses promesses ? Test sur l'historique accumulé.
 
-Le modèle avance deux affirmations vérifiables :
+Le modèle avance trois affirmations vérifiables :
 
   1. en gamma négatif, les mouvements sont plus amples qu'en gamma positif ;
-  2. le prix bute sur le call wall et se soutient sur le put wall.
+  2. en gamma négatif, la volatilité réalisée dépasse celle que le marché avait prix ;
+  3. le prix bute sur le call wall et se soutient sur le put wall — il le touche
+     en séance, mais n'y clôture pas.
 
 Ce script les mesure sur history.csv, sans source de prix externe : la colonne
 `spot` de l'historique constitue la série. Il faut donc des relevés réguliers —
@@ -50,6 +52,23 @@ def dedoublonner(df):
               .reset_index(drop=True))
 
 
+def vol_parkinson(haut, bas, jours_par_an=252):
+    """Volatilité annualisée estimée sur l'amplitude haut/bas d'une séance.
+
+    sigma = ln(H/L) / (2 racine(ln 2)), annualisée.
+
+    L'estimateur de Parkinson tire bien plus d'information d'une seule séance que
+    l'écart de clôture à clôture : un titre qui ouvre à 100, monte à 110, retombe
+    à 100 a bougé, et un rendement de clôture le compte pour zéro. C'est
+    exactement le cas qui nous intéresse ici — le gamma décrit l'agitation, pas la
+    direction.
+    """
+    haut, bas = pd.to_numeric(haut, errors="coerce"), pd.to_numeric(bas, errors="coerce")
+    valide = (haut > 0) & (bas > 0) & (haut >= bas)
+    amplitude = np.log(haut.where(valide) / bas.where(valide))
+    return amplitude / (2 * np.sqrt(np.log(2))) * np.sqrt(jours_par_an)
+
+
 def prepare(df, intervalle_minimal=INTERVALLE_MINIMAL):
     """Ajoute le mouvement observé jusqu'au relevé suivant.
 
@@ -59,10 +78,21 @@ def prepare(df, intervalle_minimal=INTERVALLE_MINIMAL):
     df = dedoublonner(df)
     df["spot_suivant"] = df.spot.shift(-1)
     df["jours"] = (df.date.shift(-1) - df.date).dt.total_seconds() / 86400
+
+    # Le parcours de la séance suivante, pas seulement son point d'arrivée. Un mur
+    # percé en séance puis rejeté ne se voit pas dans la clôture, et c'est
+    # précisément le comportement que le modèle prédit.
+    for source, cible in (("high", "haut_suivant"), ("low", "bas_suivant"),
+                          ("close", "cloture_suivante")):
+        df[cible] = df[source].shift(-1) if source in df.columns else np.nan
+
     df = df[(df.jours >= intervalle_minimal) & df.spot_suivant.notna()].copy()
     df["rendement"] = (df.spot_suivant - df.spot) / df.spot
     # Ramené à une base journalière pour comparer des intervalles inégaux
     df["mouvement_par_jour"] = df.rendement.abs() / np.sqrt(df.jours)
+    df["vol_realisee"] = vol_parkinson(df.haut_suivant, df.bas_suivant)
+    # iv30 est publiée en points de pourcentage, la réalisée en fraction
+    df["vol_implicite"] = pd.to_numeric(df.get("iv30"), errors="coerce") / 100.0
     return df
 
 
@@ -80,6 +110,11 @@ def test_regime(df):
 
     if len(neg) < 3 or len(pos) < 3:
         print("   -> trop peu de relevés dans l'un des deux régimes pour comparer")
+        return None
+    # Un spot figé d'un relevé à l'autre donne une médiane nulle : le rapport
+    # n'existe pas, et le NaN qui en sortait se lisait comme « contraire au modèle ».
+    if not pos.median():
+        print("   -> aucun mouvement mesurable en gamma positif, rapport indéfini")
         return None
     ecart = neg.median() / pos.median() - 1
     print(f"   -> les mouvements sont {abs(ecart)*100:.0f}% plus "
@@ -112,28 +147,106 @@ def test_zero_gamma(df):
 
 
 def test_murs(df):
-    """Affirmation 2 : le prix franchit-il les murs, ou butent-ils ?"""
-    print("\n3. LES MURS SONT-ILS RESPECTÉS ?")
+    """Affirmation 2 : le prix franchit-il les murs, ou butent-ils ?
+
+    Deux mesures, et c'est leur écart qui porte l'information :
+
+      - TOUCHÉ  : le prix est allé au-delà du mur pendant la séance (high/low) ;
+      - TENU    : il a clôturé au-delà.
+
+    Un mur souvent touché mais rarement tenu, c'est exactement ce que le modèle
+    prédit : le prix y va, la couverture des dealers le repousse. Comparer la
+    seule clôture, comme le faisait ce script, confondait les deux cas — un
+    aller-retour intraséance ressortait comme un mur respecté.
+    """
+    print("\n4. LES MURS SONT-ILS RESPECTÉS ?")
+    intraday = df.haut_suivant.notna().any() if "haut_suivant" in df else False
+    if not intraday:
+        print("   (pas de high/low dans l'historique : mesure sur la clôture seule —")
+        print("    les relevés enregistrés avant l'archivage du contexte de séance)")
+
     for col, nom, sens in (("call_wall", "call wall", "au-dessus"),
                            ("put_wall", "put wall", "en dessous")):
         d = df.dropna(subset=[col])
-        d = d[(d[col] > 0)]
+        d = d[d[col] > 0]
         if d.empty:
             print(f"   {nom:<10} : aucun relevé")
             continue
+
         if sens == "au-dessus":
             distance = (d[col] - d.spot) / d.spot
-            franchi = d.spot_suivant > d[col]
+            extreme = d.haut_suivant if intraday else d.spot_suivant
+            touche = extreme > d[col]
+            tenu = d.cloture_suivante.fillna(d.spot_suivant) > d[col]
         else:
             distance = (d.spot - d[col]) / d.spot
-            franchi = d.spot_suivant < d[col]
+            extreme = d.bas_suivant if intraday else d.spot_suivant
+            touche = extreme < d[col]
+            tenu = d.cloture_suivante.fillna(d.spot_suivant) < d[col]
+
+        print(f"   {nom:<10} : {len(d):>3} relevés, distance médiane "
+              f"{distance.median()*100:+.1f}%")
+        if intraday:
+            print(f"                touché en séance {touche.mean()*100:.0f}% du temps, "
+                  f"tenu à la clôture {tenu.mean()*100:.0f}%")
+            rejets = (touche & ~tenu).mean()
+            print(f"                -> rejeté après avoir été touché : {rejets*100:.0f}% "
+                  f"des séances")
+        else:
+            print(f"                franchi {tenu.mean()*100:.0f}% du temps")
+
         approche = d[distance.between(0, 0.05)]   # mur à moins de 5 %
-        print(f"   {nom:<10} : {len(d):>3} relevés, franchi {franchi.mean()*100:.0f}% du temps"
-              f"   (distance médiane {distance.median()*100:+.1f}%)")
         if len(approche) >= 3:
-            f2 = franchi[approche.index]
-            print(f"              dont {len(approche)} à moins de 5 % : "
-                  f"franchi {f2.mean()*100:.0f}% du temps")
+            print(f"                dont {len(approche)} à moins de 5 % : "
+                  f"tenu {tenu[approche.index].mean()*100:.0f}% du temps")
+
+
+def test_vol_realisee_vs_implicite(df):
+    """Affirmation 3 : en gamma négatif, le réalisé dépasse l'implicite.
+
+    C'est la formulation la plus directement vérifiable du modèle. Si la
+    couverture des dealers amplifie vraiment les mouvements en gamma négatif,
+    alors la volatilité effectivement réalisée doit y dépasser plus souvent celle
+    que le marché avait prix.
+
+    Réserve de méthode : l'iv30 porte sur trente jours, la réalisée sur la séance
+    suivante. Ce n'est pas la même fenêtre, et le rapport n'est donc pas une prime
+    de risque de variance propre — c'est un indicateur de direction, pas un
+    chiffre à publier.
+    """
+    print("\n3. RÉALISÉ CONTRE IMPLICITE")
+    d = df.dropna(subset=["vol_realisee", "vol_implicite"])
+    d = d[d.vol_implicite > 0]
+    if len(d) < 4:
+        print(f"   {len(d)} relevé(s) avec volatilité implicite ET high/low — il en faut plus.")
+        print("   Ces colonnes n'existent que depuis l'archivage du contexte de séance.")
+        return None
+
+    ratio = d.vol_realisee / d.vol_implicite
+    neg = ratio[d.total_gex < 0]
+    pos = ratio[d.total_gex > 0]
+    print(f"   réalisé / implicite, toutes séances : médiane {ratio.median():.2f}")
+    for nom, part in (("gamma négatif", neg), ("gamma positif", pos)):
+        if len(part):
+            print(f"   {nom:<15} : {len(part):>3} séances, médiane {part.median():.2f}, "
+                  f"réalisé > implicite {(part > 1).mean()*100:.0f}% du temps")
+
+    if len(neg) < 3 or len(pos) < 3:
+        print("   -> trop peu de séances dans l'un des deux régimes pour comparer")
+        return None
+    if not pos.median():
+        print("   -> le régime positif n'a aucune amplitude mesurable, rapport indéfini")
+        return None
+    ecart = neg.median() / pos.median() - 1
+    print(f"   -> le réalisé dépasse l'implicite {abs(ecart)*100:.0f}% "
+          f"{'plus' if ecart > 0 else 'moins'} souvent en gamma négatif")
+    if len(d) < N_MINIMAL:
+        print("      échantillon trop court pour conclure")
+    elif ecart > 0:
+        print("      conforme au modèle")
+    else:
+        print("      CONTRAIRE au modèle")
+    return ecart
 
 
 def valider(path=history.DEFAUT, ticker=None):
@@ -173,6 +286,7 @@ def valider(path=history.DEFAUT, ticker=None):
             print("  Les chiffres ci-dessous sont indicatifs, pas concluants.")
         test_regime(df)
         test_zero_gamma(df)
+        test_vol_realisee_vs_implicite(df)
         test_murs(df)
 
 

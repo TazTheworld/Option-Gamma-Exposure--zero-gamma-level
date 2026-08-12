@@ -63,11 +63,50 @@ def fetch_json(ticker, timeout=30):
     return resp.json()
 
 
+# Le payload porte la séance du sous-jacent et sa vol implicite 30 jours, en plus
+# de la chaîne. Le projet les ignorait, alors qu'ils sont téléchargés à chaque
+# appel — et sans eux le GEX n'est qu'un montant en dollars sans référence :
+# 120 M$ de couverture ne veulent rien dire tant qu'on ne les rapporte pas au
+# volume du jour. Le high et le low servent aussi à tester les murs sur le
+# parcours réel de la séance plutôt que sur le seul cours de clôture.
+MARCHE = ("open", "high", "low", "close", "prev_day_close", "volume",
+          "iv30", "iv30_change", "price_change_percent")
+
+
+def marche_depuis_payload(payload):
+    """Contexte de séance du sous-jacent : OHLCV, iv30. Champs absents -> None."""
+    data = payload["data"]
+    contexte = {}
+    for champ in MARCHE:
+        valeur = data.get(champ)
+        try:
+            contexte[champ] = None if valeur is None else float(valeur)
+        except (TypeError, ValueError):
+            contexte[champ] = None
+    prix = contexte.get("close") or float(data["current_price"])
+    volume = contexte.get("volume")
+    # Le volume en titres ne se compare pas d'un sous-jacent à l'autre ; en
+    # dollars, si — et c'est la seule échelle à laquelle le GEX est lisible.
+    contexte["dollar_volume"] = None if not volume else volume * prix
+    return contexte
+
+
+def fetch_marche(ticker, timeout=30):
+    """Contexte de séance seul, sans assembler la chaîne."""
+    return marche_depuis_payload(fetch_json(ticker, timeout))
+
+
 def fetch_chain(ticker, timeout=30):
     """Télécharge la chaîne d'options d'un sous-jacent US.
 
-    Renvoie (df, spotPrice, quoteDate) où df suit le format COLUMNS.
+    Renvoie (df, spotPrice, quoteDate). Pour obtenir aussi le contexte de séance
+    sans payer un second téléchargement, utiliser fetch_chain_et_marche().
     """
+    return fetch_chain_et_marche(ticker, timeout)[:3]
+
+
+def fetch_chain_et_marche(ticker, timeout=30):
+    """(df, spotPrice, quoteDate, marche) en un seul appel réseau."""
     payload = fetch_json(ticker, timeout)
     data = payload["data"]
     spot_price = float(data["current_price"])
@@ -117,7 +156,7 @@ def fetch_chain(ticker, timeout=30):
     df["Calls"] = ""
     df["Puts"] = ""
     df = df.reindex(columns=COLUMNS)
-    return _clean(df), spot_price, quote_date
+    return _clean(df), spot_price, quote_date, marche_depuis_payload(payload)
 
 
 def load_from_csv(filename):

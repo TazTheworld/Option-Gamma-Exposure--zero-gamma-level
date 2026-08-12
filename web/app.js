@@ -299,15 +299,24 @@ function graphiqueBarres(conteneur, { strikes, series, diverge, spot, reperes, u
 // ---=== Graphique en courbes ===---
 
 function graphiqueCourbes(conteneur, { niveaux, series, reperes, unite, hauteur = 380,
-                                       zoneNegative }) {
+                                       zoneNegative, etiquettesX, decimalesX = 0,
+                                       enPrix = false, decimales = 2,
+                                       inclureZero = true }) {
   conteneur.innerHTML = "";
   const svg = toile(hauteur);
 
   const toutes = series.flatMap((s) => s.valeurs).filter(isFinite);
-  const ech = echelle(toutes);
+  const ech = enPrix ? { facteur: 1, unite: "" } : echelle(toutes);
+  const formateValeur = enPrix
+    ? (v) => prix(v, decimales)
+    : (v) => montant(v, ech, 2, true);
   const mises = series.map((s) => s.valeurs.map((v) => v / ech.facteur));
   const plates = mises.flat().filter(isFinite);
-  let yMin = Math.min(0, ...plates), yMax = Math.max(0, ...plates);
+  // Le zéro fait partie du domaine d'un profil de gamma — c'est le croisement
+  // qu'on y cherche. Sur un axe de prix il n'a rien à y faire : l'imposer écrasait
+  // les trois courbes dans le cinquième haut du champ.
+  let yMin = inclureZero ? Math.min(0, ...plates) : Math.min(...plates);
+  let yMax = inclureZero ? Math.max(0, ...plates) : Math.max(...plates);
   const marge = (yMax - yMin) * 0.08 || 1;
   yMin -= marge; yMax += marge;
 
@@ -338,11 +347,23 @@ function graphiqueCourbes(conteneur, { niveaux, series, reperes, unite, hauteur 
     }
   }
 
-  chrome(svg, geo, graduations(yMin, yMax, 4), (t) => nf(0, 2).format(t), unite,
-         graduations(xMin, xMax, 6), (t) => nf(0, 0).format(t));
-  svg.appendChild(el("line", {
-    x1: x0, x2: x1, y1: yEch(0), y2: yEch(0), class: "axe-ligne",
-  }));
+  // Un axe de temps n'a pas de graduations « rondes » : on échantillonne les
+  // étiquettes fournies plutôt que d'inventer des valeurs intermédiaires.
+  const ticksX = etiquettesX
+    ? niveaux.filter((_, i) => i % Math.max(1, Math.ceil(niveaux.length / 6)) === 0)
+    : graduations(xMin, xMax, 6);
+  const formateX = etiquettesX
+    ? (t) => etiquettesX[Math.round(t)] ?? ""
+    : (t) => nf(0, decimalesX).format(t);
+
+  chrome(svg, geo, graduations(yMin, yMax, 4),
+         (t) => nf(0, enPrix ? decimales : 2).format(t), unite,
+         ticksX, formateX);
+  if (inclureZero) {
+    svg.appendChild(el("line", {
+      x1: x0, x2: x1, y1: yEch(0), y2: yEch(0), class: "axe-ligne",
+    }));
+  }
 
   series.forEach((s, index) => {
     const d = mises[index]
@@ -401,8 +422,11 @@ function graphiqueCourbes(conteneur, { niveaux, series, reperes, unite, hauteur 
       p.setAttribute("cy", yEch(mises[index][i]));
     });
     curseur.setAttribute("opacity", 1);
-    montrerInfobulle(evenement, `Sous-jacent à ${prix(niveaux[i], niveaux[i] < 10 ? 4 : 0)}`,
-      series.map((s) => [s.nom, montant(s.valeurs[i], ech, 2, true), s.couleur]));
+    const titre = etiquettesX
+      ? etiquettesX[i]
+      : `Sous-jacent à ${prix(niveaux[i], niveaux[i] < 10 ? 4 : 0)}`;
+    montrerInfobulle(evenement, titre,
+      series.map((s) => [s.nom, formateValeur(s.valeurs[i]), s.couleur]));
   });
   capteur.addEventListener("mouseleave", () => {
     curseur.setAttribute("opacity", 0);
@@ -638,6 +662,10 @@ function rendre(d) {
   }
 
   rendreDiagnostics(d, echTotal);
+  // Ces deux cartes lisent d'autres sources que le relevé ; elles s'affichent
+  // quand il y a de quoi, et disparaissent sinon plutôt que de montrer du vide.
+  rendreDerive(d.ticker, dec);
+  rendreFlux(d.ticker);
 }
 
 function rendreDiagnostics(d, echTotal) {
@@ -693,6 +721,97 @@ function rendreDiagnostics(d, echTotal) {
   $("diagnostics").hidden = false;
 }
 
+// ---=== Dérive dans le temps ===---
+
+/** Trace spot et zero gamma côte à côte sur les relevés enregistrés.
+ *
+ * Tous en prix, donc un seul axe. Un second axe pour le GEX inventerait une
+ * corrélation entre deux grandeurs sans échelle commune : le GEX a sa propre
+ * carte, plus bas dans la page.
+ */
+async function rendreDerive(ticker, dec) {
+  const carte = $("carte-derive");
+  try {
+    const lignes = await (await fetch(`/api/history?ticker=${encodeURIComponent(ticker)}`)).json();
+    const utiles = lignes.filter((r) => r.spot !== null && r.spot !== undefined);
+    if (utiles.length < 2) { carte.hidden = true; return; }
+
+    const etiquettes = utiles.map((r) => String(r.timestamp).slice(5, 16));
+    const series = [
+      { nom: "Sous-jacent", couleur: COULEURS.serie1, valeurs: utiles.map((r) => r.spot) },
+      { nom: "Zero gamma", couleur: COULEURS.serie2, valeurs: utiles.map((r) => r.zero_gamma) },
+      { nom: "Call wall", couleur: COULEURS.serie3, valeurs: utiles.map((r) => r.call_wall) },
+    ];
+    graphiqueCourbes($("fig-derive"), {
+      niveaux: utiles.map((_, i) => i), series, etiquettesX: etiquettes,
+      unite: `Niveau du sous-jacent`, enPrix: true, decimales: dec, hauteur: 320,
+      inclureZero: false,
+    });
+    legende($("legende-derive"), series.map((s) => ({ couleur: s.couleur, nom: s.nom, trait: true })));
+    tableau($("tab-derive"),
+      `Relevés enregistrés pour ${ticker}, du plus ancien au plus récent.`,
+      ["Relevé", "Sous-jacent", "Zero gamma", "Écart", "GEX", "GEX / volume"],
+      utiles.map((r) => [
+        String(r.timestamp).slice(0, 16), prix(r.spot, dec), prix(r.zero_gamma, dec),
+        r.zero_gamma ? `${((r.spot - r.zero_gamma) / r.spot * 100).toFixed(2)} %` : "—",
+        montant(r.total_gex, echelle(utiles.map((x) => x.total_gex ?? 0)), 2, true),
+        r.gex_sur_volume ? `${(r.gex_sur_volume * 100).toFixed(2)} %` : "—",
+      ]));
+    carte.hidden = false;
+  } catch {
+    carte.hidden = true;      // pas d'historique lisible : la carte disparaît
+  }
+}
+
+// ---=== Signe du flux mesuré ===---
+
+async function rendreFlux(ticker) {
+  const carte = $("carte-flux");
+  try {
+    const dispo = await (await fetch("/api/flux")).json();
+    const fichiers = dispo.fichiers || [];
+    const attendu = `flux_${ticker.toLowerCase()}.csv`;
+    const fichier = fichiers.includes(attendu) ? attendu : null;
+    if (!fichier) { carte.hidden = true; return; }
+
+    const d = await (await fetch(
+      `/api/flux?ticker=${encodeURIComponent(ticker)}&fichier=${encodeURIComponent(fichier)}`)).json();
+    if (d.erreur) { carte.hidden = true; return; }
+
+    const ech = echelle([d.gex_flux, d.gex_convention]);
+    const resume = $("resume-flux");
+    resume.innerHTML = "";
+    const grille = document.createElement("div");
+    grille.className = "tuiles";
+    grille.style.marginTop = "0";
+    grille.append(
+      tuile("Signé par le flux", montant(d.gex_flux, ech, 2, true),
+        "inventaire pris aujourd'hui"),
+      tuile("Signé par convention", montant(d.gex_convention, ech, 2, true),
+        "structure accumulée, mêmes strikes"),
+      tuile("Verdict", d.meme_signe ? "Même signe" : "Signes opposés",
+        d.meme_signe
+          ? "le flux du jour va dans le sens de l'hypothèse"
+          : "le flux contredit l'hypothèse conventionnelle"),
+    );
+    resume.appendChild(grille);
+
+    legende($("legende-flux"), [
+      { couleur: COULEURS.encre3, nom: `${d.n_strikes} strikes tradés et classifiables` },
+    ]);
+    tableau($("tab-flux"),
+      `Position nette prise par les dealers, strikes les plus signants (${fichier}).`,
+      ["Strike", "GEX du flux", "Calls", "Puts"],
+      d.strikes.map((r) => [
+        prix(r.strike, 2), montant(r.gex_flux, ech, 3, true),
+        nf(0, 0).format(r.calls || 0), nf(0, 0).format(r.puts || 0),
+      ]));
+    carte.hidden = false;
+  } catch {
+    carte.hidden = true;
+  }
+}
+
 // ---=== Chargement ===---
 
 const formulaire = $("filtres");
@@ -703,9 +822,20 @@ function parametres() {
   const donnees = new FormData(formulaire);
   const p = new URLSearchParams();
   for (const [cle, valeur] of donnees.entries()) {
-    if (valeur !== "") p.set(cle, valeur);
+    // "auto" pilote le rafraîchissement côté page ; le serveur n'en a rien à faire.
+    if (valeur !== "" && cle !== "auto") p.set(cle, valeur);
   }
   return p;
+}
+
+/* Rafraîchissement automatique. Le flux CBOE étant différé d'un quart d'heure,
+   descendre sous la minute ne fait que redemander la même chose. */
+let minuterie = null;
+
+function reglerAuto() {
+  clearInterval(minuterie);
+  const secondes = Number($("auto").value || 0);
+  if (secondes > 0) minuterie = setInterval(charger, secondes * 1000);
 }
 
 async function charger() {
@@ -742,7 +872,10 @@ formulaire.addEventListener("submit", (evenement) => {
   evenement.preventDefault();
   charger();
 });
-formulaire.querySelectorAll("select").forEach((s) => s.addEventListener("change", charger));
+formulaire.querySelectorAll("select").forEach((s) => s.addEventListener("change", (e) => {
+  if (e.target.id === "auto") reglerAuto();
+  else charger();
+}));
 
 /* Les relevés archivés permettent de rejouer une séance passée sans requête réseau. */
 async function chargerSnapshots() {

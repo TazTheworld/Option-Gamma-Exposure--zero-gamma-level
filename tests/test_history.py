@@ -188,3 +188,86 @@ def test_show_vue_d_ensemble_une_ligne_par_perimetre(fichier, capsys):
     vue = history.show(fichier)
     assert len(vue) == 2
     assert set(vue.dte_max) == {30, 7}
+
+
+# ---=== Contexte de séance : high/low et volatilité implicite ===---
+
+def test_vol_parkinson_retrouve_une_amplitude_connue():
+    """sigma = ln(H/L) / (2 racine(ln 2)), annualisé sur 252 séances."""
+    attendu = np.log(110 / 100) / (2 * np.sqrt(np.log(2))) * np.sqrt(252)
+    obtenu = validate.vol_parkinson(pd.Series([110.0]), pd.Series([100.0])).iloc[0]
+    assert obtenu == pytest.approx(attendu)
+    # Une séance sans amplitude n'a pas de volatilité, pas une volatilité nulle bruitée
+    assert validate.vol_parkinson(pd.Series([100.0]), pd.Series([100.0])).iloc[0] == 0.0
+    assert np.isnan(validate.vol_parkinson(pd.Series([90.0]), pd.Series([100.0])).iloc[0])
+
+
+def _ecrire_seances(fichier, seances):
+    """seances : liste de (spot, high, low, close, gex, iv30, call_wall)."""
+    for i, (spot, haut, bas, cloture, gex, iv30, mur) in enumerate(seances):
+        history.record(fichier, timestamp=pd.Timestamp("2026-06-01") + pd.Timedelta(days=i),
+                       ticker="TEST", dte_max=30, source_gamma="iv",
+                       time_convention="heures", spot=spot, total_gex=gex,
+                       zero_gamma=spot, call_wall=mur, put_wall=spot * 0.9,
+                       high=haut, low=bas, close=cloture, iv30=iv30)
+    return fichier
+
+
+def test_le_mur_touche_en_seance_ne_compte_pas_comme_tenu(fichier, capsys):
+    """Un mur percé puis rejeté ressortait comme respecté : la clôture ne le voyait pas.
+
+    Ici le prix va chercher le mur à 104 chaque séance (high 105) mais clôture
+    toujours en dessous — c'est exactement le comportement que le modèle prédit,
+    et la mesure doit savoir le distinguer d'un mur jamais approché.
+    """
+    _ecrire_seances(fichier, [(100.0, 105.0, 99.0, 101.0, -1e6, 30.0, 104.0)] * 6)
+    validate.valider(fichier)
+    sortie = capsys.readouterr().out
+    assert "touché en séance 100% du temps" in sortie
+    assert "tenu à la clôture 0%" in sortie
+    assert "rejeté après avoir été touché : 100%" in sortie
+
+
+def test_realise_contre_implicite_detecte_le_signal_injecte(fichier, capsys):
+    """Le relevé décrit un régime, la volatilité mesurée est celle de la séance SUIVANTE.
+
+    Le signal doit donc être injecté décalé d'un cran : un relevé en gamma négatif
+    est suivi d'une séance à large amplitude. Injecté sur la même ligne, il mesure
+    exactement l'inverse — et le test passerait sur une implémentation fausse.
+    """
+    seances = []
+    for i in range(26):                           # au-delà des 20 intervalles exigés
+        # Le gamma est négatif un relevé sur deux ; l'amplitude large arrive au
+        # relevé d'après, soit sur les indices impairs.
+        gex = -1e6 if i % 2 == 0 else 1e6
+        amplitude = 0.12 if i % 2 else 0.01       # 12 % de range contre 1 %
+        spot = 100.0 + i * 0.1                    # un spot figé rend le test d'amplitude indéfini
+        seances.append((spot, spot * (1 + amplitude), spot, spot, gex, 30.0, 130.0))
+    _ecrire_seances(fichier, seances)
+    validate.valider(fichier)
+    sortie = capsys.readouterr().out
+    assert "RÉALISÉ CONTRE IMPLICITE" in sortie
+    assert "plus souvent en gamma négatif" in sortie
+    assert "conforme au modèle" in sortie
+
+
+def test_realise_contre_implicite_ne_confirme_pas_un_signal_inverse(fichier, capsys):
+    """Signal retourné : le test doit dire CONTRAIRE, pas confirmer par défaut."""
+    seances = []
+    for i in range(26):
+        gex = -1e6 if i % 2 == 0 else 1e6
+        amplitude = 0.01 if i % 2 else 0.12       # l'amplitude suit le gamma POSITIF
+        spot = 100.0 + i * 0.1
+        seances.append((spot, spot * (1 + amplitude), spot, spot, gex, 30.0, 130.0))
+    _ecrire_seances(fichier, seances)
+    validate.valider(fichier)
+    assert "CONTRAIRE au modèle" in capsys.readouterr().out
+
+
+def test_sans_contexte_de_seance_le_test_le_dit_au_lieu_d_inventer(fichier, capsys):
+    """Les relevés d'avant l'archivage du contexte n'ont ni high/low ni iv30."""
+    _ecrire(fichier, n=10)
+    validate.valider(fichier)
+    sortie = capsys.readouterr().out
+    assert "il en faut plus" in sortie or "Ces colonnes n'existent" in sortie
+    assert "mesure sur la clôture seule" in sortie

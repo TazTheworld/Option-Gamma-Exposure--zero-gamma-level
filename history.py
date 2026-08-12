@@ -25,7 +25,15 @@ DEFAUT = "history.csv"
 
 COLONNES = ["timestamp", "ticker", "dte_max", "source_gamma", "time_convention",
             "spot", "total_gex", "zero_gamma", "call_wall", "put_wall",
-            "call_wall_oi", "put_wall_oi", "charm", "vanna", "strikes", "expiries"]
+            "call_wall_oi", "put_wall_oi", "charm", "vanna", "strikes", "expiries",
+            # Contexte de séance du sous-jacent. Sans lui, l'historique ne permet
+            # ni de rapporter le GEX au volume, ni de tester les murs sur le
+            # parcours réel du jour, ni de comparer implicite et réalisé.
+            "open", "high", "low", "close", "prev_close", "volume",
+            "dollar_volume", "iv30", "gex_sur_volume"]
+
+# Les colonnes de contexte portent le même nom dans le payload CBOE, sauf celle-ci.
+MARCHE_ALIAS = {"prev_close": "prev_day_close"}
 
 # Ce qui rend deux relevés comparables : même sous-jacent, même périmètre
 # d'échéance, même source de gamma, même mesure du temps. Mélanger l'un des
@@ -41,7 +49,10 @@ AFFICHAGE = [("timestamp", "date", 18, "texte"), ("spot", "spot", 11, "prix"),
              ("total_gex", "GEX", 11, "compact"), ("zero_gamma", "zero gam", 11, "prix"),
              ("call_wall", "call w.", 10, "prix"), ("put_wall", "put w.", 10, "prix"),
              ("call_wall_oi", "call OI", 10, "prix"), ("put_wall_oi", "put OI", 10, "prix"),
-             ("charm", "charm/j", 11, "compact"), ("vanna", "vanna/pt", 11, "compact")]
+             ("charm", "charm/j", 11, "compact"), ("vanna", "vanna/pt", 11, "compact"),
+             # Le ratio au volume est ce qui rend le GEX lisible : un montant nu
+             # ne dit pas s'il pèse quelque chose face à ce qui s'échange.
+             ("gex_sur_volume", "GEX/vol", 9, "pourcent"), ("iv30", "iv30", 8, "pourcent_nu")]
 
 
 def _compact(v):
@@ -123,6 +134,10 @@ def _tableau(df, prec):
             return str(valeur)[:largeur]
         if fmt == "compact":
             return _compact(valeur)
+        if fmt == "pourcent":       # une fraction (0,0087) -> 0,9 %
+            return "-" if pd.isna(valeur) else f"{valeur * 100:,.1f}%"
+        if fmt == "pourcent_nu":    # déjà en points de pourcentage (70,24)
+            return "-" if pd.isna(valeur) else f"{valeur:,.1f}%"
         return _formate(valeur, prec)
 
     entete = (f"{'ticker':<8}{'dte':>5}{'gamma':>10}{'T':>8}"
@@ -178,8 +193,16 @@ def _montrer_scope(df, prec):
             # (passer de -58 M$ à +60 M$ n'est pas « -203 % »).
             change_de_signe = a[col] * b[col] < 0
             pct = "" if (not a[col] or change_de_signe) else f"  ({delta / a[col] * 100:+.1f}%)"
-            fc = _compact if fmt == "compact" else (lambda v: f"{v:+,.{prec}f}")
-            aff = _compact if fmt == "compact" else (lambda v: _formate(v, prec))
+            if fmt == "compact":
+                fc = aff = _compact
+            elif fmt in ("pourcent", "pourcent_nu"):
+                # Une variation de pourcentage se lit en points, pas en dollars.
+                facteur = 100 if fmt == "pourcent" else 1
+                fc = lambda v, f=facteur: f"{v * f:+,.1f}pt"
+                aff = lambda v, f=facteur: f"{v * f:,.1f}%"
+            else:
+                fc = lambda v: f"{v:+,.{prec}f}"
+                aff = lambda v: _formate(v, prec)
             marque = "   changement de signe" if change_de_signe else ""
             print(f"  {lib:<10} {aff(a[col]):>12} -> {aff(b[col]):>12}   {fc(delta):>10}{pct}{marque}")
         signes = df.total_gex.dropna()

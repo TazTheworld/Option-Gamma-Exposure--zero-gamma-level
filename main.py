@@ -72,6 +72,11 @@ def construire_parser():
                         default="heures",
                         help="mesure du temps restant : 'heures' (réel, convention CBOE) "
                              "ou 'bourse' (jours ouvrés/262, convention Perfiliev)")
+    parser.add_argument("--vol-regime", choices=analysis.REGIMES_VOL,
+                        default="sticky-strike",
+                        help="comportement de l'IV dans le profil : 'sticky-strike' "
+                             "(défaut, IV figée par contrat) ou 'sticky-moneyness' "
+                             "(l'IV suit la monnaie — plus réaliste à la baisse)")
     parser.add_argument("--wall-range", type=float, default=0.15,
                         help="demi-plage de recherche des murs gamma autour du spot (0.15 = +/-15%%)")
     parser.add_argument("--oi-wall-range", type=float, default=0.30,
@@ -87,29 +92,40 @@ def construire_parser():
                         help=f"dossier d'archivage des chaînes brutes (défaut : {snapshots.DOSSIER})")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="ne pas archiver la chaîne brute de ce relevé")
+    parser.add_argument("--watch", metavar="INTERVALLE",
+                        help="échantillonner en boucle pendant la séance (5m, 300, 1h) : "
+                             "l'open interest ne bouge qu'une fois par jour, mais le spot "
+                             "et l'IV oui, donc le zero gamma dérive en séance")
+    parser.add_argument("--watch-duration", metavar="DUREE", default="6h",
+                        help="durée totale du suivi (défaut : 6h)")
     return parser
 
 
 def charger(args):
-    """Renvoie (df, spot, quote_date, ticker, rejoue)."""
+    """Renvoie (df, spot, quote_date, ticker, rejoue, marche).
+
+    `marche` est le contexte de séance du sous-jacent (OHLCV, iv30). Seul le CBOE
+    le publie : les sources sur futures renvoient un dictionnaire vide, et les
+    ratios au volume sont alors simplement absents plutôt que faux.
+    """
     if args.replay:
-        df, spot, quote_date = snapshots.charger(args.replay)
-        return df, spot, quote_date, args.ticker, True
+        df, spot, quote_date, marche = snapshots.charger(args.replay)
+        return df, spot, quote_date, args.ticker, True, marche
     if args.databento:
         import databento_data
         df, spot, quote_date = databento_data.fetch_chain(args.ticker, day=args.date)
-        return df, args.futures_price or spot, quote_date, args.ticker, False
+        return df, args.futures_price or spot, quote_date, args.ticker, False, {}
     if args.cme:
         import cme_data
         df, spot, quote_date = cme_data.load_settlement(
             args.cme, futures_price=args.futures_price, expiry=args.expiry,
             quote_date=args.quote_date, product=args.ticker)
-        return df, spot, quote_date, args.ticker, False
+        return df, spot, quote_date, args.ticker, False, {}
     if args.csv:
         df, spot, quote_date = cboe_data.load_from_csv(args.csv)
-        return df, spot, quote_date, args.ticker, False
-    df, spot, quote_date = cboe_data.fetch_chain(args.ticker)
-    return df, spot, quote_date, cboe_data.cboe_symbol(args.ticker).lstrip("_"), False
+        return df, spot, quote_date, args.ticker, False, {}
+    df, spot, quote_date, marche = cboe_data.fetch_chain_et_marche(args.ticker)
+    return df, spot, quote_date, cboe_data.cboe_symbol(args.ticker).lstrip("_"), False, marche
 
 
 def afficher(a):
@@ -118,7 +134,7 @@ def afficher(a):
     print(f"{a.ticker} | sous-jacent {a.spot:,.{dec}f} "
           f"| {a.df.StrikePrice.nunique()} strikes / {a.df.ExpirationDate.nunique()} "
           f"échéances ({a.horizon}) | {a.quote_date:%Y-%m-%d} "
-          f"| contrat x{a.contract_size:,.0f} | gamma {a.source_gamma} | T {a.time_convention}")
+          f"| contrat x{a.contract_size:,.0f} | gamma {a.source_gamma} | T {a.time_convention} | vol {a.regime_vol}")
 
     scale, unit = analysis.pick_scale([a.total_gex])
     gscale, gunit = analysis.pick_scale([a.total_charm, a.total_vanna])
@@ -134,6 +150,17 @@ def afficher(a):
     # pour chaque jour qui passe, à prix inchangé.
     print(f"Charm      : {a.total_charm / gscale:+,.2f} {gunit} $ de delta / jour")
     print(f"Vanna      : {a.total_vanna / gscale:+,.2f} {gunit} $ de delta / point de vol")
+
+    # Le GEX nu ne dit pas s'il pèse quelque chose. Rapporté au volume échangé du
+    # jour, si : sous quelques pour cent c'est un frottement, au-delà du tiers la
+    # couverture des dealers est un acteur majeur du carnet.
+    ratio = a.gex_sur_volume
+    if ratio is not None:
+        vscale, vunit = analysis.pick_scale([a.marche["dollar_volume"]])
+        print(f"GEX/volume : {ratio:.1%} du volume du jour "
+              f"({a.marche['dollar_volume'] / vscale:,.2f} {vunit} $ échangés)")
+    if (a.marche or {}).get("iv30") is not None:
+        print(f"IV 30j     : {a.marche['iv30']:,.1f}%")
 
     avertir(a)
 
@@ -182,6 +209,126 @@ def avertir(a):
                   "avant de conclure.\n")
 
 
+def enregistrer_historique(args, a):
+    """Ajoute ce relevé à l'historique.
+
+    Une ligne par relevé : sans ça chaque analyse est un instantané, et les séries
+    n'existent nulle part. Le périmètre d'échéance, la source de gamma et la
+    convention de temps sont enregistrés avec — deux relevés qui n'en partagent
+    pas ne sont pas comparables, l'écart entre sources dépassant 10 % sur un indice.
+    """
+    import history
+
+    marche = a.marche or {}
+    return history.record(
+        args.history, timestamp=a.quote_date, ticker=a.ticker,
+        dte_max="all" if a.dte_max is None else a.dte_max,
+        source_gamma=a.source_gamma, time_convention=a.time_convention,
+        gex_sur_volume=a.gex_sur_volume,
+        **{colonne: marche.get(history.MARCHE_ALIAS.get(colonne, colonne))
+           for colonne in ("open", "high", "low", "close", "prev_close",
+                           "volume", "dollar_volume", "iv30")},
+        spot=a.spot, total_gex=a.total_gex, zero_gamma=a.zero_gamma,
+        call_wall=a.call_wall, put_wall=a.put_wall,
+        call_wall_oi=a.call_wall_oi, put_wall_oi=a.put_wall_oi,
+        charm=a.total_charm, vanna=a.total_vanna,
+        strikes=a.df.StrikePrice.nunique(),
+        expiries=a.df.ExpirationDate.nunique())
+
+
+def un_passage(args, contract_size, graphiques=True, historique=True):
+    """Un relevé complet : chargement, archivage, analyse, affichage, historique."""
+    df, spot, quote_date, ticker, rejoue, marche = charger(args)
+
+    # L'archivage vient avant le filtre d'échéance : c'est la chaîne BRUTE qu'on
+    # garde, pour pouvoir rejouer la séance à n'importe quel horizon plus tard.
+    if not (args.no_snapshot or rejoue):
+        archive = snapshots.sauver(df, ticker, spot, quote_date, args.snapshot_dir, marche)
+        print(f"Chaîne brute archivée : {archive}")
+
+    a = analysis.analyser(
+        df, spot=spot, quote_date=quote_date, ticker=ticker, contract_size=contract_size,
+        dte_max=args.dte_max, dte_min=args.dte_min, plage=args.range,
+        wall_range=args.wall_range, oi_wall_range=args.oi_wall_range,
+        source_gamma=args.gamma_source, time_convention=args.time_convention,
+        regime_vol=args.vol_regime, marche=marche)
+    afficher(a)
+
+    if historique and not args.no_history:
+        enregistrer_historique(args, a)
+
+    if graphiques and not args.no_charts:
+        plots.tracer(a, args.outdir)
+        print(f"Graphiques enregistrés dans : {os.path.abspath(args.outdir)}")
+        if not args.no_show:
+            plots.afficher()
+    return a
+
+
+def suivre(args, contract_size):
+    """Échantillonne la séance en boucle, un relevé par passage.
+
+    L'open interest ne bouge qu'une fois par jour : en séance, seuls le spot et
+    la volatilité implicite changent. Le zero gamma ne se déplace donc pas
+    beaucoup, mais la DISTANCE du prix à ce niveau, elle, se referme ou s'ouvre —
+    et c'est elle qui décide du régime dans lequel on se trouve.
+
+    Un passage n'écrit dans l'historique que si le flux a réellement avancé : les
+    données CBOE sont différées d'un quart d'heure, donc deux passages rapprochés
+    renvoient le même relevé, et le réenregistrer n'ajouterait qu'une ligne
+    identique. validate.py ne retient de toute façon qu'une séance par jour, la
+    dernière : ces relevés servent à voir la journée, pas à gonfler l'échantillon.
+    """
+    import time
+
+    from flow_tracker import duree
+
+    intervalle = duree(args.watch)
+    fin = time.time() + duree(args.watch_duration)
+    print(f"Suivi de {args.ticker} toutes les {intervalle}s pendant "
+          f"{duree(args.watch_duration) / 3600:.1f}h — Ctrl+C pour arrêter.\n")
+
+    passage = enregistres = 0
+    precedent = None
+    while True:
+        passage += 1
+        try:
+            # L'enregistrement se décide APRÈS le relevé : on ne connaît
+            # l'horodatage du flux qu'une fois la chaîne téléchargée.
+            a = un_passage(args, contract_size, graphiques=False, historique=False)
+        except (ValueError, OSError) as err:
+            print(f"  relevé manqué ({type(err).__name__} : {err}) — on continue")
+            a = None
+
+        if a is not None:
+            avance = precedent is None or a.quote_date != precedent.quote_date
+            if avance and not args.no_history:
+                enregistrer_historique(args, a)
+                enregistres += 1
+            elif not avance:
+                print("  (flux inchangé depuis le relevé précédent — rien à enregistrer)")
+
+            if precedent is not None:
+                ecart_spot = a.spot - precedent.spot
+                ecart_zg = ((a.zero_gamma - precedent.zero_gamma)
+                            if None not in (a.zero_gamma, precedent.zero_gamma) else None)
+                distance = (a.spot - a.zero_gamma) / a.spot if a.zero_gamma else None
+                print(f"  depuis le relevé précédent : spot {ecart_spot:+,.{a.decimals}f}"
+                      + (f", zero gamma {ecart_zg:+,.{a.decimals}f}" if ecart_zg is not None else "")
+                      + (f", distance au zero gamma {distance:+.2%}" if distance is not None else ""))
+            precedent = a
+
+        reste = fin - time.time()
+        if reste < intervalle / 2:      # pas de fenêtre tronquée en fin de course
+            break
+        print()
+        time.sleep(min(intervalle, reste))
+
+    print(f"\n{passage} relevés, {enregistres} enregistrés dans {args.history} "
+          f"(les autres portaient un flux inchangé).")
+    return precedent
+
+
 def main(argv=None):
     args = construire_parser().parse_args(argv)
 
@@ -191,44 +338,11 @@ def main(argv=None):
         futures = args.cme or args.databento
         contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if futures else CONTRACT_SIZE
 
-    df, spot, quote_date, ticker, rejoue = charger(args)
-
-    # L'archivage vient avant le filtre d'échéance : c'est la chaîne BRUTE qu'on
-    # garde, pour pouvoir rejouer la séance à n'importe quel horizon plus tard.
-    if not (args.no_snapshot or rejoue):
-        archive = snapshots.sauver(df, ticker, spot, quote_date, args.snapshot_dir)
-        print(f"Chaîne brute archivée : {archive}")
-
-    a = analysis.analyser(
-        df, spot=spot, quote_date=quote_date, ticker=ticker, contract_size=contract_size,
-        dte_max=args.dte_max, dte_min=args.dte_min, plage=args.range,
-        wall_range=args.wall_range, oi_wall_range=args.oi_wall_range,
-        source_gamma=args.gamma_source, time_convention=args.time_convention)
-    afficher(a)
-
-    # ---=== HISTORIQUE ===---
-    # Une ligne par exécution : sans ça chaque analyse est un instantané, et les
-    # séries n'existent nulle part. Le périmètre d'échéance ET la source de gamma
-    # sont enregistrés avec, deux relevés qui n'en partagent pas n'étant pas
-    # comparables — l'écart entre sources dépasse 10 % sur un indice.
-    if not args.no_history:
-        import history
-        history.record(args.history, timestamp=quote_date, ticker=ticker,
-                       dte_max="all" if args.dte_max is None else args.dte_max,
-                       source_gamma=a.source_gamma, time_convention=a.time_convention,
-                       spot=spot, total_gex=a.total_gex, zero_gamma=a.zero_gamma,
-                       call_wall=a.call_wall, put_wall=a.put_wall,
-                       call_wall_oi=a.call_wall_oi, put_wall_oi=a.put_wall_oi,
-                       charm=a.total_charm, vanna=a.total_vanna,
-                       strikes=a.df.StrikePrice.nunique(),
-                       expiries=a.df.ExpirationDate.nunique())
-
-    if not args.no_charts:
-        plots.tracer(a, args.outdir)
-        print(f"Graphiques enregistrés dans : {os.path.abspath(args.outdir)}")
-        if not args.no_show:
-            plots.afficher()
-    return a
+    if args.watch:
+        if args.replay:
+            raise ValueError("--watch et --replay s'excluent : une archive ne bouge plus")
+        return suivre(args, contract_size)
+    return un_passage(args, contract_size)
 
 
 if __name__ == "__main__":

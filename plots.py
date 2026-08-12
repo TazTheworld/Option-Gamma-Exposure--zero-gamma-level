@@ -63,7 +63,7 @@ def tracer(analyse, outdir="charts", dpi=120):
     # L'horizon figure dans le titre : deux graphiques du même jour sur des périmètres
     # d'échéance différents donnent des niveaux différents, et rien ne les distinguerait.
     suffixe = (f"{a.ticker}, {a.quote_date:%d %b %Y} "
-               f"({a.horizon}, gamma {a.source_gamma}, T {a.time_convention})")
+               f"({a.horizon}, gamma {a.source_gamma}, T {a.time_convention}, vol {a.regime_vol})")
     ylabel = f"Gamma Exposure ($ {unit} / mouvement de 1%)"
     chemins = []
 

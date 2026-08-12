@@ -55,6 +55,14 @@ chaîne brute est gardée trois minutes en mémoire par sous-jacent : changer
 d'horizon ou de source recalcule en local, sans retélécharger. Les relevés
 archivés apparaissent dans un sélecteur, pour rejouer une séance passée.
 
+Trois cartes s'ajoutent quand il y a de quoi les remplir, et disparaissent sinon
+plutôt que d'afficher du vide : **la dérive** trace le prix et le zero gamma côte à
+côte au fil des relevés enregistrés — c'est leur écart qui décrit le régime, et le
+voir se refermer vaut mieux qu'une photo ; **le signe du flux** confronte la
+convention au flux réellement observé dès qu'un `flux_<ticker>.csv` existe ; et le
+sélecteur **Rafraîchir** rejoue le relevé à intervalle régulier, sans descendre sous
+la minute puisque le flux CBOE est différé d'un quart d'heure.
+
 Sur le fond clair, les couleurs de données sortent d'une palette validée
 (bande de clarté, plancher de chroma, séparation en vision daltonienne,
 contraste sur la surface). Le bleu et le rouge n'y encodent qu'une polarité —
@@ -142,6 +150,26 @@ dépend du spot à la minute que des données différées ne donnent pas ; et su
 LEAPS, où l'hypothèse `r = q = 0` cesse d'être neutre. Au-delà de 5 %, le script
 le signale.
 
+### Le GEX rapporté à ce qui s'échange
+
+Un montant de couverture nu ne dit rien. Le payload CBOE porte déjà l'OHLCV et
+l'iv30 du sous-jacent — le projet les téléchargeait sans les lire. Ils sont
+désormais captés, archivés, et le rapport qui rend le GEX lisible est affiché :
+
+```
+Total GEX  : 125.55 millions $ / mouvement de 1%
+GEX/volume : 0.9% du volume du jour (14.08 milliards $ échangés)
+IV 30j     : 69.5%
+```
+
+Sous quelques pour cent, la couverture des dealers est un frottement, pas le
+moteur de la séance. Au-delà du tiers, elle devient un acteur majeur du carnet.
+Le même montant sur un titre cent fois moins liquide ne raconte pas la même
+histoire — et sans cette division, rien ne le signale.
+
+Ces colonnes entrent dans `history.csv` et dans les archives, ce qui débloque la
+validation ci-dessous.
+
 ### Horizon d'échéance (`--dte-max`)
 
 Une chaîne CBOE porte plusieurs années d'échéances — jusqu'à 2031 sur le SPX. Prises
@@ -198,6 +226,54 @@ signalés dans la sortie et tracés en pointillés sur le troisième graphique :
 Attention : le profil croise zéro 2 fois (également en 7,412.30). Le niveau retenu est
 le plus proche du spot ; le régime n'est pas une simple bascule au-dessus / en dessous.
 ```
+
+### Ce que devient la volatilité quand le spot bouge (`--vol-regime`)
+
+Le profil de gamma évalue l'exposition à des niveaux de spot hypothétiques. Reste
+à décider ce que devient l'IV en chemin, et les deux réponses encadrent la réalité :
+
+```sh
+python main.py _SPX                                  # sticky-strike (défaut)
+python main.py _SPX --vol-regime sticky-moneyness
+```
+
+- **sticky-strike** : chaque contrat garde son IV. Le prix glisse le long du skew
+  existant, ce qui fait monter mécaniquement la vol à la monnaie quand le spot
+  baisse. C'est l'hypothèse de la littérature.
+- **sticky-moneyness** : le smile est figé en monnaie et se translate avec le spot.
+  La vol à la monnaie reste constante ; un strike donné voit la sienne varier de
+  `pente × ln(S₀/S′)`, la pente étant ajustée sur les strikes proches de la monnaie.
+
+Le décalage vaut **exactement zéro au spot courant** et croît avec la distance.
+Mesuré sur le SPX du 12 août :
+
+| | zero gamma | aile gauche | aile droite |
+|---|---|---|---|
+| ≤ 7 j | +0,01 % du spot | −51 % | +87 % |
+| ≤ 30 j | +0,02 % du spot | −35 % | +45 % |
+
+Autrement dit : ce réglage remodèle les ailes du profil mais ne déplace quasiment
+pas un zero gamma situé près du spot, ce qui est le cas courant. C'est un test de
+robustesse du profil dans les ailes, pas une correction du niveau central — et le
+Total GEX, mesuré au spot, n'en dépend pas du tout.
+
+### Suivre une séance (`--watch`)
+
+```sh
+python main.py SPCX --watch 5m --watch-duration 6h --no-charts
+```
+
+L'open interest ne bouge qu'une fois par jour : en séance, seuls le spot et l'IV
+changent. Le zero gamma ne se déplace donc pas beaucoup, mais la **distance** du
+prix à ce niveau, elle, se referme ou s'ouvre — et c'est elle qui décide du régime.
+
+```
+  depuis le relevé précédent : spot +0.18, zero gamma +1.06, distance au zero gamma +9.72%
+```
+
+Un passage n'écrit dans l'historique que si le flux a réellement avancé : les données
+CBOE étant différées d'un quart d'heure, deux passages rapprochés renvoient le même
+relevé, et le réenregistrer n'ajouterait qu'une ligne identique.
 
 ### Rejouer une séance (`--replay`)
 
@@ -282,13 +358,32 @@ python validate.py            # tous les tickers
 python validate.py SPCX
 ```
 
-Le modèle avance deux affirmations vérifiables, et `validate.py` les mesure sur
-l'historique — sans source de prix externe, la colonne `spot` faisant office de série :
+Le modèle avance trois affirmations vérifiables, et `validate.py` les mesure sur
+l'historique :
 
 1. **les mouvements sont plus amples en gamma négatif** — amplitude médiane par jour,
    comparée entre les deux régimes, puis selon la position vis-à-vis du zero gamma ;
-2. **le prix respecte les murs** — fréquence de franchissement du call wall et du put wall,
-   dont les cas où le mur était à moins de 5 %.
+2. **la volatilité réalisée dépasse l'implicite en gamma négatif** — l'amplitude de
+   la séance suivante estimée à la Parkinson, `ln(H/L) / 2√(ln 2)`, rapportée à l'iv30
+   du relevé. Un titre qui ouvre à 100, monte à 110 et retombe à 100 a bougé ; un
+   rendement de clôture le compte pour zéro ;
+3. **le prix bute sur les murs** — et la mesure distingue désormais deux choses que
+   la seule clôture confondait :
+
+```
+   call wall  :  38 relevés, distance médiane +3.1%
+                 touché en séance 71% du temps, tenu à la clôture 18%
+                 -> rejeté après avoir été touché : 53% des séances
+```
+
+Un mur souvent touché mais rarement tenu, c'est exactement ce que le modèle prédit :
+le prix y va, la couverture le repousse. En ne regardant que le cours suivant, un
+aller-retour intraséance ressortait comme un mur respecté, indistinguable d'un mur
+jamais approché.
+
+Ces deux dernières mesures demandent le high/low et l'iv30 de la séance : elles
+n'existent que pour les relevés enregistrés depuis, et le script le dit plutôt que
+de calculer sur du vide.
 
 En dessous de 20 intervalles, le script affiche les chiffres mais refuse d'en conclure
 quoi que ce soit, et le dit. Il faut donc laisser l'historique s'accumuler — un relevé
@@ -344,7 +439,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 132 tests, aucun accès réseau
+python -m pytest tests -q        # 147 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la

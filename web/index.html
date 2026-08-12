@@ -68,10 +68,28 @@
       </select>
     </label>
 
+    <label class="champ">
+      <span>Volatilité</span>
+      <select id="vol_regime" name="vol_regime">
+        <option value="sticky-strike" selected>IV figée par strike</option>
+        <option value="sticky-moneyness">IV suivant la monnaie</option>
+      </select>
+    </label>
+
     <label class="champ champ-large" id="champ-replay" hidden>
       <span>Relevé archivé</span>
       <select id="replay" name="replay">
         <option value="">en direct</option>
+      </select>
+    </label>
+
+    <label class="champ">
+      <span>Rafraîchir</span>
+      <select id="auto" name="auto">
+        <option value="0" selected>manuel</option>
+        <option value="60">chaque minute</option>
+        <option value="300">toutes les 5 min</option>
+        <option value="900">tous les quarts d'heure</option>
       </select>
     </label>
 
@@ -195,6 +213,50 @@
       <button class="lien-tableau" data-tableau="tab-vanna">Voir le tableau</button>
     </div>
     <div class="tableau" id="tab-vanna" hidden></div>
+  </section>
+
+  <section class="carte" id="carte-derive" hidden>
+    <div class="carte-entete">
+      <div>
+        <h2>La dérive, relevé après relevé</h2>
+        <p class="explication">
+          Un instantané ne dit pas si un niveau tient. Ici, le prix et le zero gamma
+          côte à côte au fil des relevés enregistrés : c'est leur écart qui décrit
+          le régime, et le voir se refermer ou s'ouvrir vaut mieux qu'une photo.
+          L'open interest ne bougeant qu'une fois par jour, ce qui se déplace en
+          séance est surtout le prix.
+        </p>
+      </div>
+    </div>
+    <figure class="figure" id="fig-derive"></figure>
+    <div class="pied-carte">
+      <div class="legende" id="legende-derive"></div>
+      <button class="lien-tableau" data-tableau="tab-derive">Voir le tableau</button>
+    </div>
+    <div class="tableau" id="tab-derive" hidden></div>
+  </section>
+
+  <section class="carte" id="carte-flux" hidden>
+    <div class="carte-entete">
+      <div>
+        <h2>Le signe des dealers, mesuré plutôt que supposé</h2>
+        <p class="explication">
+          Tout ce qui précède repose sur une convention : dealers longs les calls,
+          shorts les puts. <code>flow_tracker.py</code> permet de la confronter au
+          flux réellement observé — chaque transaction située dans sa fourchette,
+          la position dealer étant le miroir du client agressif. Attention à la
+          portée : cela mesure l'inventaire pris <em>ce jour</em>, en partant de
+          zéro à l'ouverture, pas le book accumulé. Un strike non traité pèse zéro
+          ici alors qu'il peut porter un gros open interest.
+        </p>
+      </div>
+    </div>
+    <div id="resume-flux"></div>
+    <div class="pied-carte">
+      <div class="legende" id="legende-flux"></div>
+      <button class="lien-tableau" data-tableau="tab-flux">Voir le tableau</button>
+    </div>
+    <div class="tableau" id="tab-flux" hidden></div>
   </section>
 
   <section class="diagnostics" id="diagnostics" hidden>

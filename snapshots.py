@@ -28,6 +28,7 @@ import pandas as pd
 DOSSIER = "snapshots"
 META_SPOT = "_spot"
 META_DATE = "_quote_date"
+PREFIXE_MARCHE = "_marche_"
 
 
 def _sans_parquet():
@@ -46,13 +47,20 @@ def chemin(ticker, quote_date, dossier=DOSSIER):
     return os.path.join(dossier, str(ticker).upper(), f"{horodatage}.{extension}")
 
 
-def sauver(df, ticker, spot, quote_date, dossier=DOSSIER):
-    """Écrit la chaîne brute et renvoie le chemin. Écrase un relevé du même horodatage."""
+def sauver(df, ticker, spot, quote_date, dossier=DOSSIER, marche=None):
+    """Écrit la chaîne brute et renvoie le chemin. Écrase un relevé du même horodatage.
+
+    Le contexte de séance (OHLCV, iv30) voyage avec la chaîne : sans lui, une
+    archive rejouée plus tard ne permet plus de rapporter le GEX au volume ni de
+    tester les murs sur le parcours réel du jour.
+    """
     cible = chemin(ticker, quote_date, dossier)
     os.makedirs(os.path.dirname(cible), exist_ok=True)
     out = df.copy()
     out[META_SPOT] = float(spot)
     out[META_DATE] = pd.Timestamp(quote_date)
+    for champ, valeur in (marche or {}).items():
+        out[f"{PREFIXE_MARCHE}{champ}"] = valeur
     if cible.endswith(".parquet"):
         out.to_parquet(cible, index=False)
     else:
@@ -61,7 +69,11 @@ def sauver(df, ticker, spot, quote_date, dossier=DOSSIER):
 
 
 def charger(source):
-    """Relit une chaîne archivée -> (df, spot, quote_date), comme les modules de source."""
+    """Relit une chaîne archivée -> (df, spot, quote_date, marche).
+
+    `marche` est vide pour les archives écrites avant qu'on garde le contexte de
+    séance : le relevé reste exploitable, seuls les ratios au volume manquent.
+    """
     if not os.path.exists(source):
         raise FileNotFoundError(f"Aucun relevé archivé à {source}.")
     df = pd.read_parquet(source) if source.endswith(".parquet") else pd.read_csv(source)
@@ -72,9 +84,16 @@ def charger(source):
                          f"(colonnes absentes : {sorted(manquantes)}).")
     spot = float(df[META_SPOT].iloc[0])
     quote_date = pd.Timestamp(df[META_DATE].iloc[0]).to_pydatetime()
-    df = df.drop(columns=[META_SPOT, META_DATE])
+
+    colonnes_marche = [c for c in df.columns if c.startswith(PREFIXE_MARCHE)]
+    marche = {}
+    for colonne in colonnes_marche:
+        valeur = df[colonne].iloc[0]
+        marche[colonne[len(PREFIXE_MARCHE):]] = None if pd.isna(valeur) else float(valeur)
+
+    df = df.drop(columns=[META_SPOT, META_DATE, *colonnes_marche])
     df["ExpirationDate"] = pd.to_datetime(df["ExpirationDate"])
-    return df, spot, quote_date
+    return df, spot, quote_date, marche
 
 
 def lister(ticker=None, dossier=DOSSIER):

@@ -46,10 +46,10 @@ TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
 # ---=== Données ===---
 
 def chaine(ticker, replay=None):
-    """(df, spot, quote_date, ticker_affiche), depuis le cache si possible."""
+    """(df, spot, quote_date, ticker_affiche, marche), depuis le cache si possible."""
     if replay:
-        df, spot, quote_date = snapshots.charger(replay)
-        return df, spot, quote_date, ticker.lstrip("_").upper()
+        df, spot, quote_date, marche = snapshots.charger(replay)
+        return df, spot, quote_date, ticker.lstrip("_").upper(), marche
 
     cle = ticker.upper()
     with _verrou:
@@ -57,8 +57,8 @@ def chaine(ticker, replay=None):
         if entree and time.time() - entree[0] < DUREE_CACHE:
             return entree[1]
 
-    df, spot, quote_date = cboe_data.fetch_chain(ticker)
-    resultat = (df, spot, quote_date, cboe_data.cboe_symbol(ticker).lstrip("_"))
+    df, spot, quote_date, marche = cboe_data.fetch_chain_et_marche(ticker)
+    resultat = (df, spot, quote_date, cboe_data.cboe_symbol(ticker).lstrip("_"), marche)
     with _verrou:
         _cache[cle] = (time.time(), resultat)
     return resultat
@@ -89,6 +89,7 @@ def payload(a):
         "dte_min": a.dte_min,
         "source_gamma": a.source_gamma,
         "time_convention": a.time_convention,
+        "regime_vol": a.regime_vol,
         "decimals": a.decimals,
         "n_strikes": int(a.df.StrikePrice.nunique()),
         "n_expiries": int(a.df.ExpirationDate.nunique()),
@@ -110,6 +111,8 @@ def payload(a):
             "relatif": _nombre(ecart[2]),
         },
         "part_courtes": {nom: _nombre(p) for nom, p in a.part_courtes.items()},
+        "marche": {champ: _nombre(valeur) for champ, valeur in (a.marche or {}).items()},
+        "gex_sur_volume": _nombre(a.gex_sur_volume),
 
         "strikes": [_nombre(k) for k in par_strike.index],
         "par_strike": {
@@ -145,7 +148,7 @@ def analyser(params):
     brut = params.get("dte_max", ["30"])[0]
     dte_max = None if str(brut).lower() in ("all", "toutes", "") else int(brut)
 
-    df, spot, quote_date, affiche = chaine(ticker, replay)
+    df, spot, quote_date, affiche, marche = chaine(ticker, replay)
     contract_size = CONTRACT_SIZES.get(ticker.upper(), CONTRACT_SIZE) if replay else CONTRACT_SIZE
 
     a = analysis.analyser(
@@ -155,7 +158,9 @@ def analyser(params):
         wall_range=flottant("wall_range", 0.15),
         oi_wall_range=flottant("oi_wall_range", 0.30),
         source_gamma=texte("gamma_source", "iv", analysis.SOURCES_GAMMA),
-        time_convention=texte("time_convention", "heures", analysis.CONVENTIONS_TEMPS))
+        time_convention=texte("time_convention", "heures", analysis.CONVENTIONS_TEMPS),
+        regime_vol=texte("vol_regime", "sticky-strike", analysis.REGIMES_VOL),
+        marche=marche)
     return payload(a)
 
 
@@ -176,6 +181,37 @@ def historique(ticker=None):
         return []
     df = df.where(df.notna(), None)
     return json.loads(df.to_json(orient="records"))
+
+
+def flux_disponibles():
+    """Fichiers de flux collectés par flow_tracker, dans le dossier courant."""
+    import glob
+    return sorted(os.path.basename(f) for f in glob.glob("flux_*.csv"))
+
+
+def signe_du_flux(ticker, fichier):
+    """Position dealer déduite du flux observé, comparée à la convention.
+
+    La convention postule que les dealers sont longs les calls et shorts les puts.
+    Ici on le mesure : pour chaque strike, leur position est le miroir du flux
+    client agressif. Les deux lectures ne répondent pas à la même question — la
+    convention décrit la structure accumulée, le flux ce qu'ils ont pris ce jour.
+    """
+    import flow_tracker
+
+    if fichier not in flux_disponibles():
+        raise ValueError(f"fichier de flux inconnu : {fichier!r}")
+    t, spot, gex_flux, gex_conv = flow_tracker.signed_gex(fichier, ticker)
+    t = t.sort_values("gex_flux", key=abs, ascending=False)
+    return {
+        "ticker": ticker, "fichier": fichier, "spot": _nombre(spot),
+        "gex_flux": _nombre(gex_flux), "gex_convention": _nombre(gex_conv),
+        "meme_signe": bool(gex_flux * gex_conv > 0),
+        "n_strikes": int(len(t)),
+        "strikes": [{"strike": _nombre(k), "gex_flux": _nombre(r.gex_flux),
+                     "calls": _nombre(r.C), "puts": _nombre(r.P)}
+                    for k, r in t.head(12).iterrows()],
+    }
 
 
 # ---=== Serveur ===---
@@ -233,6 +269,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(liste_snapshots())
         if route.path == "/api/history":
             return self._json(historique(params.get("ticker", [None])[0]))
+
+        if route.path == "/api/flux":
+            fichier = params.get("fichier", [None])[0]
+            if not fichier:
+                return self._json({"fichiers": flux_disponibles()})
+            try:
+                return self._json(signe_du_flux(params.get("ticker", ["SPCX"])[0], fichier))
+            except ValueError as err:
+                return self._json({"erreur": str(err)}, 400)
+            except Exception as err:
+                return self._json({"erreur": f"{type(err).__name__} : {err}"}, 500)
 
         self._envoyer(404, b"introuvable", "text/plain; charset=utf-8")
 

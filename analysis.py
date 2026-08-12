@@ -209,22 +209,81 @@ def murs(par_strike, spot, wall_range=0.15, oi_wall_range=0.30):
 
 # ---=== Profil de gamma et zero gamma ===---
 
-def profil_gamma(df, levels, contract_size=CONTRACT_SIZE):
+REGIMES_VOL = ("sticky-strike", "sticky-moneyness")
+
+
+def pente_skew(df, spot, bande=0.15):
+    """Pente du smile, dIV / d(ln K/S), une valeur par échéance.
+
+    Ajustée au premier degré sur les strikes à moins de `bande` de la monnaie :
+    au-delà, les ailes se relèvent et une droite n'y décrit plus rien. Négative
+    presque partout sur actions et indices — c'est le skew : les puts hors de la
+    monnaie se paient plus cher que les calls.
+
+    Renvoie un vecteur aligné sur les lignes de df. Une échéance trop pauvre en
+    strikes exploitables reçoit une pente nulle, ce qui la ramène au régime
+    sticky-strike plutôt que de lui inventer un skew.
+    """
+    moneyness = np.log(df.StrikePrice.values / spot)
+    iv = df[["CallIV", "PutIV"]].replace(0.0, np.nan).mean(axis=1).values
+
+    pentes = {}
+    for echeance, indices in df.groupby("ExpirationDate").indices.items():
+        m, v = moneyness[indices], iv[indices]
+        garde = np.isfinite(m) & np.isfinite(v) & (v > 0) & (np.abs(m) <= bande)
+        pentes[echeance] = (np.polyfit(m[garde], v[garde], 1)[0]
+                            if garde.sum() >= 3 else 0.0)
+    return df.ExpirationDate.map(pentes).fillna(0.0).values
+
+
+def profil_gamma(df, levels, contract_size=CONTRACT_SIZE, spot=None,
+                 regime_vol="sticky-strike"):
     """GEX net de chaque contrat à chaque niveau de spot : matrice (niveaux, contrats).
 
     Vectorisé sur les deux dimensions — l'ancienne version bouclait en Python sur
     les 60 niveaux, soit 120 appels sur toute la chaîne.
 
     Le gamma est nécessairement recalculé depuis l'IV : à un niveau hypothétique,
-    aucun gamma publié n'existe. La volatilité implicite est tenue constante, ce
-    qui est l'hypothèse usuelle et sous-estime la réaction réelle (en pratique la
-    vol monte quand le spot baisse).
+    aucun gamma publié n'existe. Reste à décider ce que devient la volatilité
+    quand le spot bouge. Les deux réponses encadrent la réalité :
+
+      - "sticky-strike" (défaut) : chaque contrat garde son IV. Le prix glisse
+        alors le long du skew existant, ce qui fait MONTER mécaniquement la vol à
+        la monnaie quand le spot baisse. C'est l'hypothèse de la littérature.
+      - "sticky-moneyness" : le smile est figé en monnaie et se translate avec le
+        spot. La vol à la monnaie reste constante ; un strike donné voit la sienne
+        varier de pente x ln(S0/S'). L'effet de levier disparaît.
+
+    Le décalage vaut exactement zéro au spot courant et croît avec la distance :
+    ce régime remodèle donc les ailes du profil, mais ne déplace quasiment pas un
+    zero gamma situé près du spot — ce qui est le cas courant. C'est un test de
+    robustesse du profil dans les ailes, pas une correction du niveau central.
+
+    Le second régime demande le spot de référence : sans lui, on retombe sur le
+    premier plutôt que d'appliquer un décalage arbitraire.
     """
+    if regime_vol not in REGIMES_VOL:
+        raise ValueError(f"régime de volatilité inconnu : {regime_vol!r} "
+                         f"(attendu : {', '.join(REGIMES_VOL)})")
+
     S = np.asarray(levels, dtype=float).reshape(-1, 1)
     K, T = df.StrikePrice.values, df["T"].values
-    call_ex = calc_gamma_ex(S, K, df.CallIV.values, T, 0, 0, "call",
+    call_iv, put_iv = df.CallIV.values, df.PutIV.values
+
+    if regime_vol == "sticky-moneyness" and spot:
+        # ln(K/S') - ln(K/S0) = ln(S0/S') : le décalage ne dépend pas du strike,
+        # ce qui rend le régime aussi économe que l'autre.
+        decalage = pente_skew(df, spot)[None, :] * np.log(spot / S)
+        plancher = 1e-4          # une vol négative n'a pas de gamma, elle a un NaN
+        call_iv = np.maximum(call_iv[None, :] + decalage, plancher)
+        put_iv = np.maximum(put_iv[None, :] + decalage, plancher)
+        # Un contrat sans IV publiée reste sans IV : on ne lui en fabrique pas une
+        call_iv = np.where(df.CallIV.values[None, :] > 0, call_iv, 0.0)
+        put_iv = np.where(df.PutIV.values[None, :] > 0, put_iv, 0.0)
+
+    call_ex = calc_gamma_ex(S, K, call_iv, T, 0, 0, "call",
                             df.CallOpenInt.values, contract_size)
-    put_ex = calc_gamma_ex(S, K, df.PutIV.values, T, 0, 0, "put",
+    put_ex = calc_gamma_ex(S, K, put_iv, T, 0, 0, "put",
                            df.PutOpenInt.values, contract_size)
     return call_ex - put_ex
 
@@ -286,6 +345,7 @@ class Analyse:
     dte_min: int
     source_gamma: str
     time_convention: str
+    regime_vol: str
     df: pd.DataFrame                 # chaîne filtrée, avec les colonnes d'exposition
     par_strike: pd.DataFrame         # agrégat par strike
     levels: np.ndarray
@@ -303,6 +363,7 @@ class Analyse:
     put_wall_oi: object = None
     ecart_gamma: object = None       # (iv, publié, relatif) ou None
     part_courtes: dict = field(default_factory=dict)   # poids des 0-1 DTE
+    marche: dict = field(default_factory=dict)         # OHLCV et iv30 de la séance
 
     @property
     def horizon(self):
@@ -311,6 +372,23 @@ class Analyse:
     @property
     def decimals(self):
         return 4 if self.spot < 10 else 2      # les paires FX se lisent en pips
+
+    @property
+    def gex_sur_volume(self):
+        """Flux de couverture rapporté au volume échangé du jour, en dollars.
+
+        Le seul rapport qui rend le GEX lisible. Un montant nu ne dit rien : sur
+        SPCX le 12 août, 120 M$ de couverture face à 13,8 Md$ échangés font 0,9 %
+        — un frottement, pas le moteur de la séance. Le même montant sur un titre
+        cent fois moins liquide serait dominant.
+
+        None quand le volume manque (options sur futures, chaînes rejouées d'avant
+        l'archivage du contexte de marché).
+        """
+        volume = (self.marche or {}).get("dollar_volume")
+        if not volume:
+            return None
+        return abs(self.total_gex) / volume
 
 
 def poids_echeances_courtes(df, quote_date, seuil_jours=1):
@@ -338,7 +416,8 @@ def poids_echeances_courtes(df, quote_date, seuil_jours=1):
 
 def analyser(df, spot, quote_date, ticker="?", contract_size=CONTRACT_SIZE,
              dte_max=30, dte_min=0, plage=0.2, wall_range=0.15, oi_wall_range=0.30,
-             source_gamma="iv", time_convention="heures", n_niveaux=60):
+             source_gamma="iv", time_convention="heures", n_niveaux=60,
+             marche=None, regime_vol="sticky-strike"):
     """Chaîne d'options brute -> tous les chiffres de la séance.
 
     Fonction pure : ni réseau, ni disque, ni graphique. C'est le point d'entrée
@@ -355,7 +434,7 @@ def analyser(df, spot, quote_date, ticker="?", contract_size=CONTRACT_SIZE,
     from_strike, to_strike = (1 - plage) * spot, (1 + plage) * spot
     levels = np.linspace(from_strike, to_strike, n_niveaux)
 
-    net = profil_gamma(df, levels, contract_size)      # (niveaux, contrats)
+    net = profil_gamma(df, levels, contract_size, spot, regime_vol)   # (niveaux, contrats)
     prochaine = df.ExpirationDate.min()
     troisiemes_vendredis = df.ExpirationDate[[is_third_friday(x) for x in df.ExpirationDate]]
     masques = {
@@ -375,7 +454,7 @@ def analyser(df, spot, quote_date, ticker="?", contract_size=CONTRACT_SIZE,
     return Analyse(
         ticker=ticker, spot=spot, quote_date=quote_date, contract_size=contract_size,
         dte_max=dte_max, dte_min=dte_min, source_gamma=source_gamma,
-        time_convention=time_convention,
+        time_convention=time_convention, regime_vol=regime_vol,
         df=df, par_strike=par_strike, levels=levels, profiles=profiles,
         total_gex=df.TotalGamma.sum(), total_charm=df.TotalCharm.sum(),
         total_vanna=df.TotalVanna.sum(),
@@ -383,5 +462,6 @@ def analyser(df, spot, quote_date, ticker="?", contract_size=CONTRACT_SIZE,
         from_strike=from_strike, to_strike=to_strike,
         ecart_gamma=ecart_gamma(df),
         part_courtes=poids_echeances_courtes(df, quote_date),
+        marche=marche or {},
         **murs(par_strike, spot, wall_range, oi_wall_range),
     )
