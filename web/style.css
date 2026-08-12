@@ -248,6 +248,31 @@ code {
 
 .explication { margin: 0; max-width: 74ch; font-size: 15px; color: var(--encre-2); }
 
+/* Onglets de métrique : le même graphique, une grandeur à la fois. */
+.onglets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+.onglets button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--encre-2);
+  background: none;
+  border: 1px solid var(--bord-fort);
+  border-radius: 999px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.onglets button:hover { color: var(--encre); border-color: var(--encre-3); }
+.onglets button[aria-selected="true"] {
+  color: #fff;
+  background: var(--encre);
+  border-color: var(--encre);
+}
+
 .figure { margin: 0; }
 .figure svg { display: block; width: 100%; height: auto; overflow: visible; }
 

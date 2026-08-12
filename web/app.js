@@ -49,6 +49,12 @@ function montant(v, ech, decimales = 2, signe = false) {
   return `${signe && x > 0 ? "+" : ""}${texte} ${ech.unite}`;
 }
 
+/** Formate une graduation, en écrasant le zéro négatif que produit l'arrondi.
+ *  Un axe qui affiche « -0 » fait douter de tout le reste. */
+function graduationTexte(t, decimales = 2) {
+  return nf(0, decimales).format(Math.abs(t) < 1e-9 ? 0 : t);
+}
+
 /** Bornes d'axe « rondes » : sans ça les graduations tombent sur des décimales absurdes. */
 function graduations(min, max, cible = 5) {
   if (!isFinite(min) || !isFinite(max) || min === max) return [min || 0];
@@ -237,7 +243,7 @@ function graphiqueBarres(conteneur, { strikes, series, diverge, spot, reperes, u
   const geo = { x0, x1, y0, y1, xEch, yEch, xMin, xMax };
 
   const yTicks = graduations(yMin, yMax, 4);
-  chrome(svg, geo, yTicks, (t) => nf(0, 2).format(t), unite,
+  chrome(svg, geo, yTicks, (t) => graduationTexte(t), unite,
          graduations(xMin, xMax, 6), (t) => nf(0, 0).format(t));
 
   // Pas réel entre strikes : la largeur suit l'espacement, moins 2px de surface.
@@ -357,7 +363,7 @@ function graphiqueCourbes(conteneur, { niveaux, series, reperes, unite, hauteur 
     : (t) => nf(0, decimalesX).format(t);
 
   chrome(svg, geo, graduations(yMin, yMax, 4),
-         (t) => nf(0, enPrix ? decimales : 2).format(t), unite,
+         (t) => graduationTexte(t, enPrix ? decimales : 2), unite,
          ticksX, formateX);
   if (inclureZero) {
     svg.appendChild(el("line", {
@@ -437,6 +443,217 @@ function graphiqueCourbes(conteneur, { niveaux, series, reperes, unite, hauteur 
   svg.setAttribute("aria-label", "Profil de gamma selon le niveau du sous-jacent.");
   conteneur.appendChild(svg);
   return ech;
+}
+
+// ---=== Vue en échelle de prix ===---
+
+/* Les strikes en Y, l'exposition en X. C'est la même donnée que le graphique en
+ * barres, tournée d'un quart de tour — mais un prix se lit verticalement, comme
+ * un carnet d'ordres : le spot devient une ligne qui traverse la page et les murs
+ * des paliers au-dessus et en dessous.
+ *
+ * Le smile de volatilité occupe un panneau SÉPARÉ à gauche, partageant l'axe des
+ * strikes. Le superposer sur une seconde échelle horizontale, comme le font
+ * certains, cale deux grandeurs l'une sur l'autre de façon arbitraire et fait
+ * lire une relation qui n'est pas dans les données.
+ */
+
+const METRIQUES = [
+  { cle: "total", nom: "GEX", unite: "$ / mouvement de 1 %", type: "montant" },
+  { cle: "total_titres", nom: "GEX en titres", unite: "titres / $ de mouvement", type: "titres" },
+  { cle: "delta", nom: "DEX", unite: "$ de delta", type: "montant" },
+  { cle: "vega", nom: "VEX", unite: "$ / point de vol", type: "montant" },
+  { cle: "charm", nom: "CEX (charm)", unite: "$ de delta / jour", type: "montant" },
+  { cle: "vanna", nom: "vGEX (vanna)", unite: "$ de delta / pt de vol", type: "montant" },
+  { cle: "oi_net", nom: "OI net", unite: "contrats (calls − puts)", type: "contrats" },
+];
+
+function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGamma,
+                                       callWall, putWall, unite, type, smile, dec }) {
+  conteneur.innerHTML = "";
+  if (!strikes.length) return null;
+
+  const hauteurLigne = strikes.length > 90 ? 9 : strikes.length > 55 ? 13 : 18;
+  const hauteur = Math.max(360, strikes.length * hauteurLigne + MARGE.haut + MARGE.bas);
+  const svg = toile(hauteur);
+
+  // Deux panneaux, un seul axe de strikes : le smile à gauche, l'exposition à droite.
+  const aSmile = smile && smile.call.some((v) => v !== null && v !== undefined);
+  const xLabels = 56;
+  const smile0 = xLabels + 14, smile1 = smile0 + (aSmile ? 150 : 0);
+  const x0 = aSmile ? smile1 + 46 : xLabels + 18;
+  const x1 = L - 74;
+  const y0 = MARGE.haut, y1 = hauteur - MARGE.bas;
+
+  const kMin = Math.min(...strikes), kMax = Math.max(...strikes);
+  // Strikes croissants vers le HAUT, comme une échelle de prix.
+  const yEch = (k) => y1 - ((k - kMin) / (kMax - kMin || 1)) * (y1 - y0);
+
+  const finies = valeurs.filter((v) => v !== null && isFinite(v));
+  const ech = type === "montant" ? echelle(finies) : { facteur: 1, unite: "" };
+  const formate = type === "montant"
+    ? (v) => montant(v, ech, 2, true)
+    : (v) => (v === null || !isFinite(v) ? "—" : nf(0, 0).format(v));
+
+  // Le zéro reste à sa vraie place, mais chaque côté est cadré sur ses propres
+  // valeurs : une échelle symétrique laissait la moitié du champ vide dès que
+  // les expositions penchaient d'un côté, ce qui est le cas ordinaire.
+  const toutes = [...finies, ...(reference || []).filter((v) => v !== null && isFinite(v))]
+    .map((v) => v / ech.facteur);
+  const marge = (Math.max(...toutes, 0) - Math.min(...toutes, 0)) * 0.04 || 1;
+  const vMin = Math.min(...toutes, 0) - marge;
+  const vMax = Math.max(...toutes, 0) + marge;
+  const xEch = (v) => x0 + ((v / ech.facteur - vMin) / (vMax - vMin || 1)) * (x1 - x0);
+  const xZero = xEch(0);
+
+  // --- chrome : graduations verticales et étiquettes de strike ---
+  for (const t of graduations(vMin, vMax, 4)) {
+    const x = xEch(t * ech.facteur);
+    svg.appendChild(el("line", { x1: x, x2: x, y1: y0, y2: y1, class: "grille-ligne" }));
+    svg.appendChild(el("text", {
+      x, y: y1 + 18, "text-anchor": "middle", class: "axe-texte",
+    }, graduationTexte(t)));
+  }
+  svg.appendChild(el("text", {
+    x: x0, y: y0 - 10, "text-anchor": "start", class: "axe-titre",
+  }, `${unite}${ech.unite ? ` (${ech.unite})` : ""}`));
+
+  const pasEtiquette = Math.max(1, Math.ceil(strikes.length / 46));
+  strikes.forEach((k, i) => {
+    if (i % pasEtiquette) return;
+    const remarquable = k === callWall || k === putWall;
+    svg.appendChild(el("text", {
+      x: xLabels, y: yEch(k) + 3.5, "text-anchor": "end",
+      class: "axe-texte", "font-weight": remarquable ? 600 : null,
+      fill: remarquable ? COULEURS.encre : null,
+    }, prix(k, dec)));
+  });
+
+  // --- panneau du smile ---
+  if (aSmile) {
+    const ivs = [...smile.call, ...smile.put].filter((v) => v !== null && isFinite(v))
+      .sort((a, b) => a - b);
+    // Cadrage robuste : les strikes les plus lointains sortent des IV aberrantes
+    // — jusqu'à 174 % sur ce relevé — qui écrasent tout le reste contre le bord.
+    const centile = (p) => ivs[Math.min(ivs.length - 1, Math.floor(p * (ivs.length - 1)))];
+    const ivMin = centile(0.03), ivMax = centile(0.97);
+    const xIv = (v) => smile0 + ((v - ivMin) / (ivMax - ivMin || 1)) * (smile1 - smile0);
+    for (const [serie, couleur] of [[smile.call, COULEURS.serie1], [smile.put, COULEURS.serie2]]) {
+      strikes.forEach((k, i) => {
+        const v = serie[i];
+        if (v === null || !isFinite(v)) return;
+        // Les aberrantes sont ramenées au bord plutôt que tracées hors panneau,
+        // où elles se superposeraient aux étiquettes de strike.
+        const x = Math.max(smile0, Math.min(xIv(v), smile1));
+        svg.appendChild(el("circle", { cx: x, cy: yEch(k), r: 1.9, fill: couleur }));
+      });
+    }
+    svg.appendChild(el("text", {
+      x: smile0, y: y0 - 10, "text-anchor": "start", class: "axe-titre",
+    }, "IV"));
+    for (const v of [ivMin, ivMax]) {
+      svg.appendChild(el("text", {
+        x: xIv(v), y: y1 + 18, "text-anchor": "middle", class: "axe-texte",
+      }, `${(v * 100).toFixed(0)}%`));
+    }
+  }
+
+  // --- mèches : d'où vient l'exposition de ce strike depuis ce matin ---
+  const epaisseur = Math.max(2, hauteurLigne - 2);
+  if (reference) {
+    strikes.forEach((k, i) => {
+      const av = reference[i], ap = valeurs[i];
+      if (av === null || ap === null || !isFinite(av) || !isFinite(ap)) return;
+      if (Math.abs(xEch(av) - xEch(ap)) < 1.5) return;
+      svg.appendChild(el("line", {
+        x1: xEch(av), x2: xEch(ap), y1: yEch(k), y2: yEch(k),
+        stroke: COULEURS.encre3, "stroke-width": 1, opacity: 0.55,
+      }));
+      svg.appendChild(el("line", {
+        x1: xEch(av), x2: xEch(av), y1: yEch(k) - epaisseur / 2.4, y2: yEch(k) + epaisseur / 2.4,
+        stroke: COULEURS.encre3, "stroke-width": 1, opacity: 0.75,
+      }));
+    });
+  }
+
+  // --- barres ---
+  const barres = el("g");
+  strikes.forEach((k, i) => {
+    const v = valeurs[i];
+    if (v === null || !isFinite(v) || Math.abs(v) < 1e-12) return;
+    const x = xEch(v), y = yEch(k) - epaisseur / 2;
+    const gauche = Math.min(xZero, x), largeur = Math.abs(x - xZero);
+    const r = Math.max(0, Math.min(4, largeur, epaisseur / 2));
+    // Bout arrondi du côté opposé à l'axe zéro, comme pour les barres verticales.
+    const d = x >= xZero
+      ? `M${gauche} ${y}H${gauche + largeur - r}Q${gauche + largeur} ${y} ` +
+        `${gauche + largeur} ${y + r}V${y + epaisseur - r}` +
+        `Q${gauche + largeur} ${y + epaisseur} ${gauche + largeur - r} ${y + epaisseur}` +
+        `H${gauche}Z`
+      : `M${gauche + largeur} ${y}H${gauche + r}Q${gauche} ${y} ${gauche} ${y + r}` +
+        `V${y + epaisseur - r}Q${gauche} ${y + epaisseur} ${gauche + r} ${y + epaisseur}` +
+        `H${gauche + largeur}Z`;
+    barres.appendChild(el("path", {
+      d, fill: v >= 0 ? COULEURS.positif : COULEURS.negatif, class: "barre",
+      "data-strike": k,
+    }));
+  });
+  svg.appendChild(barres);
+  svg.appendChild(el("line", { x1: xZero, x2: xZero, y1: y0, y2: y1, class: "axe-ligne" }));
+
+  // --- repères horizontaux : spot et zero gamma ---
+  for (const [valeur, ton, libelle] of [
+    [spot, "fort", `Spot ${prix(spot, dec)}`],
+    [zeroGamma, "moyen", `Zero gamma ${prix(zeroGamma, dec)}`],
+  ]) {
+    if (valeur === null || !isFinite(valeur) || valeur < kMin || valeur > kMax) continue;
+    const style = REPERES[ton];
+    const y = yEch(valeur);
+    svg.appendChild(el("line", {
+      x1: x0 - 8, x2: x1, y1: y, y2: y, stroke: style.trait, class: "repere-ligne",
+    }));
+    const largeur = libelle.length * 6.4 + 14;
+    svg.appendChild(el("rect", {
+      x: x1 - largeur, y: y - 18, width: largeur, height: 17, rx: 4, fill: style.fond,
+    }));
+    svg.appendChild(el("text", {
+      x: x1 - largeur / 2, y: y - 6, "text-anchor": "middle",
+      fill: style.texte, class: "repere-texte",
+    }, libelle));
+  }
+
+  // --- survol : une bande par strike, sur toute la largeur du panneau ---
+  const cibles = el("g");
+  strikes.forEach((k, i) => {
+    const cible = el("rect", {
+      x: x0 - 8, y: yEch(k) - Math.max(hauteurLigne, 12) / 2,
+      width: x1 - x0 + 8, height: Math.max(hauteurLigne, 12), class: "cible",
+    });
+    cible.addEventListener("mousemove", (evenement) => {
+      barres.querySelectorAll(".barre").forEach((b) => {
+        b.classList.toggle("active", Number(b.dataset.strike) === k);
+      });
+      const lignes = [[unite, formate(valeurs[i]),
+                       valeurs[i] >= 0 ? COULEURS.positif : COULEURS.negatif]];
+      if (reference && reference[i] !== null && isFinite(reference[i])) {
+        lignes.push(["au premier relevé", formate(reference[i]), COULEURS.encre3]);
+      }
+      if (smile && smile.call[i] !== null && isFinite(smile.call[i])) {
+        lignes.push(["IV calls", `${(smile.call[i] * 100).toFixed(1)} %`, COULEURS.serie1]);
+      }
+      montrerInfobulle(evenement, `Strike ${prix(k, dec)}`, lignes);
+    });
+    cible.addEventListener("mouseleave", () => {
+      barres.querySelectorAll(".barre").forEach((b) => b.classList.remove("active"));
+      cacherInfobulle();
+    });
+    cibles.appendChild(cible);
+  });
+  svg.appendChild(cibles);
+
+  svg.setAttribute("aria-label", `${unite} par strike, en échelle de prix.`);
+  conteneur.appendChild(svg);
+  return { ech, formate };
 }
 
 // ---=== Légendes et tableaux ===---
@@ -661,6 +878,7 @@ function rendre(d) {
     $(`carte-${cle}`).hidden = false;
   }
 
+  rendreEchelle(d);
   rendreDiagnostics(d, echTotal);
   // Ces deux cartes lisent d'autres sources que le relevé ; elles s'affichent
   // quand il y a de quoi, et disparaissent sinon plutôt que de montrer du vide.
@@ -719,6 +937,85 @@ function rendreDiagnostics(d, echTotal) {
   }
 
   $("diagnostics").hidden = false;
+}
+
+// ---=== Échelle de prix : onglets et rendu ===---
+
+let dernierReleve = null;
+let metriqueActive = "total";
+
+function rendreEchelle(d) {
+  dernierReleve = d;
+  const onglets = $("onglets-metrique");
+  if (!onglets.childElementCount) {
+    for (const m of METRIQUES) {
+      const bouton = document.createElement("button");
+      bouton.type = "button";
+      bouton.role = "tab";
+      bouton.textContent = m.nom;
+      bouton.dataset.metrique = m.cle;
+      bouton.addEventListener("click", () => {
+        metriqueActive = m.cle;
+        if (dernierReleve) tracerEchelle(dernierReleve);
+      });
+      onglets.appendChild(bouton);
+    }
+  }
+  tracerEchelle(d);
+  $("carte-echelle").hidden = false;
+}
+
+function tracerEchelle(d) {
+  const m = METRIQUES.find((x) => x.cle === metriqueActive) || METRIQUES[0];
+  $("onglets-metrique").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-selected", String(b.dataset.metrique === m.cle));
+  });
+
+  // Mêmes strikes que les autres graphiques : la fenêtre d'affichage fait foi.
+  const dedans = d.strikes
+    .map((k, i) => ({ k, i }))
+    .filter(({ k }) => k >= d.from_strike && k <= d.to_strike);
+  const ps = d.par_strike;
+  const ref = d.reference ? d.reference.par_strike[m.cle] : null;
+
+  const rendu = graphiqueEchelle($("fig-echelle"), {
+    strikes: dedans.map(({ k }) => k),
+    valeurs: dedans.map(({ i }) => ps[m.cle][i]),
+    reference: ref ? dedans.map(({ i }) => ref[i]) : null,
+    smile: {
+      call: dedans.map(({ i }) => ps.call_iv[i]),
+      put: dedans.map(({ i }) => ps.put_iv[i]),
+    },
+    spot: d.spot, zeroGamma: d.zero_gamma,
+    callWall: d.call_wall, putWall: d.put_wall,
+    unite: `${m.nom} — ${m.unite}`, type: m.type, dec: d.decimals,
+  });
+  if (!rendu) return;
+
+  const entrees = [
+    { couleur: COULEURS.positif, nom: "Valeur positive" },
+    { couleur: COULEURS.negatif, nom: "Valeur négative" },
+    { couleur: COULEURS.serie1, nom: "IV calls" },
+    { couleur: COULEURS.serie2, nom: "IV puts" },
+  ];
+  if (d.reference) {
+    entrees.push({ couleur: COULEURS.encre3, nom: `Depuis le relevé de ${d.reference.heure}` });
+  }
+  legende($("legende-echelle"), entrees);
+
+  const enTetes = ["Strike", m.nom, "IV calls", "IV puts"];
+  if (d.reference) enTetes.splice(2, 0, `À ${d.reference.heure}`);
+  tableau($("tab-echelle"),
+    `${m.nom} par strike (${m.unite}), du plus bas au plus haut.` +
+    (d.reference ? "" : " Aucun relevé antérieur ce jour : pas de mèche à tracer."),
+    enTetes,
+    dedans.map(({ k, i }) => {
+      const ligne = [prix(k, d.decimals), rendu.formate(ps[m.cle][i])];
+      if (d.reference) ligne.push(rendu.formate(ref[i]));
+      const pct = (v) => (v === null || !isFinite(v) ? "—" : `${(v * 100).toFixed(1)} %`);
+      ligne.push(pct(ps.call_iv[i]), pct(ps.put_iv[i]));
+      return ligne;
+    }));
 }
 
 // ---=== Dérive dans le temps ===---

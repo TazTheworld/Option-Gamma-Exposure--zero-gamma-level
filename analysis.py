@@ -136,6 +136,33 @@ def expositions(df, spot, T, contract_size=CONTRACT_SIZE, source="iv",
         out["CallGEX"], out["PutGEX"] = iv_call, -iv_put
     out["TotalGamma"] = out.CallGEX + out.PutGEX
 
+    # Le GEX en TITRES par dollar de mouvement, l'autre lecture courante.
+    # Notre GEX vaut gamma x OI x taille x S^2 x 0.01 ; la version en titres est
+    # simplement gamma x OI x taille — soit le même chiffre divisé par 0.01 S^2.
+    # Elle se compare au volume en titres, la nôtre au volume en dollars.
+    out["TotalGammaTitres"] = out.TotalGamma / (0.01 * spot ** 2)
+
+    def publie(nom):
+        """Colonne de grec publiée par la source, ou zéro si elle ne la donne pas.
+
+        Le CME et l'export CSV n'ont ni delta ni vega : l'exposition
+        correspondante vaut alors zéro, ce qui se lit comme « pas de donnée »
+        dans un graphique, plutôt que de faire échouer tout le pipeline.
+        """
+        return out[nom] if nom in out.columns else 0.0
+
+    # DEX : delta dollar du book dealer, même convention de signe. Le delta des
+    # puts étant négatif, en être short ajoute du delta positif.
+    out["TotalDelta"] = ((publie("CallDelta") * out.CallOpenInt
+                          - publie("PutDelta") * out.PutOpenInt)
+                         * contract_size * spot)
+
+    # VEX : dollars gagnés par point de volatilité implicite. Le vega vient de la
+    # source, il n'est pas recalculé — nul quand elle ne le publie pas.
+    out["TotalVega"] = ((publie("CallVega") * out.CallOpenInt
+                         - publie("PutVega") * out.PutOpenInt)
+                        * contract_size)
+
     # Charm et vanna : toujours depuis l'IV, aucune source ne les publie.
     # Le charm est une dérivée temporelle : son diviseur doit être celui de la
     # convention ayant servi à calculer T, sinon il est faux d'un facteur 365/262.
@@ -428,8 +455,14 @@ def analyser(df, spot, quote_date, ticker="?", contract_size=CONTRACT_SIZE,
     df = expositions(df, spot, T, contract_size, source_gamma, jours_par_an)
 
     par_strike = df.groupby("StrikePrice")[
-        ["CallGEX", "PutGEX", "TotalGamma", "CallOpenInt", "PutOpenInt",
-         "TotalCharm", "TotalVanna"]].sum()
+        ["CallGEX", "PutGEX", "TotalGamma", "TotalGammaTitres", "CallOpenInt",
+         "PutOpenInt", "TotalCharm", "TotalVanna", "TotalDelta", "TotalVega"]].sum()
+    # L'IV du strike, pour le panneau du smile. Les contrats très dans la monnaie
+    # sortent avec une IV nulle : les exclure plutôt que de tirer la moyenne à zéro.
+    smile = df.assign(
+        _civ=df.CallIV.where(df.CallIV > 0), _piv=df.PutIV.where(df.PutIV > 0),
+    ).groupby("StrikePrice")[["_civ", "_piv"]].mean()
+    par_strike["CallIV"], par_strike["PutIV"] = smile._civ, smile._piv
 
     from_strike, to_strike = (1 - plage) * spot, (1 + plage) * spot
     levels = np.linspace(from_strike, to_strike, n_niveaux)

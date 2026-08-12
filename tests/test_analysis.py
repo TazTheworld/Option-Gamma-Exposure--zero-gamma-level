@@ -64,10 +64,19 @@ def chaine(spot=SPOT, quote_date=QUOTE, jours=(30,), strikes=None,
                                OI=1, contract_size=1) / (spot ** 2 * 0.01)
     df["CallGamma"] = unitaire * facteur_gamma_publie
     df["PutGamma"] = unitaire * facteur_gamma_publie
-    for colonne in COLUMNS:
+    # Delta et vega comme le CBOE les publierait : delta de call croissant avec
+    # la monnaie, vega en cloche autour d'elle. DEX et VEX en dépendent, et une
+    # chaîne d'essai qui les laisserait à zéro ne testerait rien.
+    ecart = (df.StrikePrice.values - spot) / spot
+    df["CallDelta"] = np.clip(0.5 - ecart * 4, 0.01, 0.99)
+    df["PutDelta"] = df["CallDelta"] - 1.0
+    df["CallVega"] = np.exp(-((ecart / 0.15) ** 2)) * 0.2
+    df["PutVega"] = df["CallVega"]
+
+    for colonne in COLUMNS + cboe_data.COLONNES_GRECS:
         if colonne not in df.columns:
             df[colonne] = 0.0
-    return df[COLUMNS]
+    return df[COLUMNS + cboe_data.COLONNES_GRECS]
 
 
 # ---=== Filtre d'échéance ===---
@@ -339,6 +348,54 @@ def test_sticky_moneyness_sans_spot_retombe_sur_sticky_strike():
     sans = analysis.profil_gamma(df, niveaux, 100, None, "sticky-moneyness")
     fige = analysis.profil_gamma(df, niveaux, 100, SPOT, "sticky-strike")
     assert sans == pytest.approx(fige, rel=1e-12)
+
+
+def test_dex_et_vex_suivent_la_convention_de_signe():
+    """Dealers longs les calls, shorts les puts — comme pour le GEX.
+
+    Le delta d'un put étant négatif, en être short AJOUTE du delta positif : les
+    deux jambes se cumulent au lieu de se compenser, et un signe inversé ici
+    donnerait un DEX proche de zéro sur un book pourtant très directionnel.
+    """
+    df = chaine(jours=(30,))
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    exp = analysis.expositions(df, SPOT, T, 100)
+
+    attendu = ((df.CallDelta * df.CallOpenInt - df.PutDelta * df.PutOpenInt) * 100 * SPOT)
+    assert exp.TotalDelta.values == pytest.approx(attendu.values, rel=1e-12)
+    assert exp.TotalDelta.sum() > 0
+    assert exp.TotalVega.sum() != 0
+
+
+def test_une_source_sans_grecs_donne_une_exposition_nulle():
+    """Le CME ne publie ni delta ni vega : zéro, pas une erreur d'attribut."""
+    df = chaine(jours=(30,)).drop(columns=["CallDelta", "PutDelta", "CallVega", "PutVega"])
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, QUOTE)
+    exp = analysis.expositions(df, SPOT, T, 100)
+    assert (exp.TotalDelta == 0).all() and (exp.TotalVega == 0).all()
+    assert exp.TotalGamma.sum() != 0        # le gamma, lui, reste calculé
+
+
+def test_le_gex_en_titres_est_le_meme_chiffre_dans_une_autre_unite():
+    """titres par $ = GEX($ / 1 %) / (0,01 x S^2). Deux lectures, une donnée."""
+    a = analysis.analyser(chaine(), spot=SPOT, quote_date=QUOTE)
+    titres = a.par_strike.TotalGammaTitres
+    assert titres.values == pytest.approx(
+        (a.par_strike.TotalGamma / (0.01 * SPOT ** 2)).values, rel=1e-12)
+
+
+def test_le_smile_ignore_les_iv_nulles():
+    """Les contrats très dans la monnaie sortent avec une IV de 0 chez le CBOE.
+
+    Les moyenner tirerait le smile vers zéro et inventerait un sourire qui
+    n'existe pas ; ils doivent être absents, pas comptés.
+    """
+    df = chaine(jours=(30,), skew=-0.4)
+    df.loc[df.StrikePrice < 85, "CallIV"] = 0.0
+    a = analysis.analyser(df, spot=SPOT, quote_date=QUOTE)
+    bas = a.par_strike.CallIV[a.par_strike.index < 85]
+    assert bas.isna().all()
+    assert a.par_strike.CallIV[a.par_strike.index >= 85].notna().any()
 
 
 def test_zero_gamma_retient_le_croisement_le_plus_proche_du_spot():

@@ -55,6 +55,30 @@ chaîne brute est gardée trois minutes en mémoire par sous-jacent : changer
 d'horizon ou de source recalcule en local, sans retélécharger. Les relevés
 archivés apparaissent dans un sélecteur, pour rejouer une séance passée.
 
+### L'échelle de prix
+
+La carte en tête de page reprend l'exposition **lue comme un carnet** : strikes en
+vertical, spot en ligne qui traverse la page, murs en paliers. Sept onglets pour
+la grandeur tracée — **GEX** (en dollars par 1 % ou en **titres par dollar** de
+mouvement), **DEX** (delta), **VEX** (vega), **CEX** (charm), **vGEX** (vanna),
+**OI net**. Le delta et le vega viennent du payload CBOE, qui les publie par
+contrat et que le projet ignorait.
+
+Le trait fin derrière chaque barre est une **mèche** : l'exposition de ce strike au
+premier relevé archivé de la même séance. L'open interest ne bougeant qu'une fois
+par jour, ce qui s'est déplacé depuis vient du prix et de la volatilité. Elle
+n'apparaît que s'il existe un relevé antérieur du même jour, analysé aux mêmes
+réglages — comparer deux horizons ne dirait rien d'un déplacement intraséance.
+
+Le **smile de volatilité** occupe un panneau séparé à gauche, sur le même axe de
+strikes. Le superposer au gamma sur une seconde échelle horizontale, comme le font
+certains outils, cale deux grandeurs l'une sur l'autre de façon arbitraire et fait
+lire une relation qui n'est pas dans les données.
+
+Le zéro reste à sa vraie place mais chaque côté est cadré sur ses propres valeurs :
+une échelle symétrique laisse la moitié du champ vide dès que les expositions
+penchent d'un côté, ce qui est le cas ordinaire.
+
 Trois cartes s'ajoutent quand il y a de quoi les remplir, et disparaissent sinon
 plutôt que d'afficher du vide : **la dérive** trace le prix et le zero gamma côte à
 côte au fil des relevés enregistrés — c'est leur écart qui décrit le régime, et le
@@ -439,7 +463,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 147 tests, aucun accès réseau
+python -m pytest tests -q        # 151 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la

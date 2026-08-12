@@ -112,6 +112,29 @@
 
   <section class="tuiles" id="tuiles" hidden></section>
 
+  <section class="carte" id="carte-echelle" hidden>
+    <div class="carte-entete">
+      <div>
+        <h2>L'échelle de prix</h2>
+        <p class="explication">
+          La même exposition, mais lue comme un carnet : les strikes en vertical,
+          le spot en ligne qui traverse la page, les murs en paliers. Le trait fin
+          derrière chaque barre indique d'où vient l'exposition de ce strike depuis
+          le premier relevé de la séance — l'open interest ne bougeant qu'une fois
+          par jour, ce qui se déplace vient du prix et de la volatilité. Le smile
+          occupe un panneau séparé à gauche, sur le même axe de strikes.
+        </p>
+      </div>
+    </div>
+    <div class="onglets" id="onglets-metrique" role="tablist"></div>
+    <figure class="figure" id="fig-echelle"></figure>
+    <div class="pied-carte">
+      <div class="legende" id="legende-echelle"></div>
+      <button class="lien-tableau" data-tableau="tab-echelle">Voir le tableau</button>
+    </div>
+    <div class="tableau" id="tab-echelle" hidden></div>
+  </section>
+
   <section class="carte" id="carte-profil" hidden>
     <div class="carte-entete">
       <div>

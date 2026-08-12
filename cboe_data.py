@@ -29,6 +29,11 @@ COLUMNS = [
     "PutDelta", "PutGamma", "PutOpenInt",
 ]
 
+# Grecs publiés par le CBOE mais absents de l'export CSV historique. Ils sont
+# ajoutés APRÈS COLUMNS et jamais dedans : load_from_csv affecte les colonnes du
+# fichier une à une, et allonger COLUMNS décalerait tout le tableau.
+COLONNES_GRECS = ["CallVega", "PutVega", "CallTheta", "PutTheta"]
+
 _OPTION_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 
 
@@ -129,6 +134,8 @@ def fetch_chain_et_marche(ticker, timeout=30):
             "IV": opt.get("iv"),
             "Delta": opt.get("delta"),
             "Gamma": opt.get("gamma"),
+            "Vega": opt.get("vega"),
+            "Theta": opt.get("theta"),
             "OpenInt": opt.get("open_interest"),
         })
 
@@ -141,7 +148,8 @@ def fetch_chain_et_marche(ticker, timeout=30):
     )
 
     # Passage du format long (1 ligne = 1 contrat) au format large attendu par main.py
-    fields = ["LastSale", "Net", "Bid", "Ask", "Vol", "IV", "Delta", "Gamma", "OpenInt"]
+    fields = ["LastSale", "Net", "Bid", "Ask", "Vol", "IV", "Delta", "Gamma",
+              "Vega", "Theta", "OpenInt"]
     keys = ["ExpirationDate", "StrikePrice"]
     calls = raw[raw.cp == "C"].set_index(keys)[fields].add_prefix("Call")
     puts = raw[raw.cp == "P"].set_index(keys)[fields].add_prefix("Put")
@@ -155,7 +163,7 @@ def fetch_chain_et_marche(ticker, timeout=30):
     df = calls.join(puts, how="outer").reset_index()
     df["Calls"] = ""
     df["Puts"] = ""
-    df = df.reindex(columns=COLUMNS)
+    df = df.reindex(columns=COLUMNS + COLONNES_GRECS)
     return _clean(df), spot_price, quote_date, marche_depuis_payload(payload)
 
 
@@ -183,15 +191,25 @@ def load_from_csv(filename):
 
 
 def _clean(df):
-    """Typage numérique + suppression des lignes inexploitables."""
+    """Typage numérique + suppression des lignes inexploitables.
+
+    Les grecs optionnels sont créés à zéro quand la source ne les publie pas
+    (export CSV, CME, Databento) : les expositions correspondantes valent alors
+    zéro plutôt que d'être absentes, et rien en aval n'a à tester leur présence.
+    """
+    for colonne in COLONNES_GRECS:
+        if colonne not in df.columns:
+            df[colonne] = 0.0
     numeric = ["StrikePrice", "CallIV", "PutIV", "CallGamma", "PutGamma",
-               "CallOpenInt", "PutOpenInt", "CallDelta", "PutDelta"]
+               "CallOpenInt", "PutOpenInt", "CallDelta", "PutDelta", *COLONNES_GRECS]
     for col in numeric:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Un strike sans OI ni des deux côtés n'apporte rien au calcul de GEX
     df[["CallOpenInt", "PutOpenInt"]] = df[["CallOpenInt", "PutOpenInt"]].fillna(0.0)
     df[["CallGamma", "PutGamma"]] = df[["CallGamma", "PutGamma"]].fillna(0.0)
+    df[["CallDelta", "PutDelta"]] = df[["CallDelta", "PutDelta"]].fillna(0.0)
+    df[COLONNES_GRECS] = df[COLONNES_GRECS].fillna(0.0)
     df[["CallIV", "PutIV"]] = df[["CallIV", "PutIV"]].fillna(0.0)
     df = df.dropna(subset=["StrikePrice", "ExpirationDate"])
     return df.sort_values(["ExpirationDate", "StrikePrice"]).reset_index(drop=True)

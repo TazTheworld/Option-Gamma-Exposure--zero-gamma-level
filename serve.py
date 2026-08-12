@@ -26,6 +26,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import pandas as pd
+
 import analysis
 import cboe_data
 import snapshots
@@ -117,16 +119,80 @@ def payload(a):
         "strikes": [_nombre(k) for k in par_strike.index],
         "par_strike": {
             "total": [_nombre(v) for v in par_strike.TotalGamma],
+            "total_titres": [_nombre(v) for v in par_strike.TotalGammaTitres],
             "call": [_nombre(v) for v in par_strike.CallGEX],
             "put": [_nombre(v) for v in par_strike.PutGEX],
             "call_oi": [_nombre(v) for v in par_strike.CallOpenInt],
             "put_oi": [_nombre(v) for v in par_strike.PutOpenInt],
+            "oi_net": [_nombre(c - p) for c, p in zip(par_strike.CallOpenInt,
+                                                      par_strike.PutOpenInt)],
             "charm": [_nombre(v) for v in par_strike.TotalCharm],
             "vanna": [_nombre(v) for v in par_strike.TotalVanna],
+            "delta": [_nombre(v) for v in par_strike.TotalDelta],
+            "vega": [_nombre(v) for v in par_strike.TotalVega],
+            "call_iv": [_nombre(v) for v in par_strike.CallIV],
+            "put_iv": [_nombre(v) for v in par_strike.PutIV],
         },
         "levels": [_nombre(x) for x in a.levels],
         "profiles": {nom: [_nombre(v) for v in valeurs]
                      for nom, valeurs in a.profiles.items()},
+    }
+
+
+_cache_reference = {}
+
+
+def reference_du_jour(ticker, quote_date, reglages, strikes):
+    """Expositions par strike au PREMIER relevé archivé de la même séance.
+
+    C'est ce qui permet de tracer une mèche derrière chaque barre : non pas où
+    l'exposition d'un strike est maintenant, mais d'où elle vient depuis ce matin.
+    L'open interest ne bougeant qu'une fois par jour, ce qui se déplace en séance
+    vient du spot et de la volatilité — et c'est justement ce qu'on veut voir.
+
+    Renvoie None s'il n'y a pas d'autre relevé du jour : on ne compare pas une
+    séance à elle-même, et surtout pas à la veille, où l'OI a changé.
+    """
+    jour = pd.Timestamp(quote_date).strftime("%Y-%m-%d")
+    archives = [f for f in snapshots.lister(ticker)
+                if os.path.basename(f).startswith(jour)]
+    if len(archives) < 2:
+        return None
+    plus_ancienne = archives[0]
+
+    cle = (plus_ancienne, tuple(sorted(reglages.items())))
+    with _verrou:
+        garde = _cache_reference.get(cle)
+    if garde is None:
+        df, spot, qd, marche = snapshots.charger(plus_ancienne)
+        a = analysis.analyser(df, spot=spot, quote_date=qd, ticker=ticker,
+                              marche=marche, **reglages)
+        garde = {
+            "date": qd.strftime("%H:%M"),
+            "par_strike": a.par_strike,
+            "spot": a.spot,
+            "zero_gamma": a.zero_gamma,
+        }
+        with _verrou:
+            _cache_reference[cle] = garde
+
+    table = garde["par_strike"]
+    colonnes = {"total": "TotalGamma", "total_titres": "TotalGammaTitres",
+                "oi_net": None, "charm": "TotalCharm", "vanna": "TotalVanna",
+                "delta": "TotalDelta", "vega": "TotalVega"}
+
+    def aligner(colonne):
+        if colonne is None:
+            serie = table.CallOpenInt - table.PutOpenInt
+        else:
+            serie = table[colonne]
+        return [_nombre(serie.get(k)) for k in strikes]
+
+    return {
+        "heure": garde["date"],
+        "spot": _nombre(garde["spot"]),
+        "zero_gamma": _nombre(garde["zero_gamma"]),
+        "par_strike": {nom: aligner(col) for nom, col in colonnes.items()},
     }
 
 
@@ -151,17 +217,23 @@ def analyser(params):
     df, spot, quote_date, affiche, marche = chaine(ticker, replay)
     contract_size = CONTRACT_SIZES.get(ticker.upper(), CONTRACT_SIZE) if replay else CONTRACT_SIZE
 
-    a = analysis.analyser(
-        df, spot=spot, quote_date=quote_date, ticker=affiche,
+    reglages = dict(
         contract_size=contract_size, dte_max=dte_max,
         dte_min=int(flottant("dte_min", 0)), plage=flottant("range", 0.2),
         wall_range=flottant("wall_range", 0.15),
         oi_wall_range=flottant("oi_wall_range", 0.30),
         source_gamma=texte("gamma_source", "iv", analysis.SOURCES_GAMMA),
         time_convention=texte("time_convention", "heures", analysis.CONVENTIONS_TEMPS),
-        regime_vol=texte("vol_regime", "sticky-strike", analysis.REGIMES_VOL),
-        marche=marche)
-    return payload(a)
+        regime_vol=texte("vol_regime", "sticky-strike", analysis.REGIMES_VOL))
+
+    a = analysis.analyser(df, spot=spot, quote_date=quote_date, ticker=affiche,
+                          marche=marche, **reglages)
+    sortie = payload(a)
+    # La référence est analysée aux MÊMES réglages : comparer deux horizons ou
+    # deux sources de gamma ne dirait rien du déplacement intraséance.
+    sortie["reference"] = reference_du_jour(affiche, quote_date, reglages,
+                                            list(a.par_strike.index))
+    return sortie
 
 
 def liste_snapshots():
