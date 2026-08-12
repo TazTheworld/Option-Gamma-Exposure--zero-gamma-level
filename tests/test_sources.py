@@ -211,3 +211,51 @@ def test_flux_etat_marche_convertit_utc_vers_new_york():
 @pytest.mark.parametrize("texte,secondes", [("6h", 21600), ("90m", 5400), ("300", 300), ("1.5h", 5400)])
 def test_parsing_des_durees(texte, secondes):
     assert ft._duree(texte) == secondes
+
+
+# ---=== GEX signé par le flux ===---
+
+def _flux_csv(tmp_path, achats_calls=1000, ventes_puts=500):
+    """Flux classifié : les clients achètent des calls et vendent des puts."""
+    chemin = tmp_path / "flux.csv"
+    pd.DataFrame([
+        {"snapshot": "2026-08-12 14:00", "spot": 150.0, "option": "A",
+         "StrikePrice": 150.0, "cp": "C", "expiry": "260814", "delta": achats_calls,
+         "last": 2.0, "bid": 1.9, "ask": 2.1, "pos": 0.95, "cote": "achat", "prime": 1e5},
+        {"snapshot": "2026-08-12 14:00", "spot": 150.0, "option": "B",
+         "StrikePrice": 150.0, "cp": "P", "expiry": "260814", "delta": ventes_puts,
+         "last": 1.0, "bid": 0.9, "ask": 1.1, "pos": 0.05, "cote": "vente", "prime": 5e4},
+        {"snapshot": "2026-08-12 14:00", "spot": 150.0, "option": "C",
+         "StrikePrice": 150.0, "cp": "C", "expiry": "260814", "delta": 9999,
+         "last": 2.0, "bid": 1.9, "ask": 2.1, "pos": 0.5, "cote": "milieu", "prime": 1e5},
+    ]).to_csv(chemin, index=False)
+    return str(chemin)
+
+
+def test_signe_du_flux_est_le_miroir_du_client(tmp_path, monkeypatch):
+    """Client acheteur de calls -> dealer short calls, et inversement sur les puts."""
+    chaine = pd.DataFrame({"StrikePrice": [150.0], "CallGamma": [0.05], "PutGamma": [0.04],
+                           "CallOpenInt": [10.0], "PutOpenInt": [10.0]})
+    monkeypatch.setattr(ft.cboe_data, "fetch_chain",
+                        lambda t: (chaine, 150.0, pd.Timestamp("2026-08-12 20:00")))
+    t, spot, gex_flux, _ = ft.signed_gex(_flux_csv(tmp_path), "TEST")
+    assert t.loc[150.0, "C"] == -1000      # clients acheteurs -> dealers shorts
+    assert t.loc[150.0, "P"] == +500       # clients vendeurs  -> dealers longs
+
+
+def test_signe_du_flux_ecarte_les_trades_au_milieu(tmp_path, monkeypatch):
+    """Les 9999 contrats classés 'milieu' ne doivent peser sur rien."""
+    chaine = pd.DataFrame({"StrikePrice": [150.0], "CallGamma": [0.05], "PutGamma": [0.04],
+                           "CallOpenInt": [10.0], "PutOpenInt": [10.0]})
+    monkeypatch.setattr(ft.cboe_data, "fetch_chain",
+                        lambda t: (chaine, 150.0, pd.Timestamp("2026-08-12 20:00")))
+    t, _, _, _ = ft.signed_gex(_flux_csv(tmp_path), "TEST")
+    assert abs(t.loc[150.0, "C"]) == 1000   # et non 1000 + 9999
+
+
+def test_signe_du_flux_sans_trade_classifiable(tmp_path, monkeypatch):
+    chemin = tmp_path / "vide.csv"
+    pd.DataFrame([{"snapshot": "2026-08-12 14:00", "StrikePrice": 150.0, "cp": "C",
+                   "delta": 10, "cote": "milieu"}]).to_csv(chemin, index=False)
+    with pytest.raises(ValueError, match="classifiable"):
+        ft.signed_gex(str(chemin), "TEST")

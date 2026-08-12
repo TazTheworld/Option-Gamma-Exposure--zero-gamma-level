@@ -193,7 +193,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 93 tests, aucun accès réseau
+python -m pytest tests -q        # 96 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
@@ -289,6 +289,43 @@ Ses limites, à garder en tête : on ne voit que le **dernier** trade de chaque
 fenêtre, dont le côté est appliqué à tout le volume de la fenêtre. Le signal
 n'a de sens qu'agrégé sur de nombreux contrats. Pour de vrais prints il faut le
 tape OPRA — Tradier (gratuit avec un compte), Polygon ou Databento.
+
+#### Mesurer le sens au lieu de le supposer
+
+Tout le reste du projet postule que les dealers sont longs calls et shorts puts.
+C'est l'hypothèse la plus fragile de la méthode. Le flux collecté permet de la
+remplacer par une mesure — la position dealer est le miroir du flux client agressif :
+
+```
+position_dealer[strike] = ventes_clients - achats_clients
+```
+
+```sh
+python flow_tracker.py ORCL --signed flux_orcl.csv
+```
+
+```
+GEX signé par le flux    :   -4.76 M$   (inventaire pris aujourd'hui)
+GEX signé par convention : +470.78 M$   (structure accumulée, mêmes strikes)
+-> SIGNES OPPOSÉS
+
+contrats nets pris par les dealers : calls -6,598  puts +2,603
+```
+
+Ici les clients ont acheté des calls et vendu des puts, donc les dealers sont **shorts
+calls** — l'inverse de ce que postule la convention. Les trades au milieu de la
+fourchette sont écartés, pas devinés.
+
+Deux réserves qui interdisent de substituer l'un à l'autre :
+
+- cela mesure la **variation d'inventaire de la séance**, partant de zéro à l'ouverture,
+  pas le book existant. Un strike non traité pèse zéro ici alors qu'il peut porter un
+  open interest massif. Les ordres de grandeur ne sont donc pas comparables ;
+- la classification reste grossière (voir plus haut), donc c'est une indication de sens,
+  pas une mesure fine.
+
+Les deux lectures sont complémentaires : la convention décrit la structure accumulée,
+le flux décrit ce que les dealers ont pris aujourd'hui.
 
 ### Sources de données
 

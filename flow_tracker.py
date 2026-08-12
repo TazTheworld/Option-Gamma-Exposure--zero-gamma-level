@@ -139,6 +139,82 @@ def resume(flux, spot):
     return "\n".join(lignes)
 
 
+def signed_gex(chemin_flux, ticker, contract_size=100):
+    """GEX signé par le flux mesuré, au lieu de la convention calls+/puts-.
+
+    La convention postule que les dealers sont longs calls et shorts puts. Ici on
+    le mesure : pour chaque strike, la position dealer est le miroir du flux client
+    agressif.
+
+        position_dealer = ventes_clients - achats_clients
+
+    Les trades au milieu de la fourchette sont écartés, pas devinés — sans agresseur
+    identifiable, leur sens est indéterminé.
+
+    LIMITE ESSENTIELLE : cela mesure la variation d'inventaire de la séance, partant
+    de zéro à l'ouverture, PAS le book existant. Un strike non traité pèse zéro ici,
+    alors qu'il peut porter un gros open interest. Les deux lectures sont donc
+    complémentaires : la convention décrit la structure accumulée, le flux décrit ce
+    que les dealers ont pris aujourd'hui.
+    """
+    flux = pd.read_csv(chemin_flux)
+    flux = flux[flux.cote.isin(["achat", "vente"])]        # le milieu est écarté
+    if flux.empty:
+        raise ValueError(f"aucun trade classifiable dans {chemin_flux}")
+
+    signe = flux.cote.map({"vente": 1, "achat": -1})       # miroir du client
+    flux = flux.assign(pos_dealer=flux.delta * signe)
+    pos = flux.groupby(["StrikePrice", "cp"])["pos_dealer"].sum().unstack(fill_value=0)
+    for c in ("C", "P"):
+        if c not in pos:
+            pos[c] = 0
+
+    chaine, spot, asof = cboe_data.fetch_chain(ticker)
+    # Le gamma vient de la chaîne courante : il doit dater du même jour que le flux,
+    # sinon on pondère des contrats d'hier par le gamma d'aujourd'hui.
+    jour_flux = pd.to_datetime(flux.snapshot).max()
+    ecart = (pd.Timestamp(asof) - jour_flux).total_seconds() / 86400
+    if ecart > 1:
+        print(f"ATTENTION : le flux date du {jour_flux:%Y-%m-%d} et la chaîne du "
+              f"{pd.Timestamp(asof):%Y-%m-%d} ({ecart:.0f} jours d'écart).\n"
+              f"Le gamma appliqué n'est pas celui du jour des trades — résultat indicatif.\n")
+    g = chaine.groupby("StrikePrice")[["CallGamma", "PutGamma"]].max()
+    t = pos.join(g, how="inner")
+    if t.empty:
+        raise ValueError("aucun strike commun entre le flux et la chaîne courante")
+
+    facteur = contract_size * spot ** 2 * 0.01
+    t["gex_flux"] = (t.C * t.CallGamma + t.P * t.PutGamma) * facteur
+    # même périmètre de strikes, mais signé par la convention
+    conv = chaine.groupby("StrikePrice")[["CallGamma", "CallOpenInt", "PutGamma", "PutOpenInt"]].sum()
+    conv = conv.loc[conv.index.intersection(t.index)]
+    gex_conv = ((conv.CallGamma * conv.CallOpenInt - conv.PutGamma * conv.PutOpenInt) * facteur).sum()
+    return t, spot, t.gex_flux.sum(), gex_conv
+
+
+def afficher_signed(chemin_flux, ticker, contract_size=100):
+    t, spot, gex_flux, gex_conv = signed_gex(chemin_flux, ticker, contract_size)
+    ech = 1e9 if max(abs(gex_flux), abs(gex_conv)) >= 1e9 else 1e6
+    unite = "Md$" if ech == 1e9 else "M$"
+    print(f"{ticker} | spot {spot:.2f} | {len(t)} strikes tradés et classifiables\n")
+    print(f"  GEX signé par le flux    : {gex_flux/ech:+,.2f} {unite}   "
+          f"(inventaire pris aujourd'hui)")
+    print(f"  GEX signé par convention : {gex_conv/ech:+,.2f} {unite}   "
+          f"(structure accumulée, mêmes strikes)")
+    accord = "MÊME SIGNE" if gex_flux * gex_conv > 0 else "SIGNES OPPOSÉS"
+    print(f"  -> {accord}")
+    if gex_flux * gex_conv < 0:
+        print("     Le flux du jour contredit l'hypothèse conventionnelle : les dealers\n"
+              "     ont pris l'inverse de ce que la structure suggère.")
+    print(f"\n  contrats nets pris par les dealers : calls {t.C.sum():+,.0f}  "
+          f"puts {t.P.sum():+,.0f}")
+    print("\n  strikes les plus signants :")
+    for k, r in t.reindex(t.gex_flux.abs().sort_values(ascending=False).index[:6]).iterrows():
+        print(f"    {k:>8.2f}  {r.gex_flux/ech:+7.3f} {unite}   "
+              f"dealers : {r.C:+,.0f} calls, {r.P:+,.0f} puts")
+    return t
+
+
 def _duree(txt):
     """'6h', '90m', '3600' -> secondes."""
     m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([hms]?)", str(txt).strip().lower())
@@ -193,11 +269,17 @@ def track(ticker, interval=300, duration=6 * 3600, out=None):
 def main():
     p = argparse.ArgumentParser(description="Suivi du flux d'options (CBOE, gratuit)")
     p.add_argument("ticker", help="sous-jacent (ORCL, SPCX, _SPX...)")
+    p.add_argument("--signed", metavar="FLUX.CSV",
+                   help="ne pas échantillonner : lire un flux déjà collecté et en "
+                        "déduire le signe réel de la position dealer, strike par strike")
     p.add_argument("--interval", type=_duree, default=300,
                    help="délai entre relevés (300, 5m...) — sous 3m le bruit domine")
     p.add_argument("--duration", type=_duree, default="6h", help="durée totale (6h, 90m...)")
     p.add_argument("--out", help="fichier CSV de sortie")
     args = p.parse_args()
+    if args.signed:
+        afficher_signed(args.signed, args.ticker)
+        return
     if args.interval < 120:
         print("Attention : sous 2 minutes, les données différées du CBOE bougent peu "
               "et le bruit domine.\n")
