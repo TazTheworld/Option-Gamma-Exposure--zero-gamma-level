@@ -38,7 +38,7 @@ Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-lev
 
 [tool.setuptools]
 py-modules = [
-    "main", "greeks", "analysis", "plots", "snapshots", "serve",
+    "main", "greeks", "analysis", "plots", "snapshots", "serve", "price_data",
     "cboe_data", "cme_data", "databento_data", "barchart_data",
     "flow_tracker", "history", "validate",
 ]

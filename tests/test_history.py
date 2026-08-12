@@ -264,6 +264,110 @@ def test_realise_contre_implicite_ne_confirme_pas_un_signal_inverse(fichier, cap
     assert "CONTRAIRE au modèle" in capsys.readouterr().out
 
 
+# ---=== Série de prix externe ===---
+
+def _seances(debut="2026-06-01", n=10, base=100.0):
+    """Séances quotidiennes synthétiques, week-ends inclus pour simplifier."""
+    dates = pd.date_range(debut, periods=n, freq="D")
+    return pd.DataFrame({
+        "date": dates,
+        "open": [base + i for i in range(n)],
+        "high": [base + i + 3 for i in range(n)],
+        "low": [base + i - 2 for i in range(n)],
+        "close": [base + i + 1 for i in range(n)],
+        "volume": [1e6] * n,
+    })
+
+
+def test_enrichir_rattache_la_seance_strictement_suivante(fichier):
+    """Un relevé pris en cours de séance ne peut pas voir le high/low du jour même.
+
+    Il faut donc la séance d'APRÈS : celle du jour est encore en train de se faire
+    au moment où le relevé est enregistré.
+    """
+    history.record(fichier, timestamp="2026-06-03 14:00", ticker="AAA", dte_max=30,
+                   source_gamma="iv", spot=150.0, total_gex=1e6)
+    releves = validate.dedoublonner(history.load(fichier))
+    out = validate.enrichir(releves, _seances())
+
+    # Le 3 juin est l'indice 2 ; la séance suivante est le 4 juin.
+    assert out.date_suivante.iloc[0] == pd.Timestamp("2026-06-04")
+    assert out.spot_suivant.iloc[0] == 104.0        # close = base + 3 + 1
+    assert out.haut_suivant.iloc[0] == 106.0
+    assert out.bas_suivant.iloc[0] == 101.0
+    assert out.jours.iloc[0] == 1.0
+    # Le spot du relevé n'est PAS remplacé : les murs ont été calculés dessus
+    assert out.spot.iloc[0] == 150.0
+
+
+def test_enrichir_laisse_vide_apres_la_derniere_seance(fichier):
+    """Un relevé plus récent que la série n'a pas encore de suite : NaN, pas d'invention."""
+    history.record(fichier, timestamp="2027-01-01 16:00", ticker="AAA", dte_max=30,
+                   source_gamma="iv", spot=100.0, total_gex=1e6)
+    out = validate.enrichir(validate.dedoublonner(history.load(fichier)), _seances())
+    assert pd.isna(out.spot_suivant.iloc[0])
+    assert validate.prepare(history.load(fichier), seances=_seances()).empty
+
+
+def test_la_serie_de_prix_remplace_l_ecart_entre_releves(fichier):
+    """Deux relevés espacés de trois jours : le mouvement doit être celui des séances.
+
+    Sans série de prix, le rendement se lit d'un relevé à l'autre — donc il saute
+    les séances intermédiaires et dépend de l'heure d'exécution. Avec elle, chaque
+    relevé est confronté à la séance qui le suit vraiment.
+    """
+    for jour, spot in (("2026-06-02", 200.0), ("2026-06-05", 210.0)):
+        history.record(fichier, timestamp=f"{jour} 15:00", ticker="AAA", dte_max=30,
+                       source_gamma="iv", spot=spot, total_gex=-1e6, zero_gamma=199.0)
+    seances = _seances()
+
+    sans = validate.prepare(history.load(fichier))
+    avec = validate.prepare(history.load(fichier), seances=seances)
+
+    # Sans série : un seul intervalle, de trois jours, entre les deux relevés.
+    assert len(sans) == 1 and sans.jours.iloc[0] == 3.0
+    # Avec série : chaque relevé a sa propre séance suivante, à un jour.
+    assert len(avec) == 2 and set(avec.jours) == {1.0}
+    assert avec.vol_realisee.notna().all()      # high/low réels, donc Parkinson calculable
+
+
+def test_prepare_sans_serie_garde_l_ancien_comportement(fichier):
+    """La série de prix est un supplément : sans clé API, rien ne doit changer."""
+    _ecrire(fichier, n=6)
+    assert not validate.prepare(history.load(fichier)).empty
+
+
+def test_symbole_de_prix_substitue_un_etf_aux_indices():
+    """Une API d'actions ne cote pas le SPX. La substitution est signalée, pas cachée."""
+    import price_data
+
+    assert price_data.symbole("SPCX") == ("SPCX", None)
+    assert price_data.symbole("_SPX") == ("SPY", "SPY")
+    assert price_data.symbole("^NDX") == ("QQQ", "QQQ")
+
+
+def test_fournisseur_sans_cle_donne_un_message_actionnable(monkeypatch):
+    import price_data
+
+    for info in price_data.FOURNISSEURS.values():
+        monkeypatch.delenv(info["cle"], raising=False)
+    with pytest.raises(ValueError, match="Aucune clé"):
+        price_data.choisir_fournisseur()
+    with pytest.raises(ValueError, match="ALPHAVANTAGE_API_KEY"):
+        price_data.choisir_fournisseur("alphavantage")
+    with pytest.raises(ValueError, match="fournisseur inconnu"):
+        price_data.choisir_fournisseur("bloomberg")
+
+
+def test_fournisseur_deduit_de_la_cle_presente(monkeypatch):
+    import price_data
+
+    for info in price_data.FOURNISSEURS.values():
+        monkeypatch.delenv(info["cle"], raising=False)
+    monkeypatch.setenv("TIINGO_API_KEY", "xyz")
+    assert price_data.choisir_fournisseur() == ("tiingo", "xyz")
+
+
 def test_sans_contexte_de_seance_le_test_le_dit_au_lieu_d_inventer(fichier, capsys):
     """Les relevés d'avant l'archivage du contexte n'ont ni high/low ni iv30."""
     _ecrire(fichier, n=10)

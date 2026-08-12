@@ -130,7 +130,8 @@ la seule couleur.
 | `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
 | `history.py` | historique des relevés |
 | `validate.py` | le modèle tient-il ? |
-| `cboe_data.py`, `cme_data.py`, `databento_data.py`, `barchart_data.py` | sources |
+| `cboe_data.py`, `cme_data.py`, `databento_data.py`, `barchart_data.py` | sources d'options |
+| `price_data.py` | historique de prix du sous-jacent (API à clé gratuite) |
 | `flow_tracker.py` | suivi du flux et signe réel de la position dealer |
 
 Tout ce qui produit un chiffre est dans `analysis.py` et `greeks.py`, donc appelable
@@ -430,6 +431,38 @@ Ces deux dernières mesures demandent le high/low et l'iv30 de la séance : elle
 n'existent que pour les relevés enregistrés depuis, et le script le dit plutôt que
 de calculer sur du vide.
 
+#### Une vraie série de prix (`--prix`)
+
+Sans historique de prix, le mouvement est mesuré **d'un relevé au suivant** : il
+saute les séances où rien n'a été lancé, et dépend de l'heure d'exécution. Il faut
+donc une vingtaine de séances relevées à la main avant que le script accepte de
+conclure.
+
+Avec une série quotidienne, le relevé ne sert plus qu'à décrire le régime, et le
+résultat se lit sur la **séance boursière qui suit** — du haut au bas et jusqu'à la
+clôture :
+
+```sh
+export ALPHAVANTAGE_API_KEY=...        # ou TWELVEDATA_API_KEY, TIINGO_API_KEY
+python validate.py SPCX --prix
+python validate.py SPCX --prix --fournisseur tiingo
+```
+
+Trois fournisseurs, tous avec une API documentée et une clé gratuite ; celui dont
+la clé est présente est retenu automatiquement. Sans clé, le script le dit et
+retombe sur les relevés seuls — `--prix` n'est jamais bloquant.
+
+`price_data.py` ne remplace pas le `spot` du relevé : c'est le prix auquel les murs
+et le zero gamma ont été calculés, et le substituer rendrait les distances
+incohérentes avec les niveaux qu'elles mesurent. Il n'ajoute que la séance suivante.
+
+Deux réserves dites franchement. Ces API cotent les actions, rarement les indices :
+un ticker comme `_SPX` est **substitué par son ETF** (SPY), qui le suit sans
+l'égaler — la substitution est annoncée à l'écran, jamais faite en silence. Et
+**Stooq n'est pas utilisé** : il servait des CSV sans clé, mais sert désormais une
+épreuve de calcul dont le seul objet est d'écarter les clients non-navigateurs.
+C'est un refus d'accès automatisé, et on le respecte.
+
 En dessous de 20 intervalles, le script affiche les chiffres mais refuse d'en conclure
 quoi que ce soit, et le dit. Il faut donc laisser l'historique s'accumuler — un relevé
 par séance. Ce n'est pas un backtest de stratégie : on vérifie que la description du
@@ -484,7 +517,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 151 tests, aucun accès réseau
+python -m pytest tests -q        # 158 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la

@@ -69,22 +69,63 @@ def vol_parkinson(haut, bas, jours_par_an=252):
     return amplitude / (2 * np.sqrt(np.log(2))) * np.sqrt(jours_par_an)
 
 
-def prepare(df, intervalle_minimal=INTERVALLE_MINIMAL):
+def enrichir(releves, seances):
+    """Rattache à chaque relevé la SÉANCE SUIVANTE d'une vraie série de prix.
+
+    Sans ça, le mouvement est mesuré entre deux exécutions de main.py — donc à des
+    heures quelconques, et seulement là où un relevé existe. Avec une série de
+    prix, le relevé ne sert plus qu'à décrire le régime ; le résultat est lu sur la
+    séance boursière qui suit, du haut au bas et jusqu'à la clôture.
+
+    `spot` n'est PAS remplacé : c'est le prix auquel les murs et le zero gamma ont
+    été calculés, et le substituer rendrait les distances incohérentes avec les
+    niveaux qu'elles mesurent.
+
+    Fonction pure — elle ne touche pas au réseau, donc elle est testable.
+    """
+    seances = seances.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    jours = seances.date.values
+
+    suivantes = []
+    for quand in releves.date.dt.normalize().values:
+        # Première séance STRICTEMENT postérieure : la séance du jour même est en
+        # cours quand le relevé est pris, son high/low n'est pas encore établi.
+        futurs = np.searchsorted(jours, quand, side="right")
+        suivantes.append(seances.iloc[futurs] if futurs < len(seances) else None)
+
+    out = releves.copy()
+    out["date_suivante"] = [s.date if s is not None else pd.NaT for s in suivantes]
+    out["spot_suivant"] = [s.close if s is not None else np.nan for s in suivantes]
+    out["cloture_suivante"] = out["spot_suivant"]
+    out["haut_suivant"] = [s.high if s is not None else np.nan for s in suivantes]
+    out["bas_suivant"] = [s.low if s is not None else np.nan for s in suivantes]
+    out["jours"] = (out.date_suivante - out.date.dt.normalize()).dt.total_seconds() / 86400
+    return out
+
+
+def prepare(df, intervalle_minimal=INTERVALLE_MINIMAL, seances=None):
     """Ajoute le mouvement observé jusqu'au relevé suivant.
 
     À n'appeler que sur un périmètre homogène (même ticker, même dte_max, même
     source de gamma) : voir valider().
+
+    `seances` est une série de prix quotidienne facultative (voir price_data). Sans
+    elle, le mouvement est mesuré d'un relevé au suivant, ce qui n'est exploitable
+    que si les relevés sont réguliers.
     """
     df = dedoublonner(df)
-    df["spot_suivant"] = df.spot.shift(-1)
-    df["jours"] = (df.date.shift(-1) - df.date).dt.total_seconds() / 86400
+    if seances is not None and len(seances):
+        df = enrichir(df, seances)
+    else:
+        df["spot_suivant"] = df.spot.shift(-1)
+        df["jours"] = (df.date.shift(-1) - df.date).dt.total_seconds() / 86400
 
-    # Le parcours de la séance suivante, pas seulement son point d'arrivée. Un mur
-    # percé en séance puis rejeté ne se voit pas dans la clôture, et c'est
-    # précisément le comportement que le modèle prédit.
-    for source, cible in (("high", "haut_suivant"), ("low", "bas_suivant"),
-                          ("close", "cloture_suivante")):
-        df[cible] = df[source].shift(-1) if source in df.columns else np.nan
+        # Le parcours de la séance suivante, pas seulement son point d'arrivée. Un
+        # mur percé en séance puis rejeté ne se voit pas dans la clôture, et c'est
+        # précisément le comportement que le modèle prédit.
+        for source, cible in (("high", "haut_suivant"), ("low", "bas_suivant"),
+                              ("close", "cloture_suivante")):
+            df[cible] = df[source].shift(-1) if source in df.columns else np.nan
 
     df = df[(df.jours >= intervalle_minimal) & df.spot_suivant.notna()].copy()
     df["rendement"] = (df.spot_suivant - df.spot) / df.spot
@@ -249,7 +290,28 @@ def test_vol_realisee_vs_implicite(df):
     return ecart
 
 
-def valider(path=history.DEFAUT, ticker=None):
+def series_de_prix(ticker, fournisseur=None):
+    """Séances quotidiennes du sous-jacent, ou None avec un message si ça échoue.
+
+    Un historique de prix absent ne doit pas empêcher la mesure : sans lui on
+    retombe sur les relevés eux-mêmes, ce que le script annonce.
+    """
+    import price_data
+
+    try:
+        seances, nom, procuration = price_data.fetch_ohlcv(ticker, fournisseur)
+    except Exception as err:
+        print(f"  historique de prix indisponible ({err}) — mesure sur les relevés seuls.")
+        return None
+    if procuration:
+        print(f"  ATTENTION : {ticker} est un indice ; l'historique vient de {procuration}, "
+              f"qui le suit sans l'égaler.")
+    print(f"  série de prix : {len(seances)} séances via {nom}, "
+          f"du {seances.date.min():%Y-%m-%d} au {seances.date.max():%Y-%m-%d}")
+    return seances
+
+
+def valider(path=history.DEFAUT, ticker=None, seances_par_ticker=None):
     """Mesure les affirmations du modèle, un périmètre à la fois.
 
     La segmentation par (ticker, dte_max, source de gamma) n'est pas cosmétique :
@@ -263,11 +325,12 @@ def valider(path=history.DEFAUT, ticker=None):
         print("historique vide")
         return
 
+    seances_par_ticker = seances_par_ticker or {}
     for cle, groupe in brut.groupby(history.CLES, dropna=False, sort=True):
         tk, dte, source, conv = cle
         # Un relevé écrit avant l'ajout d'une colonne n'a pas la valeur
         dte, source, conv = ("?" if pd.isna(v) else v for v in (dte, source, conv))
-        df = prepare(groupe)
+        df = prepare(groupe, seances=seances_par_ticker.get(tk))
         seances = len(dedoublonner(groupe))
         print(f"\n{'='*62}\n{tk} (dte_max={dte}, gamma={source}, T={conv}) — "
               f"{len(groupe)} relevés, {seances} séances, "
@@ -294,8 +357,23 @@ def main():
     p = argparse.ArgumentParser(description="Valider les affirmations du modèle GEX")
     p.add_argument("ticker", nargs="?", help="sous-jacent ; omis, teste tous")
     p.add_argument("--file", default=history.DEFAUT, help="fichier d'historique")
+    p.add_argument("--prix", action="store_true",
+                   help="mesurer le mouvement sur une vraie serie de prix quotidienne "
+                        "au lieu des seuls releves (cle API requise, voir price_data)")
+    p.add_argument("--fournisseur", choices=("alphavantage", "twelvedata", "tiingo"),
+                   help="fournisseur d'historique ; deduit de la cle presente sinon")
     args = p.parse_args()
-    valider(args.file, args.ticker)
+    seances = {}
+    if args.prix:
+        # Une requete par sous-jacent present dans l'historique : les paliers
+        # gratuits sont limites, et rien ne justifie d'en depenser davantage.
+        tickers = sorted(history.load(args.file, args.ticker).ticker.dropna().unique())
+        for tk in tickers:
+            print(f"{tk} :")
+            trouve = series_de_prix(tk, args.fournisseur)
+            if trouve is not None:
+                seances[tk] = trouve
+    valider(args.file, args.ticker, seances)
 
 
 if __name__ == "__main__":
