@@ -18,16 +18,18 @@ def fichier(tmp_path):
     return str(tmp_path / "h.csv")
 
 
-def _ecrire(fichier, n=40, ratio_vol=3.0, graine=7):
+def _ecrire(fichier, n=40, ratio_vol=3.0, graine=7, dte_max=30, source="iv",
+            depart=100.0, debut="2026-06-01"):
     """Historique synthétique : régimes alternés, amplitude ratio_vol fois plus
     grande en gamma négatif."""
     rng = np.random.default_rng(graine)
-    spot = 100.0
+    spot = depart
     for i in range(n):
         gex = -50e6 if i % 2 == 0 else +50e6
         vol = 0.01 * (ratio_vol if gex < 0 else 1.0)
-        history.record(fichier, timestamp=pd.Timestamp("2026-06-01") + pd.Timedelta(days=i),
-                       ticker="TEST", dte_max=30, spot=spot, total_gex=gex,
+        history.record(fichier, timestamp=pd.Timestamp(debut) + pd.Timedelta(days=i),
+                       ticker="TEST", dte_max=dte_max, source_gamma=source,
+                       spot=spot, total_gex=gex,
                        zero_gamma=spot * (1.05 if gex < 0 else 0.95),
                        call_wall=spot * 1.04, put_wall=spot * 0.96,
                        call_wall_oi=spot * 1.1, put_wall_oi=spot * 0.9,
@@ -109,3 +111,80 @@ def test_prepare_ignore_les_intervalles_nuls(fichier):
         history.record(fichier, timestamp="2026-06-01 16:00", ticker="AAA",
                        spot=100.0, total_gex=1e6)
     assert validate.prepare(history.load(fichier)).empty
+
+
+# ---=== Périmètres et séances ===---
+
+def test_un_historique_ecrit_par_une_version_anterieure_est_migre(fichier, tmp_path):
+    """Ajouter une colonne ne doit pas décaler silencieusement les lignes existantes."""
+    anciennes = [c for c in history.COLONNES if c != "source_gamma"]
+    pd.DataFrame([{c: 1 for c in anciennes}]).to_csv(fichier, index=False)
+
+    history.record(fichier, ticker="AAA", dte_max=30, source_gamma="iv", spot=123.0)
+    df = pd.read_csv(fichier)
+    assert list(df.columns) == history.COLONNES
+    assert len(df) == 2
+    assert df.spot.iloc[0] == 1 and df.spot.iloc[1] == 123.0   # rien n'a glissé
+    assert pd.isna(df.source_gamma.iloc[0])
+
+
+def test_dedoublonner_ne_garde_qu_une_seance(fichier):
+    """Trois exécutions le même jour, c'est une observation, pas trois."""
+    for heure, spot in (("09:45", 100.0), ("12:00", 100.5), ("16:00", 101.0)):
+        history.record(fichier, timestamp=f"2026-06-01 {heure}", ticker="AAA",
+                       dte_max=30, source_gamma="iv", spot=spot, total_gex=1e6)
+    seances = validate.dedoublonner(history.load(fichier))
+    assert len(seances) == 1
+    assert seances.spot.iloc[0] == 101.0        # la dernière du jour
+
+
+def test_prepare_rejette_les_intervalles_intraday(fichier):
+    """20 minutes d'écart annonçaient 1,7 % / jour pour un mouvement réel de 0,2 %."""
+    for horodatage, spot in (("2026-06-01 14:00", 100.0), ("2026-06-01 14:20", 100.2),
+                             ("2026-06-02 16:00", 101.0)):
+        history.record(fichier, timestamp=horodatage, ticker="AAA", dte_max=30,
+                       source_gamma="iv", spot=spot, total_gex=-1e6, zero_gamma=99.0)
+    df = validate.prepare(history.load(fichier))
+    assert len(df) == 1
+    assert df.jours.iloc[0] >= validate.INTERVALLE_MINIMAL
+    assert df.mouvement_par_jour.iloc[0] < 0.02      # plus de 1,7 % fantôme
+
+
+def test_validate_separe_les_perimetres(fichier, capsys):
+    """Deux horizons dans le même fichier = deux mesures, pas une série mélangée.
+
+    Le GEX peut changer de signe rien qu'en changeant de dte_max : les enchaîner
+    classait le régime d'après une grandeur qui n'était pas la même d'une ligne
+    à l'autre.
+    """
+    _ecrire(fichier, n=10, dte_max=30, source="iv")
+    _ecrire(fichier, n=10, dte_max=7, source="iv", graine=11, depart=200.0)
+    validate.valider(fichier)
+    sortie = capsys.readouterr().out
+    assert "dte_max=30" in sortie and "dte_max=7" in sortie
+    assert sortie.count("AMPLITUDE SELON LE RÉGIME") == 2
+
+
+def test_validate_separe_les_sources_de_gamma(fichier, capsys):
+    """13 % d'écart entre les deux sources sur un indice : ce ne sont pas les mêmes séries."""
+    _ecrire(fichier, n=8, source="iv")
+    _ecrire(fichier, n=8, source="published", graine=3, depart=150.0)
+    validate.valider(fichier)
+    sortie = capsys.readouterr().out
+    assert "gamma=iv" in sortie and "gamma=published" in sortie
+
+
+def test_show_separe_les_perimetres(fichier, capsys):
+    _ecrire(fichier, n=4, dte_max=30)
+    _ecrire(fichier, n=4, dte_max=7, graine=2)
+    history.show(fichier, "TEST")
+    sortie = capsys.readouterr().out
+    assert "périmètre dte_max=30" in sortie and "périmètre dte_max=7" in sortie
+
+
+def test_show_vue_d_ensemble_une_ligne_par_perimetre(fichier, capsys):
+    _ecrire(fichier, n=3, dte_max=30)
+    _ecrire(fichier, n=3, dte_max=7, graine=2)
+    vue = history.show(fichier)
+    assert len(vue) == 2
+    assert set(vue.dte_max) == {30, 7}

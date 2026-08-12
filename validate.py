@@ -9,6 +9,11 @@ Ce script les mesure sur history.csv, sans source de prix externe : la colonne
 `spot` de l'historique constitue la série. Il faut donc des relevés réguliers —
 un par séance idéalement.
 
+La mesure est faite séparément pour chaque (sous-jacent, dte_max, source de gamma).
+Mélanger des périmètres reviendrait à classer le régime d'après un GEX qui change
+de signe rien qu'en changeant d'horizon. Une seule séance compte une fois : deux
+exécutions du même jour ne sont pas deux observations.
+
     python validate.py            # tous les tickers
     python validate.py SPCX
 
@@ -26,14 +31,35 @@ import history
 # En dessous, aucune conclusion n'est défendable — on affiche mais on le dit.
 N_MINIMAL = 20
 
+# Deux exécutions rapprochées ne forment pas une observation : normalisé en
+# racine du temps, un mouvement réel de 0,2 % sur 20 minutes ressort à 1,7 %
+# par jour, et cette valeur entre telle quelle dans la médiane comparée plus bas.
+# On garde donc une seule ligne par séance, et on écarte ce qui reste trop court.
+INTERVALLE_MINIMAL = 0.5      # en jours
 
-def prepare(df):
-    """Ajoute le mouvement observé jusqu'au relevé suivant."""
-    df = df.sort_values("timestamp").copy()
+
+def dedoublonner(df):
+    """Une ligne par séance : la dernière. Les relevés intrajournaliers ne sont
+    pas des observations indépendantes, seulement la même séance revue."""
+    df = df.copy()
     df["date"] = pd.to_datetime(df.timestamp)
+    df["seance"] = df.date.dt.normalize()
+    return (df.sort_values("date")
+              .drop_duplicates(subset=["seance"], keep="last")
+              .drop(columns=["seance"])
+              .reset_index(drop=True))
+
+
+def prepare(df, intervalle_minimal=INTERVALLE_MINIMAL):
+    """Ajoute le mouvement observé jusqu'au relevé suivant.
+
+    À n'appeler que sur un périmètre homogène (même ticker, même dte_max, même
+    source de gamma) : voir valider().
+    """
+    df = dedoublonner(df)
     df["spot_suivant"] = df.spot.shift(-1)
     df["jours"] = (df.date.shift(-1) - df.date).dt.total_seconds() / 86400
-    df = df[(df.jours > 0) & df.spot_suivant.notna()].copy()
+    df = df[(df.jours >= intervalle_minimal) & df.spot_suivant.notna()].copy()
     df["rendement"] = (df.spot_suivant - df.spot) / df.spot
     # Ramené à une base journalière pour comparer des intervalles inégaux
     df["mouvement_par_jour"] = df.rendement.abs() / np.sqrt(df.jours)
@@ -111,14 +137,31 @@ def test_murs(df):
 
 
 def valider(path=history.DEFAUT, ticker=None):
+    """Mesure les affirmations du modèle, un périmètre à la fois.
+
+    La segmentation par (ticker, dte_max, source de gamma) n'est pas cosmétique :
+    le signe du GEX dépend de l'horizon retenu — le README en donne l'exemple, une
+    même séance du SPX à +70,8 Md sur toute la chaîne et -1,1 Md sur le 0-7 DTE.
+    Enchaîner les deux dans une même série classait le régime d'après un chiffre
+    qui changeait de signe rien qu'en changeant d'horizon.
+    """
     brut = history.load(path, ticker)
     if brut.empty:
         print("historique vide")
         return
 
-    for tk, groupe in brut.groupby("ticker"):
+    for cle, groupe in brut.groupby(history.CLES, dropna=False, sort=True):
+        tk, dte, source, conv = cle
+        # Un relevé écrit avant l'ajout d'une colonne n'a pas la valeur
+        dte, source, conv = ("?" if pd.isna(v) else v for v in (dte, source, conv))
         df = prepare(groupe)
-        print(f"\n{'='*62}\n{tk} — {len(groupe)} relevés, {len(df)} intervalles exploitables")
+        seances = len(dedoublonner(groupe))
+        print(f"\n{'='*62}\n{tk} (dte_max={dte}, gamma={source}, T={conv}) — "
+              f"{len(groupe)} relevés, {seances} séances, "
+              f"{len(df)} intervalles exploitables")
+        if len(groupe) > seances:
+            print(f"  {len(groupe) - seances} relevé(s) intrajournalier(s) écarté(s) : "
+                  "une séance ne compte qu'une fois.")
         if len(df) < 2:
             print("  pas assez de relevés consécutifs. Lance main.py régulièrement :\n"
                   "  la colonne spot de l'historique sert de série de prix.")

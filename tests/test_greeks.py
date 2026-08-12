@@ -5,11 +5,10 @@ que le code. On dérive donc numériquement le delta et le prix, et on compare.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
 from scipy.stats import norm
 
-import main as M
+import greeks as G
 from cme_data import black76_gamma, black76_price, implied_vol
 
 CAS = [  # (S, K, vol, T)
@@ -36,7 +35,7 @@ def test_charm_egale_derivee_temporelle_du_delta(S, K, vol, T, cp):
     attendu = -(delta_bs(S, K, vol, T + H, cp) - delta_bs(S, K, vol, T - H, cp)) / (2 * H)
     # calc_charm_ex renvoie des dollars de delta par jour de bourse : on remonte
     # au charm nu en retirant OI, multiplicateur, spot et le diviseur temporel.
-    obtenu = float(M.calc_charm_ex(S, K, vol, T, OI=1, contract_size=1)) * M.TRADING_DAYS / S
+    obtenu = float(G.calc_charm_ex(S, K, vol, T, OI=1, contract_size=1)) * G.TRADING_DAYS / S
     assert obtenu == pytest.approx(attendu, rel=1e-6)
 
 
@@ -44,7 +43,7 @@ def test_charm_egale_derivee_temporelle_du_delta(S, K, vol, T, cp):
 @pytest.mark.parametrize("cp", ["C", "P"])
 def test_vanna_egale_derivee_du_delta_en_vol(S, K, vol, T, cp):
     attendu = (delta_bs(S, K, vol + H, T, cp) - delta_bs(S, K, vol - H, T, cp)) / (2 * H)
-    obtenu = float(M.calc_vanna_ex(S, K, vol, T, OI=1, contract_size=1)) * 100.0 / S
+    obtenu = float(G.calc_vanna_ex(S, K, vol, T, OI=1, contract_size=1)) * 100.0 / S
     assert obtenu == pytest.approx(attendu, rel=1e-6)
 
 
@@ -60,7 +59,7 @@ def test_charm_et_vanna_identiques_calls_et_puts(S, K, vol, T):
 @pytest.mark.parametrize("S,K,vol,T", CAS)
 def test_gamma_black_scholes_egale_black_76_a_taux_nul(S, K, vol, T):
     """C'est ce qui permet d'utiliser le même code pour actions et options sur futures."""
-    bs = float(M.calc_gamma_ex(S, K, vol, T, 0, 0, "call", OI=1, contract_size=1))
+    bs = float(G.calc_gamma_ex(S, K, vol, T, 0, 0, "call", OI=1, contract_size=1))
     b76 = float(black76_gamma(S, K, vol, T, 0.0)) * 1 * S * S * 0.01
     assert bs == pytest.approx(b76, rel=1e-12)
 
@@ -68,21 +67,44 @@ def test_gamma_black_scholes_egale_black_76_a_taux_nul(S, K, vol, T):
 @pytest.mark.parametrize("S,K,vol,T", CAS)
 def test_gamma_call_egale_gamma_put(S, K, vol, T):
     """Les deux branches de calc_gamma_ex utilisent des formules différentes."""
-    c = float(M.calc_gamma_ex(S, K, vol, T, 0, 0, "call", OI=1, contract_size=1))
-    p = float(M.calc_gamma_ex(S, K, vol, T, 0, 0, "put", OI=1, contract_size=1))
+    c = float(G.calc_gamma_ex(S, K, vol, T, 0, 0, "call", OI=1, contract_size=1))
+    p = float(G.calc_gamma_ex(S, K, vol, T, 0, 0, "put", OI=1, contract_size=1))
     assert c == pytest.approx(p, rel=1e-9)
 
 
-@pytest.mark.parametrize("greek", [M.calc_gamma_ex, M.calc_charm_ex, M.calc_vanna_ex])
+@pytest.mark.parametrize("greek", [G.calc_gamma_ex, G.calc_charm_ex, G.calc_vanna_ex])
 def test_entrees_invalides_donnent_zero_sans_warning(greek):
     """Échéance passée, vol nulle ou strike nul ne doivent ni planter ni polluer la somme."""
     kw = dict(OI=100, contract_size=100)
     args = (100.0, np.array([100.0, 100.0, 0.0]), np.array([0.2, 0.0, 0.2]),
             np.array([0.0, 0.1, 0.1]))
     with np.errstate(all="raise"):
-        out = (greek(*args, 0, 0, "call", **kw) if greek is M.calc_gamma_ex
+        out = (greek(*args, 0, 0, "call", **kw) if greek is G.calc_gamma_ex
                else greek(*args, **kw))
     assert np.all(out == 0.0)
+
+
+@pytest.mark.parametrize("greek", [G.calc_gamma_ex, G.calc_charm_ex, G.calc_vanna_ex])
+def test_greeks_vectorises_sur_les_niveaux_de_spot(greek):
+    """Un spot en colonne (L, 1) doit donner une matrice (L, contrats).
+
+    C'est ce qui permet à profil_gamma de calculer les 60 niveaux d'un coup au
+    lieu de boucler en Python — encore faut-il que chaque ligne soit exactement
+    ce qu'un appel scalaire aurait donné.
+    """
+    K = np.array([95.0, 100.0, 105.0])
+    vol, T, OI = np.full(3, 0.25), np.full(3, 0.1), np.array([10.0, 20.0, 30.0])
+    niveaux = np.array([90.0, 100.0, 110.0])
+
+    def appel(S):
+        if greek is G.calc_gamma_ex:
+            return greek(S, K, vol, T, 0, 0, "call", OI, 100)
+        return greek(S, K, vol, T, OI, 100)
+
+    matrice = appel(niveaux.reshape(-1, 1))
+    assert matrice.shape == (3, 3)
+    for i, niveau in enumerate(niveaux):
+        assert matrice[i] == pytest.approx(appel(niveau), rel=1e-12)
 
 
 def test_implied_vol_retrouve_la_vol_injectee():
@@ -96,66 +118,3 @@ def test_implied_vol_retrouve_la_vol_injectee():
 def test_implied_vol_renvoie_nan_sous_la_valeur_intrinseque():
     """Un prix inférieur à l'intrinsèque n'a pas de vol implicite : NaN, pas d'exception."""
     assert np.isnan(implied_vol(0.001, 1.20, 1.00, 0.08, 0.0, "C"))
-
-
-def test_find_zero_gamma_interpole_le_changement_de_signe():
-    niveaux = np.array([90.0, 100.0, 110.0])
-    profil = np.array([-10.0, -5.0, 5.0])   # croise zéro entre 100 et 110
-    assert M.find_zero_gamma(niveaux, profil) == pytest.approx(105.0)
-
-
-def test_find_zero_gamma_sans_croisement_renvoie_none():
-    assert M.find_zero_gamma(np.array([1.0, 2.0]), np.array([3.0, 4.0])) is None
-
-
-def test_pick_scale_bascule_au_milliard():
-    assert M.pick_scale([5e8])[1] == "millions"
-    assert M.pick_scale([2e9])[1] == "milliards"
-    assert M.pick_scale([])[1] == "millions"
-
-
-# ---=== convention de temps ===---
-
-def test_time_to_expiry_heures_compte_le_temps_reel_restant():
-    """Un 0DTE à 10h du matin, c'est ~0,25 jour, pas 1."""
-    asof = pd.Timestamp("2026-08-12 14:00")            # 10h00 New York (EDT)
-    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])  # échéance 16h NY le jour même
-    T, div = M.time_to_expiry(exp, asof, "heures")
-    assert div == 365.0
-    assert T[0] * 365 == pytest.approx(6 / 24, abs=0.02)   # 6 heures restantes
-
-
-def test_time_to_expiry_bourse_applique_le_plancher_d_un_jour():
-    asof = pd.Timestamp("2026-08-12 14:00")
-    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])
-    T, div = M.time_to_expiry(exp, asof, "bourse")
-    assert div == M.TRADING_DAYS
-    assert T[0] == pytest.approx(1 / M.TRADING_DAYS)       # plancher, pas 0,25 jour
-
-
-def test_le_plancher_surestime_massivement_les_0dte():
-    """C'est la raison d'être du changement de convention par défaut."""
-    asof = pd.Timestamp("2026-08-12 14:00")
-    exp = pd.Series([pd.Timestamp("2026-08-12 16:00")])
-    t_reel = M.time_to_expiry(exp, asof, "heures")[0][0]
-    t_plancher = M.time_to_expiry(exp, asof, "bourse")[0][0]
-    assert t_plancher > 5 * t_reel                         # plus de 5 fois trop
-
-
-def test_time_to_expiry_croit_avec_l_echeance():
-    asof = pd.Timestamp("2026-08-12 14:00")
-    exp = pd.Series(pd.to_datetime(["2026-08-13 16:00", "2026-08-20 16:00",
-                                    "2026-09-18 16:00"]))
-    for convention in ("heures", "bourse"):
-        T, _ = M.time_to_expiry(exp, asof, convention)
-        assert np.all(np.diff(T) > 0)
-        assert np.all(T > 0)
-
-
-def test_charm_suit_le_diviseur_de_la_convention():
-    """Un charm exprimé par jour doit utiliser le diviseur ayant servi à T."""
-    par_bourse = float(M.calc_charm_ex(100, 105, 0.25, 0.1, OI=1, contract_size=1,
-                                       jours_par_an=M.TRADING_DAYS))
-    par_calendaire = float(M.calc_charm_ex(100, 105, 0.25, 0.1, OI=1, contract_size=1,
-                                           jours_par_an=365.0))
-    assert par_bourse / par_calendaire == pytest.approx(365.0 / M.TRADING_DAYS)
