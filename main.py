@@ -50,8 +50,67 @@ def calc_gamma_ex(S, K, vol, T, r, q, opt_type, OI, contract_size=CONTRACT_SIZE)
     return np.where(valid, OI * contract_size * S * S * 0.01 * gamma, 0.0)
 
 
+def _d1_d2(S, K, vol, T):
+    """d1 et d2 de Black-Scholes à r = q = 0, avec neutralisation des entrées invalides."""
+    S = np.asarray(S, dtype=float)
+    K, vol, T = (np.asarray(x, dtype=float) for x in (K, vol, T))
+    valid = (T > 0) & (vol > 0) & (K > 0)
+    vol_s, T_s, K_s = (np.where(valid, x, 1.0) for x in (vol, T, K))
+    d1 = (np.log(S / K_s) + 0.5 * vol_s ** 2 * T_s) / (vol_s * np.sqrt(T_s))
+    return d1, d1 - vol_s * np.sqrt(T_s), valid, vol_s, T_s
+
+
+def calc_charm_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
+    """Charm exposure : dollars de delta gagnés par jour de bourse, à prix constant.
+
+    charm = phi(d1) * d2 / (2T). À q = 0 il est identique pour calls et puts
+    (le -1 du delta put ne s'écoule pas).
+
+    T étant exprimé en années DE BOURSE (jours ouvrés / 262), la dérivée est par
+    année de bourse : on divise donc par TRADING_DAYS et non par 365. Vérifié par
+    différence finie sur le delta dollar du book complet.
+
+    Interprétation : un charm exposure positif signifie que le delta du book
+    dealer grossit avec le temps, donc qu'il doit vendre pour rester neutre.
+    C'est le flux de couverture des derniers jours avant échéance, celui que le
+    gamma seul ne montre pas.
+    """
+    d1, d2, valid, _, T_s = _d1_d2(S, K, vol, T)
+    charm = norm.pdf(d1) * d2 / (2 * T_s)
+    OI = np.asarray(OI, dtype=float)
+    return np.where(valid, OI * contract_size * np.asarray(S, float) * charm / TRADING_DAYS, 0.0)
+
+
+def calc_vanna_ex(S, K, vol, T, OI, contract_size=CONTRACT_SIZE):
+    """Vanna exposure : dollars de delta par point de volatilité implicite.
+
+    vanna = -phi(d1) * d2 / vol, également identique calls et puts à q = 0.
+
+    Interprétation : un vanna exposure positif signifie que le delta du book
+    grossit quand la volatilité monte — les dealers vendent alors dans les pics
+    de vol. C'est le canal par lequel un choc de volatilité se transmet au spot.
+    """
+    d1, d2, valid, vol_s, _ = _d1_d2(S, K, vol, T)
+    vanna = -norm.pdf(d1) * d2 / vol_s
+    OI = np.asarray(OI, dtype=float)
+    return np.where(valid, OI * contract_size * np.asarray(S, float) * vanna / 100.0, 0.0)
+
+
 def is_third_friday(d):
     return d.weekday() == 4 and 15 <= d.day <= 21
+
+
+def dte_arg(value):
+    """Type argparse pour --dte-max : un entier de jours, ou 'all' pour ne pas filtrer."""
+    if value.lower() in ("all", "toutes", "none"):
+        return None
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"nombre de jours ou 'all' attendu, reçu {value!r}")
+    if days < 0:
+        raise argparse.ArgumentTypeError("--dte-max doit être positif, ou 'all'")
+    return days
 
 
 def pick_scale(values):
@@ -110,6 +169,14 @@ def main():
     parser.add_argument("--no-show", action="store_true", help="enregistrer sans ouvrir les fenêtres")
     parser.add_argument("--range", type=float, default=0.2,
                         help="demi-plage de strikes autour du spot (0.2 = +/-20%%)")
+    parser.add_argument("--dte-max", type=dte_arg, default=30, metavar="N",
+                        help="ne garder que les échéances à N jours calendaires ou moins "
+                             "(défaut : 30 ; 'all' pour toute la chaîne)")
+    parser.add_argument("--wall-range", type=float, default=0.15,
+                        help="demi-plage de recherche des murs gamma autour du spot (0.15 = +/-15%%)")
+    parser.add_argument("--oi-wall-range", type=float, default=0.30,
+                        help="demi-plage des murs en open interest brut (0.30 = +/-30%%) ; "
+                             "plus large que les murs gamma, qui restent collés à la monnaie")
     parser.add_argument("--contract-size", type=float,
                         help="multiplicateur du contrat (défaut : 100, ou 125000 avec --cme)")
     args = parser.parse_args()
@@ -140,10 +207,31 @@ def main():
         df, spot_price, today_date = cboe_data.fetch_chain(args.ticker)
         ticker = cboe_data.cboe_symbol(args.ticker).lstrip("_")
 
+    # ---=== FILTRE D'ÉCHÉANCE ===---
+    # Les chaînes CBOE portent plusieurs années d'échéances. Sans filtre, les LEAPS
+    # — strikes ronds à très gros OI — dominent les murs et tirent le zero gamma,
+    # alors qu'ils ne génèrent quasiment aucun flux de hedging à court terme.
+    # Le filtre s'applique ici, avant tout calcul, pour que murs et profil de gamma
+    # portent sur le même périmètre.
+    dte = (df.ExpirationDate - pd.Timestamp(today_date)).dt.days
+    kept = dte >= 0          # une échéance passée n'a plus de gamma : elle fausse le GEX par strike
+    if args.dte_max is not None:
+        kept &= dte <= args.dte_max
+    if not kept.any():
+        future = dte[dte >= 0]
+        if not len(future):
+            raise ValueError("aucune échéance future dans les données")
+        raise ValueError(f"aucune échéance à {args.dte_max} jours ou moins "
+                         f"(la plus proche est à {int(future.min())} jours) — "
+                         f"élargis avec --dte-max {int(future.min())}, ou --dte-max all")
+    df = df[kept].copy()
+
     from_strike = (1 - args.range) * spot_price
     to_strike = (1 + args.range) * spot_price
     decimals = 4 if spot_price < 10 else 2   # les paires FX se lisent en pips
-    print(f"{ticker} | sous-jacent {spot_price:,.{decimals}f} | {len(df)} strikes "
+    horizon = "toutes échéances" if args.dte_max is None else f"<= {args.dte_max}j"
+    print(f"{ticker} | sous-jacent {spot_price:,.{decimals}f} "
+          f"| {df.StrikePrice.nunique()} strikes / {df.ExpirationDate.nunique()} échéances ({horizon}) "
           f"| {today_date:%Y-%m-%d} | contrat x{contract_size:,.0f}")
 
     # ---=== GAMMA EXPOSURE PAR STRIKE ===---
@@ -152,15 +240,38 @@ def main():
     df["PutGEX"] = df.PutGamma * df.PutOpenInt * contract_size * spot_price ** 2 * 0.01 * -1
     df["TotalGamma"] = df.CallGEX + df.PutGEX
 
-    df_agg = df.groupby("StrikePrice")[["CallGEX", "PutGEX", "TotalGamma"]].sum()
+    df_agg = df.groupby("StrikePrice")[["CallGEX", "PutGEX", "TotalGamma",
+                                        "CallOpenInt", "PutOpenInt"]].sum()
     in_range = df_agg[(df_agg.index >= from_strike) & (df_agg.index <= to_strike)]
     strikes = df_agg.index.values
 
     # Murs de gamma : strikes concentrant le plus de gamma call (résistance) / put (support).
-    # Calculés sur une bande large fixe (+/-50%) pour ne pas dépendre du zoom d'affichage.
-    wall_band = df_agg[(df_agg.index >= 0.5 * spot_price) & (df_agg.index <= 1.5 * spot_price)]
-    call_wall = wall_band.CallGEX.idxmax() if len(wall_band) else None
-    put_wall = wall_band.PutGEX.idxmin() if len(wall_band) else None
+    # La bande est indépendante du zoom d'affichage (--range) mais reste serrée : trop
+    # large, elle laisse gagner des strikes ronds lointains dont l'OI est spéculatif.
+    #
+    # Chaque mur est cherché du bon côté du spot. Sans cette contrainte les deux
+    # tombent sur le strike ATM — le gamma unitaire y est maximal, ce qui suffit à
+    # battre des strikes dix fois plus chargés en OI — et le résultat n'est alors
+    # qu'une paraphrase du spot.
+    wall_band = df_agg[(df_agg.index >= (1 - args.wall_range) * spot_price)
+                       & (df_agg.index <= (1 + args.wall_range) * spot_price)]
+    above = wall_band[wall_band.index >= spot_price]
+    below = wall_band[wall_band.index <= spot_price]
+    # Un GEX call nul (ou put non négatif) signifie qu'il n'y a pas de mur à retenir :
+    # idxmax renverrait alors le premier strike de la bande, ce qui n'a aucun sens.
+    call_wall = above.CallGEX.idxmax() if len(above) and above.CallGEX.max() > 0 else None
+    put_wall = below.PutGEX.idxmin() if len(below) and below.PutGEX.min() < 0 else None
+
+    # Murs en open interest brut : la lecture « classique », non pondérée par le gamma.
+    # Sur une action les deux coïncident souvent, mais sur un indice l'écart est net —
+    # le SPX du 12 août donnait 7800/7700 en gamma (soit le spot paraphrasé) contre
+    # 8800/6000 en OI. La bande est plus large car ces concentrations sont plus loin.
+    oi_band = df_agg[(df_agg.index >= (1 - args.oi_wall_range) * spot_price)
+                     & (df_agg.index <= (1 + args.oi_wall_range) * spot_price)]
+    oi_above = oi_band[oi_band.index >= spot_price]
+    oi_below = oi_band[oi_band.index <= spot_price]
+    call_wall_oi = oi_above.CallOpenInt.idxmax() if len(oi_above) and oi_above.CallOpenInt.max() > 0 else None
+    put_wall_oi = oi_below.PutOpenInt.idxmax() if len(oi_below) and oi_below.PutOpenInt.max() > 0 else None
 
     scale, unit = pick_scale(in_range.TotalGamma.values if len(in_range) else df_agg.TotalGamma.values)
     total_gex = df.TotalGamma.sum()
@@ -187,8 +298,11 @@ def main():
     masks = {
         "All Expiries": np.ones(len(df), dtype=bool),
         "Ex-Next Expiry": (df.ExpirationDate != next_expiry).values,
-        "Ex-Next Monthly Expiry": (df.ExpirationDate != next_monthly_exp).values,
     }
+    # Avec un --dte-max serré il peut ne rester aucun 3e vendredi : la courbe
+    # serait alors identique à "All Expiries" et se superposerait à elle.
+    if next_monthly_exp is not None:
+        masks["Ex-Next Monthly Expiry"] = (df.ExpirationDate != next_monthly_exp).values
     profiles = {label: np.zeros(len(levels)) for label in masks}
 
     for i, level in enumerate(levels):
@@ -200,19 +314,45 @@ def main():
         for label, mask in masks.items():
             profiles[label][i] = net[mask].sum()
 
+    # ---=== CHARM ET VANNA ===---
+    # Même convention de signe que le GEX : dealers longs calls, shorts puts.
+    # Calculés après le filtre d'échéance, donc sur le même périmètre que le reste.
+    for nom, fonction in (("Charm", calc_charm_ex), ("Vanna", calc_vanna_ex)):
+        c = fonction(spot_price, df.StrikePrice, df.CallIV, df.daysTillExp,
+                     df.CallOpenInt, contract_size)
+        p = fonction(spot_price, df.StrikePrice, df.PutIV, df.daysTillExp,
+                     df.PutOpenInt, contract_size)
+        df[f"Call{nom}"] = c
+        df[f"Put{nom}"] = -p
+        df[f"Total{nom}"] = c - p
+    greeks_agg = df.groupby("StrikePrice")[["TotalCharm", "TotalVanna"]].sum()
+    total_charm = df.TotalCharm.sum()
+    total_vanna = df.TotalVanna.sum()
+
     profile = profiles["All Expiries"]
     zero_gamma = find_zero_gamma(levels, profile)
     if zero_gamma is None:
         print("Attention : pas de changement de signe du gamma dans la plage analysée "
-              f"({from_strike:,.2f} - {to_strike:,.2f}) — élargis avec --range.")
+              f"({from_strike:,.2f} - {to_strike:,.2f}) — élargis avec --range, "
+              "ou allonge l'horizon avec --dte-max.")
 
+    def fmt(x):
+        return f"{x:,.{decimals}f}" if x is not None else "n/a"
+
+    gscale, gunit = pick_scale([total_charm, total_vanna])
     print(f"Total GEX  : {total_gex / scale:,.2f} {unit} $ / mouvement de 1%")
-    print(f"Zero Gamma : {zero_gamma:,.{decimals}f}" if zero_gamma else "Zero Gamma : introuvable")
-    print(f"Call Wall  : {call_wall:,.{decimals}f}" if call_wall else "Call Wall  : n/a")
-    print(f"Put Wall   : {put_wall:,.{decimals}f}" if put_wall else "Put Wall   : n/a")
+    print(f"Zero Gamma : {fmt(zero_gamma)}")
+    print(f"Call Wall  : {fmt(call_wall):>12} (gamma)   {fmt(call_wall_oi):>12} (open interest)")
+    print(f"Put Wall   : {fmt(put_wall):>12} (gamma)   {fmt(put_wall_oi):>12} (open interest)")
+    # Charm : delta que les dealers doivent racheter (négatif) ou revendre (positif)
+    # pour chaque jour qui passe, à prix inchangé.
+    print(f"Charm      : {total_charm / gscale:+,.2f} {gunit} $ de delta / jour de bourse")
+    print(f"Vanna      : {total_vanna / gscale:+,.2f} {gunit} $ de delta / point de vol")
 
     os.makedirs(args.outdir, exist_ok=True)
-    title_suffix = f"{ticker}, {today_date:%d %b %Y}"
+    # L'horizon figure dans le titre : deux graphiques du même jour sur des périmètres
+    # d'échéance différents donnent des niveaux différents, et rien ne les distinguerait.
+    title_suffix = f"{ticker}, {today_date:%d %b %Y} ({horizon})"
     unit_label = f"Gamma Exposure ($ {unit} / mouvement de 1%)"
 
     # ---=== GRAPHIQUE 1 : GEX absolu par strike ===---
@@ -274,6 +414,31 @@ def main():
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(os.path.join(args.outdir, f"{ticker}_3_profil_zero_gamma.png"), dpi=120)
+
+    # ---=== GRAPHIQUE 4 : charm et vanna par strike ===---
+    fig, (ax_c, ax_v) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+    for ax, col, titre, ylab in (
+            (ax_c, "TotalCharm", f"Charm : {total_charm/gscale:+,.2f} {gunit} $ de delta par jour de bourse",
+             f"$ {gunit} de delta / jour de bourse"),
+            (ax_v, "TotalVanna", f"Vanna : {total_vanna/gscale:+,.2f} {gunit} $ de delta par point de vol",
+             f"$ {gunit} de delta / pt de vol")):
+        ax.grid(alpha=0.3)
+        ax.bar(greeks_agg.index.values, greeks_agg[col] / gscale, width=width,
+               linewidth=0.1, edgecolor="k",
+               color=["indianred" if v < 0 else "seagreen" for v in greeks_agg[col]])
+        ax.set_xlim([from_strike, to_strike])
+        ax.set_title(titre, fontweight="bold", fontsize=13)
+        ax.set_ylabel(ylab, fontweight="bold")
+        ax.axhline(y=0, color="grey", lw=1)
+        ax.axvline(x=spot_price, color="r", lw=1.2, label=f"{ticker} Spot : {spot_price:,.{decimals}f}")
+        if zero_gamma is not None:
+            ax.axvline(x=zero_gamma, color="g", lw=1.4, ls="--",
+                       label=f"Zero Gamma : {zero_gamma:,.{decimals}f}")
+        ax.legend(fontsize=9)
+    ax_v.set_xlabel("Strike", fontweight="bold")
+    fig.suptitle(f"Charm & Vanna — {title_suffix}", fontweight="bold", fontsize=15)
+    fig.tight_layout()
+    fig.savefig(os.path.join(args.outdir, f"{ticker}_4_charm_vanna.png"), dpi=120)
 
     print(f"Graphiques enregistrés dans : {os.path.abspath(args.outdir)}")
     if not args.no_show:

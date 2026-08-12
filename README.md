@@ -43,6 +43,73 @@ puis enregistre trois graphiques dans `charts/` :
 | `<TICKER>_2_calls_vs_puts.png` | Décomposition gamma calls / puts |
 | `<TICKER>_3_profil_zero_gamma.png` | Profil de gamma et zero gamma level |
 
+### Horizon d'échéance (`--dte-max`)
+
+Une chaîne CBOE porte plusieurs années d'échéances — jusqu'à 2031 sur le SPX. Prises
+en bloc, les LEAPS écrasent l'analyse : leurs strikes ronds concentrent un OI énorme
+mais purement spéculatif, qui ne produit aucun flux de hedging à court terme. Sur le
+SPX du 10 août 2026, la chaîne complète donnait un GEX de **+70,8 Md$** (régime de
+compression) alors que le 0–7 DTE — celui qui pilote réellement le hedging du jour —
+donnait **−1,1 Md$**, soit le régime inverse.
+
+`--dte-max` ne retient donc que les échéances proches, **défaut 30 jours calendaires** :
+
+```sh
+python main.py _SPX                    # 30 jours (défaut)
+python main.py _SPX --dte-max 7        # semaine en cours
+python main.py _SPX --dte-max all      # toute la chaîne
+```
+
+Le filtre s'applique avant tout calcul : murs, profil de gamma et zero gamma portent
+toujours sur le même périmètre, rappelé dans l'en-tête et dans le titre des graphiques.
+Les échéances déjà passées sont écartées dans la foulée.
+
+`--wall-range` (défaut ±15 %) borne la recherche des murs autour du spot. Le Call Wall
+est cherché **au-dessus** du spot et le Put Wall **en dessous** : sans cette contrainte
+les deux tombent sur le strike ATM, où le gamma unitaire est maximal — au point de
+battre des strikes dix fois plus chargés en OI — et le résultat ne fait que paraphraser
+le spot.
+
+Les murs pondérés par le gamma restent attirés vers la monnaie. Le script affiche donc
+aussi les murs en **open interest brut** — la lecture « classique » — sur une bande plus
+large, réglée par `--oi-wall-range` (défaut ±30 %) :
+
+```
+Call Wall  :     7,800.00 (gamma)       8,800.00 (open interest)
+Put Wall   :     7,700.00 (gamma)       6,000.00 (open interest)
+```
+
+Sur une action les deux coïncident souvent. Sur un indice l'écart est net : ce relevé du
+SPX donne 7 800 / 7 700 en gamma — soit le spot paraphrasé, à ±1 % — contre 8 800 / 6 000
+en open interest. Les deux lectures répondent à des questions différentes : où le hedging
+mord le plus, et où les positions sont réellement accumulées.
+
+### Charm et vanna
+
+Le gamma décrit la réaction à un mouvement de prix. Il ne dit rien des flux de couverture
+déclenchés par **l'écoulement du temps** ni par **un choc de volatilité** — deux moteurs
+majeurs dans les jours qui précèdent une échéance.
+
+```
+Charm      : -192.20 millions $ de delta / jour de bourse
+Vanna      : +16.31 millions $ de delta / point de vol
+```
+
+**Charm** = variation du delta du book dealer par jour qui passe, à prix constant. Négatif
+signifie que leur delta fond, donc qu'ils doivent **acheter** chaque jour pour rester
+neutres : un flux de soutien mécanique, sans lien avec la direction du marché.
+
+**Vanna** = variation du delta par point de volatilité implicite. Positif signifie que les
+dealers vendent quand la vol monte — le canal par lequel un choc de vol se propage au spot.
+
+Les deux sont calculés à `r = q = 0`, où ils sont identiques pour calls et puts (le `-1`
+du delta put ne s'écoule pas), avec la même convention de signe que le GEX. `T` étant
+exprimé en années **de bourse** (jours ouvrés / 262), le charm est ramené au jour de
+bourse par ce même diviseur. Formules vérifiées par différence finie, et l'agrégat par
+recalcul du delta dollar du book complet à un jour d'intervalle (écart 3 %, d'ordre deux).
+
+Le quatrième graphique, `<TICKER>_4_charm_vanna.png`, les trace strike par strike.
+
 ### Options sur futures (EUR/USD via le 6E, ES, ...)
 
 Le CME interdit l'accès automatisé à son site (Data Terms of Use) : il n'y a donc pas
