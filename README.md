@@ -79,6 +79,27 @@ Le zéro reste à sa vraie place mais chaque côté est cadré sur ses propres v
 une échelle symétrique laisse la moitié du champ vide dès que les expositions
 penchent d'un côté, ce qui est le cas ordinaire.
 
+#### L'axe des strikes
+
+**Un rang par strike, tous de la même hauteur.** Une chaîne n'a pas un pas
+régulier — sur SPCX, 1 point près de la monnaie et 2,5 plus loin — et un axe
+proportionnel au prix laisse alors le haut du graphique presque vide tout en
+écrasant la zone dense, celle qui porte l'information.
+
+Ce n'est pas pour autant un axe catégoriel. C'est une **échelle de prix affine par
+morceaux, dont les strikes sont les nœuds** : exacte à chaque strike, monotone
+partout, et interpolée linéairement entre deux strikes voisins. Un prix quelconque
+y a donc une position unique et juste. Le spot à 148,49 se pose à 49 % du chemin
+entre les rangs 148 et 149 — vérifié à 0,00 px près, parce qu'une ligne de spot
+posée au rang le plus proche mentirait d'un demi-strike, soit plusieurs dizaines
+de points sur un indice.
+
+Ce que cette échelle perd : des écarts de prix égaux n'occupent plus des hauteurs
+égales. Plutôt que de laisser cette déformation implicite, elle est **montrée** —
+quelques niveaux ronds sont tracés à leur position réelle, étiquetés à droite. Là
+où les strikes se resserrent la bande est haute, là où ils s'espacent elle est
+courte, et le lecteur le voit au lieu de le subir.
+
 Trois cartes s'ajoutent quand il y a de quoi les remplir, et disparaissent sinon
 plutôt que d'afficher du vide : **la dérive** trace le prix et le zero gamma côte à
 côte au fil des relevés enregistrés — c'est leur écart qui décrit le régime, et le

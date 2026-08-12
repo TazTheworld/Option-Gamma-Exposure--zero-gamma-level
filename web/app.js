@@ -473,7 +473,7 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
   conteneur.innerHTML = "";
   if (!strikes.length) return null;
 
-  const hauteurLigne = strikes.length > 90 ? 9 : strikes.length > 55 ? 13 : 18;
+  const hauteurLigne = strikes.length > 120 ? 8 : strikes.length > 70 ? 11 : 16;
   const hauteur = Math.max(360, strikes.length * hauteurLigne + MARGE.haut + MARGE.bas);
   const svg = toile(hauteur);
 
@@ -482,12 +482,31 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
   const xLabels = 56;
   const smile0 = xLabels + 14, smile1 = smile0 + (aSmile ? 150 : 0);
   const x0 = aSmile ? smile1 + 46 : xLabels + 18;
-  const x1 = L - 74;
+  const x1 = L - 96;
   const y0 = MARGE.haut, y1 = hauteur - MARGE.bas;
 
-  const kMin = Math.min(...strikes), kMax = Math.max(...strikes);
-  // Strikes croissants vers le HAUT, comme une échelle de prix.
-  const yEch = (k) => y1 - ((k - kMin) / (kMax - kMin || 1)) * (y1 - y0);
+  const kMin = strikes[0], kMax = strikes[strikes.length - 1];
+
+  /* Axe ORDINAL : un rang par strike, hauteur constante, strikes croissants vers
+   * le haut. Sur une chaîne dont l'espacement change — 1 point près de la monnaie,
+   * 2,5 plus loin sur SPCX — un axe proportionnel au prix laisse le haut du
+   * graphique presque vide. Le rang donne à chaque strike le même poids visuel,
+   * ce qui est aussi la façon dont un carnet se lit.
+   *
+   * Contrepartie : un prix quelconque n'a plus de hauteur évidente. Le spot et le
+   * zero gamma sont donc INTERPOLÉS entre les deux rangs qui les encadrent —
+   * les poser au rang le plus proche décalerait la ligne d'un demi-strike, soit
+   * plusieurs dizaines de points sur un indice. */
+  const yRang = (i) => y1 - (i / Math.max(1, strikes.length - 1)) * (y1 - y0);
+
+  function yPrix(p) {
+    if (p === null || !isFinite(p) || p < kMin || p > kMax) return null;
+    let haut = strikes.findIndex((k) => k >= p);
+    if (haut <= 0) return yRang(Math.max(0, haut));
+    const bas = haut - 1;
+    const fraction = (p - strikes[bas]) / (strikes[haut] - strikes[bas] || 1);
+    return yRang(bas) + (yRang(haut) - yRang(bas)) * fraction;
+  }
 
   const finies = valeurs.filter((v) => v !== null && isFinite(v));
   const ech = type === "montant" ? echelle(finies) : { facteur: 1, unite: "" };
@@ -518,12 +537,12 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
     x: x0, y: y0 - 10, "text-anchor": "start", class: "axe-titre",
   }, `${unite}${ech.unite ? ` (${ech.unite})` : ""}`));
 
-  const pasEtiquette = Math.max(1, Math.ceil(strikes.length / 46));
+  const pasEtiquette = hauteurLigne >= 11 ? 1 : Math.max(1, Math.ceil(11 / hauteurLigne));
   strikes.forEach((k, i) => {
     if (i % pasEtiquette) return;
     const remarquable = k === callWall || k === putWall;
     svg.appendChild(el("text", {
-      x: xLabels, y: yEch(k) + 3.5, "text-anchor": "end",
+      x: xLabels, y: yRang(i) + 3.5, "text-anchor": "end",
       class: "axe-texte", "font-weight": remarquable ? 600 : null,
       fill: remarquable ? COULEURS.encre : null,
     }, prix(k, dec)));
@@ -545,7 +564,7 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
         // Les aberrantes sont ramenées au bord plutôt que tracées hors panneau,
         // où elles se superposeraient aux étiquettes de strike.
         const x = Math.max(smile0, Math.min(xIv(v), smile1));
-        svg.appendChild(el("circle", { cx: x, cy: yEch(k), r: 1.9, fill: couleur }));
+        svg.appendChild(el("circle", { cx: x, cy: yRang(i), r: 1.9, fill: couleur }));
       });
     }
     svg.appendChild(el("text", {
@@ -566,11 +585,11 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
       if (av === null || ap === null || !isFinite(av) || !isFinite(ap)) return;
       if (Math.abs(xEch(av) - xEch(ap)) < 1.5) return;
       svg.appendChild(el("line", {
-        x1: xEch(av), x2: xEch(ap), y1: yEch(k), y2: yEch(k),
+        x1: xEch(av), x2: xEch(ap), y1: yRang(i), y2: yRang(i),
         stroke: COULEURS.encre3, "stroke-width": 1, opacity: 0.55,
       }));
       svg.appendChild(el("line", {
-        x1: xEch(av), x2: xEch(av), y1: yEch(k) - epaisseur / 2.4, y2: yEch(k) + epaisseur / 2.4,
+        x1: xEch(av), x2: xEch(av), y1: yRang(i) - epaisseur / 2.4, y2: yRang(i) + epaisseur / 2.4,
         stroke: COULEURS.encre3, "stroke-width": 1, opacity: 0.75,
       }));
     });
@@ -581,7 +600,7 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
   strikes.forEach((k, i) => {
     const v = valeurs[i];
     if (v === null || !isFinite(v) || Math.abs(v) < 1e-12) return;
-    const x = xEch(v), y = yEch(k) - epaisseur / 2;
+    const x = xEch(v), y = yRang(i) - epaisseur / 2;
     const gauche = Math.min(xZero, x), largeur = Math.abs(x - xZero);
     const r = Math.max(0, Math.min(4, largeur, epaisseur / 2));
     // Bout arrondi du côté opposé à l'axe zéro, comme pour les barres verticales.
@@ -601,14 +620,30 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
   svg.appendChild(barres);
   svg.appendChild(el("line", { x1: xZero, x2: xZero, y1: y0, y2: y1, class: "axe-ligne" }));
 
+  // --- ancres de prix ronds ---
+  /* L'axe donne à chaque strike la même hauteur : des écarts de prix égaux n'y
+   * occupent donc PAS des hauteurs égales. Plutôt que de laisser cette
+   * déformation implicite, on la montre — quelques niveaux ronds tracés à leur
+   * position réelle sur l'échelle. Là où les strikes sont serrés la bande est
+   * haute, là où ils s'espacent elle est courte, et ça se voit. */
+  const ancres = graduations(kMin, kMax, 5).filter((p) => p > kMin && p < kMax);
+  for (const niveau of ancres) {
+    const y = yPrix(niveau);
+    if (y === null) continue;
+    svg.appendChild(el("line", { x1: x0 - 8, x2: x1, y1: y, y2: y, class: "grille-ligne" }));
+    svg.appendChild(el("text", {
+      x: x1 + 6, y: y + 3.5, "text-anchor": "start", class: "axe-texte",
+    }, prix(niveau, 0)));
+  }
+
   // --- repères horizontaux : spot et zero gamma ---
   for (const [valeur, ton, libelle] of [
     [spot, "fort", `Spot ${prix(spot, dec)}`],
     [zeroGamma, "moyen", `Zero gamma ${prix(zeroGamma, dec)}`],
   ]) {
-    if (valeur === null || !isFinite(valeur) || valeur < kMin || valeur > kMax) continue;
+    const y = yPrix(valeur);
+    if (y === null) continue;
     const style = REPERES[ton];
-    const y = yEch(valeur);
     svg.appendChild(el("line", {
       x1: x0 - 8, x2: x1, y1: y, y2: y, stroke: style.trait, class: "repere-ligne",
     }));
@@ -626,7 +661,7 @@ function graphiqueEchelle(conteneur, { strikes, valeurs, reference, spot, zeroGa
   const cibles = el("g");
   strikes.forEach((k, i) => {
     const cible = el("rect", {
-      x: x0 - 8, y: yEch(k) - Math.max(hauteurLigne, 12) / 2,
+      x: x0 - 8, y: yRang(i) - Math.max(hauteurLigne, 12) / 2,
       width: x1 - x0 + 8, height: Math.max(hauteurLigne, 12), class: "cible",
     });
     cible.addEventListener("mousemove", (evenement) => {
