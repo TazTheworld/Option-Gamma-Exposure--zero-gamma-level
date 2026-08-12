@@ -40,10 +40,12 @@ def cboe_symbol(ticker):
     return "_" + ticker if ticker in INDEX_SYMBOLS else ticker
 
 
-def fetch_chain(ticker, timeout=30):
-    """Télécharge la chaîne d'options d'un sous-jacent US.
+def fetch_json(ticker, timeout=30):
+    """Payload brut de l'API CBOE.
 
-    Renvoie (df, spotPrice, quoteDate) où df suit le format COLUMNS.
+    Point d'entrée réseau unique du projet : flow_tracker s'en sert aussi, pour
+    que le traitement des erreurs et l'en-tête User-Agent ne divergent pas entre
+    deux implémentations.
     """
     symbol = cboe_symbol(ticker)
     resp = requests.get(
@@ -58,8 +60,15 @@ def fetch_chain(ticker, timeout=30):
             "Vérifie le ticker, ou préfixe les indices d'un underscore (_SPX)."
         )
     resp.raise_for_status()
-    payload = resp.json()
+    return resp.json()
 
+
+def fetch_chain(ticker, timeout=30):
+    """Télécharge la chaîne d'options d'un sous-jacent US.
+
+    Renvoie (df, spotPrice, quoteDate) où df suit le format COLUMNS.
+    """
+    payload = fetch_json(ticker, timeout)
     data = payload["data"]
     spot_price = float(data["current_price"])
     quote_date = pd.to_datetime(payload["timestamp"]).to_pydatetime().replace(tzinfo=None)

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "option-gamma-exposure"
+version = "1.1.0"
+description = "Gamma exposure, zero gamma level, charm et vanna a partir de donnees d'options gratuites"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Taz" }]
+
+# Le strict necessaire pour `python main.py TSLA`. Le pip freeze precedent
+# imposait selenium, databento, aiohttp et pyarrow a quiconque voulait juste
+# tracer le GEX d'une action : plusieurs centaines de Mo pour rien.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Archivage des chaines brutes en parquet. Sans, snapshots.py bascule sur csv.gz.
+snapshots = ["pyarrow>=14"]
+# Exports CME au format Excel (les CSV passent sans).
+cme = ["openpyxl>=3.1"]
+# Chaines CME par API, sans telechargement manuel.
+databento = ["databento>=0.40"]
+# Scraping Barchart (shadow DOM), gratuit mais aleatoire.
+barchart = ["selenium>=4.20", "webdriver-manager>=4.0"]
+dev = ["pytest>=8.0", "pyarrow>=14"]
+
+[project.urls]
+Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level"
+
+[tool.setuptools]
+py-modules = [
+    "main", "greeks", "analysis", "plots", "snapshots",
+    "cboe_data", "cme_data", "databento_data", "barchart_data",
+    "flow_tracker", "history", "validate",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

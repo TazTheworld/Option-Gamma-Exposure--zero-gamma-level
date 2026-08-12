@@ -6,7 +6,7 @@ Deux vues sont nécessaires et fusionnées sur (strike, type) :
 
 Le résultat est un CSV directement lisible par cme_data.py, donc par le pipeline :
 
-    python Scrap-data.py E6U26 --expiry aug-26 --out barchart_6E.csv
+    python barchart_data.py E6U26 --expiry aug-26 --out barchart_6E.csv
     python main.py 6E --cme barchart_6E.csv --expiry 2026-08-28
 
 Barchart rend ses tableaux dans un shadow DOM (<bc-data-grid>) : le texte n'est

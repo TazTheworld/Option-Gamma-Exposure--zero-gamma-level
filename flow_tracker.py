@@ -28,11 +28,11 @@ import argparse
 import os
 import re
 import time
-from datetime import datetime
 
 import pandas as pd
 
 import cboe_data
+from greeks import CONTRACT_SIZE
 
 # Un trade au-dessus de ce seuil dans la fourchette est jugé initié à l'achat
 SEUIL_ACHAT = 0.60
@@ -41,14 +41,7 @@ SEUIL_VENTE = 0.40
 
 def snapshot(ticker):
     """Relevé instantané : un contrat par ligne, avec volume et fourchette."""
-    import json
-    import urllib.request
-
-    url = cboe_data.JSON_URL.format(symbol=cboe_data.cboe_symbol(ticker))
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (gamma research)"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.load(resp)
-
+    payload = cboe_data.fetch_json(ticker)
     data = payload["data"]
     rows = []
     for opt in data["options"]:
@@ -82,7 +75,7 @@ def etat_marche(ts_utc):
     return (et.weekday() < 5 and 9.5 <= heure < 16), et
 
 
-def classify(avant, apres):
+def classify(avant, apres, contract_size=CONTRACT_SIZE):
     """Compare deux relevés et renvoie le flux classifié de la fenêtre.
 
     Ne retient que les contrats dont le volume a augmenté ET dont l'horodatage
@@ -93,6 +86,10 @@ def classify(avant, apres):
     CBOE étant différé d'environ 15 minutes, last_trade_time est toujours en
     retard sur l'horodatage du payload, et une comparaison absolue ne matche
     jamais.
+
+    `contract_size` convertit le volume en prime : 100 pour une action ou un ETF,
+    mais tout autre chose sur un future — c'était codé en dur, donc faux dès qu'on
+    suivait autre chose qu'une action.
     """
     m = apres.merge(avant[["option", "volume", "last_time"]], on="option",
                     how="left", suffixes=("", "_avant"))
@@ -114,11 +111,11 @@ def classify(avant, apres):
     frais["pos"] = (frais.last - frais.bid) / (frais.ask - frais.bid)
     frais["cote"] = pd.cut(frais.pos, [-99, SEUIL_VENTE, SEUIL_ACHAT, 99],
                            labels=["vente", "milieu", "achat"])
-    frais["prime"] = frais.delta * frais.last * 100
+    frais["prime"] = frais.delta * frais.last * contract_size
     return frais
 
 
-def resume(flux, spot):
+def resume(flux):
     """Agrège le flux classifié : primes achetées/vendues par type d'option."""
     if flux.empty:
         return "  aucun trade classifiable dans cette fenêtre"
@@ -139,7 +136,7 @@ def resume(flux, spot):
     return "\n".join(lignes)
 
 
-def signed_gex(chemin_flux, ticker, contract_size=100):
+def signed_gex(chemin_flux, ticker, contract_size=CONTRACT_SIZE):
     """GEX signé par le flux mesuré, au lieu de la convention calls+/puts-.
 
     La convention postule que les dealers sont longs calls et shorts puts. Ici on
@@ -192,7 +189,7 @@ def signed_gex(chemin_flux, ticker, contract_size=100):
     return t, spot, t.gex_flux.sum(), gex_conv
 
 
-def afficher_signed(chemin_flux, ticker, contract_size=100):
+def afficher_signed(chemin_flux, ticker, contract_size=CONTRACT_SIZE):
     t, spot, gex_flux, gex_conv = signed_gex(chemin_flux, ticker, contract_size)
     ech = 1e9 if max(abs(gex_flux), abs(gex_conv)) >= 1e9 else 1e6
     unite = "Md$" if ech == 1e9 else "M$"
@@ -224,7 +221,7 @@ def _duree(txt):
     return int(val * {"h": 3600, "m": 60, "s": 1, "": 1}[unit])
 
 
-def track(ticker, interval=300, duration=6 * 3600, out=None):
+def track(ticker, interval=300, duration=6 * 3600, out=None, contract_size=CONTRACT_SIZE):
     """Boucle d'échantillonnage. Écrit le flux classifié au fil de l'eau."""
     out = out or f"flux_{ticker.lower()}.csv"
     avant, spot, ts = snapshot(ticker)
@@ -251,7 +248,7 @@ def track(ticker, interval=300, duration=6 * 3600, out=None):
             print(f"  relevé manqué ({type(err).__name__}) — on continue")
             continue
         maintenant = pd.Timestamp(ts).tz_localize(None) if ts.tz else pd.Timestamp(ts)
-        flux = classify(avant, apres)
+        flux = classify(avant, apres, contract_size)
         if not flux.empty:
             flux = flux.assign(snapshot=maintenant, spot=spot)
             cols = ["snapshot", "spot", "option", "StrikePrice", "cp", "expiry",
@@ -259,8 +256,8 @@ def track(ticker, interval=300, duration=6 * 3600, out=None):
             flux[cols].to_csv(out, mode="a", header=not os.path.exists(out), index=False)
             total += len(flux)
         print(f"[{maintenant:%H:%M:%S}] spot {spot:.2f} | {len(flux)} contrats actifs")
-        print(resume(flux, spot))
-        avant, debut = apres, maintenant
+        print(resume(flux))
+        avant = apres
 
     print(f"\n{total} lignes de flux écrites dans {out}")
     return out
@@ -276,14 +273,17 @@ def main():
                    help="délai entre relevés (300, 5m...) — sous 3m le bruit domine")
     p.add_argument("--duration", type=_duree, default="6h", help="durée totale (6h, 90m...)")
     p.add_argument("--out", help="fichier CSV de sortie")
+    p.add_argument("--contract-size", type=float, default=CONTRACT_SIZE,
+                   help=f"multiplicateur du contrat (défaut : {CONTRACT_SIZE}) — les primes "
+                        "et le GEX signé sont faux avec la mauvaise valeur")
     args = p.parse_args()
     if args.signed:
-        afficher_signed(args.signed, args.ticker)
+        afficher_signed(args.signed, args.ticker, args.contract_size)
         return
     if args.interval < 120:
         print("Attention : sous 2 minutes, les données différées du CBOE bougent peu "
               "et le bruit domine.\n")
-    track(args.ticker, args.interval, args.duration, args.out)
+    track(args.ticker, args.interval, args.duration, args.out, args.contract_size)
 
 
 if __name__ == "__main__":

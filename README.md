@@ -1,6 +1,6 @@
 <h1 align="center">Bienvenue pour l'Option Gamma Exposure et zero gamma level 👋</h1>
 <p>
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0-blue.svg?cacheSeconds=2592000" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.1-blue.svg?cacheSeconds=2592000" />
   <a href="#" target="_blank">
     <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" />
   </a>
@@ -22,6 +22,35 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` ne contient que le nécessaire pour les actions et indices US :
+numpy, pandas, scipy, matplotlib, requests. Les autres sources sont des extras, à
+n'installer que si on s'en sert :
+
+```sh
+pip install -e ".[databento]"    # chaînes CME par API
+pip install -e ".[cme]"          # exports CME au format Excel
+pip install -e ".[barchart]"     # scraping Barchart (selenium)
+pip install -e ".[snapshots]"    # archivage en parquet plutôt qu'en csv.gz
+pip install -e ".[dev]"          # tests
+```
+
+## Organisation
+
+| Module | Rôle |
+|---|---|
+| `main.py` | interface en ligne de commande, rien d'autre |
+| `greeks.py` | gamma, charm, vanna Black-Scholes, vectorisés — le seul endroit où une formule est écrite |
+| `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
+| `plots.py` | les quatre graphiques |
+| `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
+| `history.py` | historique des relevés |
+| `validate.py` | le modèle tient-il ? |
+| `cboe_data.py`, `cme_data.py`, `databento_data.py`, `barchart_data.py` | sources |
+| `flow_tracker.py` | suivi du flux et signe réel de la position dealer |
+
+Tout ce qui produit un chiffre est dans `analysis.py` et `greeks.py`, donc appelable
+sans réseau et couvert par les tests. C'était auparavant enfermé dans `main()`.
+
 ## Utilisation
 
 Actions et indices US, données récupérées automatiquement :
@@ -35,13 +64,51 @@ python main.py --csv spx_quotedata.csv   # export CSV manuel du site CBOE
 ```
 
 Le script affiche le Total GEX, le **Zero Gamma Level**, le Call Wall et le Put Wall,
-puis enregistre trois graphiques dans `charts/` :
+puis enregistre quatre graphiques dans `charts/` :
 
 | Fichier | Contenu |
 |---|---|
 | `<TICKER>_1_gamma_par_strike.png` | GEX net par strike |
 | `<TICKER>_2_calls_vs_puts.png` | Décomposition gamma calls / puts |
 | `<TICKER>_3_profil_zero_gamma.png` | Profil de gamma et zero gamma level |
+| `<TICKER>_4_charm_vanna.png` | Charm et vanna par strike |
+
+### D'où vient le gamma (`--gamma-source`)
+
+Le CBOE publie un gamma par contrat, et on peut aussi le recalculer en Black-Scholes
+depuis la volatilité implicite. Le script **mélangeait les deux sans le dire** : le
+Total GEX prenait le gamma publié pendant que le profil — donc le Zero Gamma affiché
+juste en dessous — recalculait depuis l'IV. Deux estimateurs pour deux chiffres
+présentés comme cohérents.
+
+Une seule source alimente désormais tout le pipeline, rappelée dans l'en-tête comme
+dans le titre des graphiques :
+
+```sh
+python main.py _SPX                             # --gamma-source iv (défaut)
+python main.py _SPX --gamma-source published    # le gamma tel que diffusé
+```
+
+Le défaut est `iv` parce que c'est le seul choix cohérent de bout en bout : à un
+niveau de spot hypothétique, aucun gamma publié n'existe, donc le profil ne peut
+être que recalculé. Avec `published`, le Total GEX et le Zero Gamma viennent
+forcément d'estimateurs différents — le script le dit alors explicitement, avec
+l'écart mesuré.
+
+Une fois la mesure du temps corrigée (voir *Mesure du temps restant* plus bas), les
+deux sources se rejoignent sur les horizons courants. Relevé du SPX du 12 août 2026 :
+
+| horizon | gamma publié | recalculé (`iv`) | écart |
+|---|---|---|---|
+| ≤ 1 j | +5,06 Md | +5,64 Md | +11,4 % |
+| ≤ 7 j | +15,37 Md | +15,62 Md | +1,7 % |
+| ≤ 30 j (défaut) | +39,89 Md | +39,46 Md | −1,1 % |
+| toute la chaîne | +87,92 Md | +76,96 Md | −12,5 % |
+
+L'écart subsiste là où l'on s'y attend : sur les 0-1 DTE, où le gamma explose et
+dépend du spot à la minute que des données différées ne donnent pas ; et sur les
+LEAPS, où l'hypothèse `r = q = 0` cesse d'être neutre. Au-delà de 5 %, le script
+le signale.
 
 ### Horizon d'échéance (`--dte-max`)
 
@@ -84,6 +151,42 @@ SPX donne 7 800 / 7 700 en gamma — soit le spot paraphrasé, à ±1 % — cont
 en open interest. Les deux lectures répondent à des questions différentes : où le hedging
 mord le plus, et où les positions sont réellement accumulées.
 
+### Zero gamma : quel croisement ?
+
+Le profil peut repasser par zéro plusieurs fois, dès que les ailes sont bruyantes. Le
+script retenait le **premier** croisement de la fenêtre, donc le plus bas : sur un profil
+croisant en 91,5 et 104,5 avec un spot à 100, il annonçait 91,5, soit 8,5 % sous le spot,
+alors que la bascule de régime se joue juste au-dessus.
+
+C'est maintenant le croisement **le plus proche du spot** qui est retenu — celui qui
+délimite le régime dans lequel le marché se trouve effectivement. Les autres sont
+signalés dans la sortie et tracés en pointillés sur le troisième graphique :
+
+```
+Attention : le profil croise zéro 2 fois (également en 7,412.30). Le niveau retenu est
+le plus proche du spot ; le régime n'est pas une simple bascule au-dessus / en dessous.
+```
+
+### Rejouer une séance (`--replay`)
+
+Chaque exécution archive la chaîne **brute** dans `snapshots/<TICKER>/<date>.parquet`
+(quelques centaines de Ko pour un SPX complet), avant tout filtre. `history.csv` ne
+garde que les agrégats : sans l'archive, impossible de rejouer une séance passée à un
+autre horizon, ni de corriger une erreur de méthode autrement qu'en attendant que
+l'historique se reconstitue.
+
+```sh
+python snapshots.py                # les relevés archivés
+python snapshots.py SPX
+
+python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --dte-max 7
+python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --gamma-source published
+python main.py SPCX --no-snapshot  # ne pas archiver
+```
+
+Un rejeu ne réarchive pas et ne consomme aucune requête réseau. Le format est parquet
+si `pyarrow` est installé, sinon `csv.gz`.
+
 ### Charm et vanna
 
 Le gamma décrit la réaction à un mouvement de prix. Il ne dit rien des flux de couverture
@@ -123,18 +226,22 @@ python main.py SPCX --no-history      # ne pas enregistrer
 ```
 
 ```
-ticker                date       spot        GEX   zero gam   call w.    put w.    charm/j
-SPCX      2026-08-03 16:00     114.85     -58.7M     137.51    160.00    100.00    -120.0M
-SPCX      2026-08-06 16:00     110.48    -147.8M     124.02    115.00    110.00    -180.0M
-SPCX      2026-08-10 16:00     134.10      +3.1M     132.02    150.00    150.00    -150.0M
+ticker    dte     gamma              date       spot        GEX   zero gam   call w.    put w.
+SPCX       30        iv  2026-08-03 16:00     114.85     -58.7M     137.51    160.00    100.00
+SPCX       30        iv  2026-08-06 16:00     110.48    -147.8M     124.02    115.00    110.00
+SPCX       30        iv  2026-08-10 16:00     134.10      +3.1M     132.02    150.00    150.00
 
 variation sur 3 relevés :
   GEX              -58.7M ->        +3.1M       +61.8M   changement de signe
   le régime a changé de signe sur la période (gamma positif <-> négatif)
 ```
 
-Le périmètre (`dte_max`) est enregistré avec chaque ligne : deux relevés du même jour sur
-des horizons différents ne sont pas comparables, et rien d'autre ne les distinguerait.
+Le périmètre (`dte_max`) **et** la source de gamma sont enregistrés avec chaque ligne :
+deux relevés du même jour qui n'en partagent pas ne sont pas comparables — le GEX change
+de signe rien qu'en changeant d'horizon, et de plus de 10 % rien qu'en changeant de source.
+L'affichage les sépare donc en sections plutôt que de les enchaîner dans une même série.
+Un historique écrit par une version antérieure est migré automatiquement, sans décalage
+de colonnes.
 
 ### Validation : le modèle tient-il ?
 
@@ -155,6 +262,18 @@ En dessous de 20 intervalles, le script affiche les chiffres mais refuse d'en co
 quoi que ce soit, et le dit. Il faut donc laisser l'historique s'accumuler — un relevé
 par séance. Ce n'est pas un backtest de stratégie : on vérifie que la description du
 terrain est exacte, pas qu'on peut en tirer de l'argent.
+
+Deux garde-fous, sans lesquels la mesure se mesurait elle-même :
+
+- **un périmètre à la fois.** Les relevés sont regroupés par (sous-jacent, `dte_max`,
+  source de gamma, convention de temps). Les enchaîner classait le régime d'après un
+  GEX qui changeait de signe rien qu'en changeant d'horizon — le cas du SPX cité plus
+  haut, +70,8 Md sur toute la chaîne contre −1,1 Md sur le 0–7 DTE.
+- **une séance = une observation.** Deux exécutions du même jour ne sont pas deux
+  points : seule la dernière est retenue, et les intervalles de moins d'une demi-journée
+  sont écartés. Normalisé en racine du temps, un mouvement réel de 0,2 % sur 20 minutes
+  ressortait à **1,7 % par jour**, et cette valeur entrait telle quelle dans la médiane
+  comparée entre régimes.
 
 ### Mesure du temps restant (`--time-convention`)
 
@@ -193,7 +312,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 96 tests, aucun accès réseau
+python -m pytest tests -q        # 132 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
@@ -201,6 +320,17 @@ même formule que le code et ne prouveraient rien. Charm et vanna sont recoupés
 **différences finies** sur le delta, le gamma Black-Scholes contre Black-76, et les parsers
 contre des jeux construits depuis des paramètres connus (on vérifie qu'on retrouve le prix
 du future, l'IV et le gamma injectés).
+
+`tests/test_analysis.py` couvre le pipeline lui-même — filtre d'échéance, murs, profil,
+zero gamma, source de gamma, convention de temps, archivage, graphiques. Cette logique
+vivait dans `main()` : les tests précédents validaient les formules et les parsers, et
+pas un seul des chiffres réellement affichés. Les chaînes d'essai y sont construites
+depuis des paramètres connus, avec un open interest volontairement asymétrique entre
+calls et puts — à OI égal, GEX net, charm et vanna sont identiquement nuls et la suite
+passerait sur du vide.
+
+La CI (`.github/workflows/tests.yml`) lance la suite sur Python 3.11 et 3.13 à chaque
+push et chaque pull request.
 
 ### Options sur futures (EUR/USD via le 6E, ES, ...)
 
@@ -249,7 +379,7 @@ modeste, mais évite les boucles sur de longues périodes.
 ### Barchart (options sur futures, gratuit mais aléatoire)
 
 ```sh
-python Scrap-data.py E6U26 --expiry aug-26 --out barchart_6E.csv
+python barchart_data.py E6U26 --expiry aug-26 --out barchart_6E.csv
 python main.py 6E --cme barchart_6E.csv --expiry 2026-08-28
 ```
 
@@ -276,6 +406,7 @@ dernier trade a avancé fournit un trade neuf, situable dans sa fourchette.
 ```sh
 python flow_tracker.py ORCL --interval 300 --duration 6h
 python flow_tracker.py SPCX --interval 180 --out flux_spcx.csv
+python flow_tracker.py ES --interval 300 --contract-size 50   # le multiplicateur n'est pas toujours 100
 ```
 
 À lancer **pendant la séance** (9h30–16h ET), en comptant 15 minutes de plus :
