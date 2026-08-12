@@ -172,6 +172,9 @@ def main():
     parser.add_argument("--dte-max", type=dte_arg, default=30, metavar="N",
                         help="ne garder que les échéances à N jours calendaires ou moins "
                              "(défaut : 30 ; 'all' pour toute la chaîne)")
+    parser.add_argument("--dte-min", type=int, default=0, metavar="N",
+                        help="exclure les échéances à moins de N jours (0DTE instables "
+                             "avec des données différées ; essayer 2)")
     parser.add_argument("--wall-range", type=float, default=0.15,
                         help="demi-plage de recherche des murs gamma autour du spot (0.15 = +/-15%%)")
     parser.add_argument("--oi-wall-range", type=float, default=0.30,
@@ -218,7 +221,7 @@ def main():
     # Le filtre s'applique ici, avant tout calcul, pour que murs et profil de gamma
     # portent sur le même périmètre.
     dte = (df.ExpirationDate - pd.Timestamp(today_date)).dt.days
-    kept = dte >= 0          # une échéance passée n'a plus de gamma : elle fausse le GEX par strike
+    kept = dte >= max(0, args.dte_min)   # une échéance passée n'a plus de gamma
     if args.dte_max is not None:
         kept &= dte <= args.dte_max
     if not kept.any():
@@ -339,6 +342,27 @@ def main():
         print("Attention : pas de changement de signe du gamma dans la plage analysée "
               f"({from_strike:,.2f} - {to_strike:,.2f}) — élargis avec --range, "
               "ou allonge l'horizon avec --dte-max.")
+
+    # ---=== QUALITÉ DES DONNÉES ===---
+    # Le gamma publié par la source et celui recalculé depuis l'IV s'accordent bien
+    # au-delà de quelques jours, mais divergent violemment sur les 0-1 DTE (médiane
+    # 0,75 sur le SPX, 82 % des contrats à plus de 10 % d'écart). C'est intrinsèque :
+    # près de l'échéance le gamma explose et dépend du spot à la minute, que des
+    # données différées ne donnent pas. On ne corrige pas, on signale.
+    # Le charm y est bien plus exposé que le gamma (il varie en 1/T) : sur le SPX,
+    # les 0-1 DTE pèsent 17 % du GEX mais 66 % du charm. On surveille donc les deux.
+    tres_proche = (df.ExpirationDate - pd.Timestamp(today_date)).dt.days <= 1
+    if tres_proche.any():
+        parts = {nom: abs(df.loc[tres_proche, col].sum()) / abs(total)
+                 for nom, col, total in (("du GEX", "TotalGamma", total_gex),
+                                         ("du charm", "TotalCharm", total_charm))
+                 if total}
+        pire = max(parts.items(), key=lambda kv: kv[1], default=None)
+        if pire and pire[1] > 0.20:
+            detail = ", ".join(f"{p:.0%} {nom}" for nom, p in parts.items())
+            print(f"\nAttention : les échéances à 0-1 jour portent {detail}. Leurs greeks "
+                  f"sont instables\nsur des données différées — compare avec --dte-min 2 "
+                  f"avant de conclure.\n")
 
     def fmt(x):
         return f"{x:,.{decimals}f}" if x is not None else "n/a"

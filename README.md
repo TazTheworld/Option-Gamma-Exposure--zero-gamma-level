@@ -136,10 +136,46 @@ variation sur 3 relevés :
 Le périmètre (`dte_max`) est enregistré avec chaque ligne : deux relevés du même jour sur
 des horizons différents ne sont pas comparables, et rien d'autre ne les distinguerait.
 
+### Validation : le modèle tient-il ?
+
+```sh
+python validate.py            # tous les tickers
+python validate.py SPCX
+```
+
+Le modèle avance deux affirmations vérifiables, et `validate.py` les mesure sur
+l'historique — sans source de prix externe, la colonne `spot` faisant office de série :
+
+1. **les mouvements sont plus amples en gamma négatif** — amplitude médiane par jour,
+   comparée entre les deux régimes, puis selon la position vis-à-vis du zero gamma ;
+2. **le prix respecte les murs** — fréquence de franchissement du call wall et du put wall,
+   dont les cas où le mur était à moins de 5 %.
+
+En dessous de 20 intervalles, le script affiche les chiffres mais refuse d'en conclure
+quoi que ce soit, et le dit. Il faut donc laisser l'historique s'accumuler — un relevé
+par séance. Ce n'est pas un backtest de stratégie : on vérifie que la description du
+terrain est exacte, pas qu'on peut en tirer de l'argent.
+
+### Fiabilité des greeks proches de l'échéance
+
+Le gamma publié par le CBOE et celui recalculé depuis l'IV s'accordent bien au-delà de
+quelques jours, et divergent violemment sur les 0-1 DTE : sur le SPX, écart médian de
+25 % et 82 % des contrats à plus de 10 %. C'est intrinsèque — près de l'échéance le
+gamma explose et dépend du spot à la minute, que des données différées ne donnent pas.
+
+Le script le signale quand ces échéances pèsent plus de 20 % du GEX **ou du charm** :
+
+```
+Attention : les échéances à 0-1 jour portent 15% du GEX, 67% du charm.
+```
+
+Le charm y est bien plus exposé que le gamma, puisqu'il varie en 1/T. `--dte-min 2`
+les exclut ; comparer les deux lectures avant de conclure.
+
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 77 tests, aucun accès réseau
+python -m pytest tests -q        # 88 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
