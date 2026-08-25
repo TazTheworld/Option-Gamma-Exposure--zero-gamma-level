@@ -1,71 +1,60 @@
 {
-  "source": "Interactive Brokers, TWS differe, 2026-08-25 22:04 CEST",
+  "source": "Interactive Brokers, TWS differe, 2026-08-25 20:30 UTC (16h30 New York)",
+  "note": "Echeances horodatees a l'heure de reglement servie par IB, et valorisation a l'instant de collecte. Le 0DTE du 25, regle a 16h NY, est ecarte : il etait deja mort au moment du releve.",
   "ticker": "NQ",
   "contract_size": 20,
-  "spot": 29267.25,
-  "quote_date": "2026-08-25 00:00:00",
-  "lignes": 318,
-  "strikes": 106,
-  "echeances": 3,
-  "total_gex": -330560546.6187613,
-  "total_charm": -56407064.17445466,
-  "total_vanna": 3336596.9816428535,
+  "spot": 29305.75,
+  "quote_date": "2026-08-25 20:30:16.235160",
+  "lignes_collectees": 568,
+  "lignes_analysees": 426,
+  "echeances_collectees": 4,
+  "echeances_analysees": 3,
+  "strikes": 142,
+  "total_gex": -357422192.63770145,
+  "total_charm": -15932881.866839863,
+  "total_vanna": 3177811.5615802347,
   "zero_gamma": null,
   "call_wall": null,
-  "put_wall": 29000.0,
+  "put_wall": 29200.0,
   "call_wall_oi": null,
-  "put_wall_oi": 29000.0,
-  "open_interest_total": 2143.0,
-  "black76": [
-    {
-      "F": 29267.25,
-      "K": 28000.0,
-      "vol": 0.18,
-      "T": 0.019,
-      "r": 0.0,
-      "gamma": 0.0001094178164645857,
-      "call": 1277.8029889086756,
-      "put": 10.552988908674706
-    },
-    {
-      "F": 29267.25,
-      "K": 29000.0,
-      "vol": 0.18,
-      "T": 0.019,
-      "r": 0.0,
-      "gamma": 0.0005107053863433261,
-      "call": 441.4765816056315,
-      "put": 174.2265816056315
-    },
-    {
-      "F": 29267.25,
-      "K": 29267.25,
-      "vol": 0.18,
-      "T": 0.019,
-      "r": 0.0,
-      "gamma": 0.0005493453136212468,
-      "call": 289.6877623752662,
-      "put": 289.6877623752662
-    },
-    {
-      "F": 29267.25,
-      "K": 29500.0,
-      "vol": 0.18,
-      "T": 0.019,
-      "r": 0.0,
-      "gamma": 0.0005241228024444843,
-      "call": 189.1608810281432,
-      "put": 421.91088102813956
-    },
-    {
-      "F": 29267.25,
-      "K": 30500.0,
-      "vol": 0.18,
-      "T": 0.019,
-      "r": 0.0,
-      "gamma": 0.0001407260207652456,
-      "call": 14.832062166891546,
-      "put": 1247.5820621668936
-    }
-  ]
+  "put_wall_oi": 28750.0,
+  "open_interest_total": 2885.0,
+  "black76_sonde": {
+    "F": 29267.25,
+    "vol": 0.18,
+    "T": 0.019,
+    "r": 0.0,
+    "cas": [
+      {
+        "K": 28000.0,
+        "gamma": 0.0001094178164645857,
+        "call": 1277.8029889086756,
+        "put": 10.552988908674706
+      },
+      {
+        "K": 29000.0,
+        "gamma": 0.0005107053863433261,
+        "call": 441.4765816056315,
+        "put": 174.2265816056315
+      },
+      {
+        "K": 29267.25,
+        "gamma": 0.0005493453136212468,
+        "call": 289.6877623752662,
+        "put": 289.6877623752662
+      },
+      {
+        "K": 29500.0,
+        "gamma": 0.0005241228024444843,
+        "call": 189.1608810281432,
+        "put": 421.91088102813956
+      },
+      {
+        "K": 30500.0,
+        "gamma": 0.0001407260207652456,
+        "call": 14.832062166891546,
+        "put": 1247.5820621668936
+      }
+    ]
+  }
 }

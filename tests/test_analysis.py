@@ -594,3 +594,53 @@ def test_les_quatre_graphiques_sont_ecrits(tmp_path):
     assert all(p.endswith(".png") for p in chemins)
     import os
     assert all(os.path.getsize(p) > 0 for p in chemins)
+
+
+# ---=== echeances horodatees : jours calendaires, et contrats deja regles ===---
+
+def _chaine_horodatee(instants):
+    """Chaîne minimale dont les échéances portent une heure de règlement."""
+    lignes = []
+    for instant in instants:
+        for k in (95.0, 100.0, 105.0):
+            lignes.append({"ExpirationDate": pd.Timestamp(instant), "StrikePrice": k,
+                           "CallIV": 0.2, "PutIV": 0.2, "CallGamma": 0.0, "PutGamma": 0.0,
+                           "CallOpenInt": 100.0, "PutOpenInt": 100.0,
+                           "CallDelta": 0.0, "PutDelta": 0.0})
+    df = pd.DataFrame(lignes)
+    for colonne in COLUMNS + chain.COLONNES_GRECS:
+        if colonne not in df.columns:
+            df[colonne] = 0.0
+    return df[COLUMNS + chain.COLONNES_GRECS]
+
+
+def test_dte_compte_des_jours_calendaires_pas_du_temps_ecoule():
+    """« 1DTE » doit vouloir dire « expire demain ». En soustrayant les instants,
+    une échéance de demain 9h30 vue ce soir à 20h04 compterait zéro jour, et
+    --dte-max filtrerait autre chose que ce qu'il annonce."""
+    df = _chaine_horodatee(["2026-08-26 09:30:00"])
+    dte = analysis.dte_calendaire(df, pd.Timestamp("2026-08-25 20:04:00"))
+    assert set(dte) == {1}
+
+
+def test_un_contrat_deja_regle_est_ecarte():
+    """Le garder serait pire que l'écarter : time_to_expiry plancherait son T à
+    une minute, et le gamma variant en 1/racine(T), ce contrat mort dominerait
+    toute la chaîne."""
+    df = _chaine_horodatee(["2026-08-25 09:30:00", "2026-08-25 16:00:00"])
+    # 12h00 UTC = 8h00 New York : la mensuelle du matin n'est pas encore réglée
+    tot = analysis.filtre_echeances(df, pd.Timestamp("2026-08-25 12:00:00"), dte_max=1)
+    assert tot.ExpirationDate.nunique() == 2
+    # 14h00 UTC = 10h00 New York : elle l'est, l'autre non
+    tard = analysis.filtre_echeances(df, pd.Timestamp("2026-08-25 14:00:00"), dte_max=1)
+    assert tard.ExpirationDate.nunique() == 1
+    assert tard.ExpirationDate.max() == pd.Timestamp("2026-08-25 16:00:00")
+
+
+def test_une_echeance_horodatee_donne_un_temps_restant_reel():
+    """Le défaut que ceci ferme : à minuit, le temps restant d'un 0DTE valait le
+    décalage EDT/UTC — quatre heures accordées à un contrat parfois déjà mort."""
+    df = _chaine_horodatee(["2026-08-25 16:00:00"])
+    T, _ = analysis.time_to_expiry(df.ExpirationDate, pd.Timestamp("2026-08-25 18:00:00"))
+    # 16h00 New York = 20h00 UTC ; il reste donc deux heures
+    assert T[0] * 365 * 24 == pytest.approx(2.0, abs=1e-6)

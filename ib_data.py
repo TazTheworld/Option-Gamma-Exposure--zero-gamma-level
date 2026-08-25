@@ -80,12 +80,69 @@ COLONNES_CARNET = [f"{cote}{champ}" for cote in ("Call", "Put")
 CHAMPS_VIFS = ["IV", "Gamma"]
 
 
+# ExpirationDate est exprimée en heure de New York, et l'instant de valorisation
+# en UTC : c'est le contrat qu'analysis.time_to_expiry() applique, et les relevés
+# déjà archivés le suivent. En changer réécrirait le sens de tous les fichiers.
+FUSEAU_ECHEANCE = "America/New_York"
+
+# Faute de mieux, la clôture de la séance actions. Voir instant_echeance().
+HEURE_CLOTURE_NY = 16
+
+
 def _quote_date(valeur=None):
-    """Date de valorisation normalisée, sans fuseau."""
+    """Instant de valorisation, en UTC et sans fuseau attaché.
+
+    L'heure est gardée, et ce n'est pas un détail. La normaliser à minuit — ce que
+    faisait cette fonction — donnait deux chiffres faux d'un coup. Le temps restant
+    d'un 0DTE devenait le décalage EDT/UTC, soit quatre heures accordées à un
+    contrat parfois déjà expiré, sur des échéances qui portent 82 % du GEX. Et
+    main.suivre(), qui n'enregistre un relevé que si quote_date a bougé, n'en
+    voyait jamais bouger aucune : un outil de suivi intraséance écrivait une ligne
+    par jour, en annonçant « flux inchangé ».
+    """
     ts = pd.Timestamp(valeur) if valeur is not None else pd.Timestamp.now("UTC")
     if ts.tz is not None:
-        ts = ts.tz_localize(None)
-    return ts.normalize()
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts
+
+
+def instant_echeance(jour, last_trade_time=None, time_zone_id=None):
+    """L'échéance datée ET horodatée, en heure de New York.
+
+    IB sert l'heure de dernière négociation dans le fuseau de la place, et les
+    classes ne s'accordent pas : 15h00 US/Central pour une hebdomadaire NQ, soit
+    16h00 New York, mais **08h30 pour une mensuelle**, soit 9h30 — elle est réglée
+    au MATIN. Coder 16h en dur, la convention des actions, décalerait les
+    mensuelles de six heures et demie ; le jour de l'échéance, c'est la différence
+    entre un contrat vivant et un contrat mort.
+
+    Sans heure — IB cesse de la servir une fois l'échéance passée — on retombe sur
+    la clôture, 16h00 New York. C'est un majorant : il fait survivre un contrat
+    quelques heures de trop plutôt que de le tuer trop tôt, et filtre_echeances()
+    écarte de toute façon ce qui est déjà échu.
+    """
+    base = pd.Timestamp(jour).normalize()
+    heure = str(last_trade_time or "").strip()
+    if not heure:
+        return base + pd.Timedelta(hours=HEURE_CLOTURE_NY)
+
+    try:
+        morceaux = [int(x) for x in heure.split(":")]
+    except ValueError as err:
+        raise ValueError(f"Heure d'échéance illisible chez IB : {heure!r}") from err
+    morceaux += [0] * (3 - len(morceaux))
+    local = base + pd.Timedelta(hours=morceaux[0], minutes=morceaux[1],
+                                seconds=morceaux[2])
+
+    fuseau = str(time_zone_id or "").strip()
+    if not fuseau:
+        return local
+    from zoneinfo import ZoneInfo
+    # Un fuseau inconnu doit éclater ici : le traiter comme New York décalerait
+    # l'échéance d'une heure ronde sans que rien ne le signale.
+    return (local.tz_localize(ZoneInfo(fuseau), nonexistent="shift_forward",
+                              ambiguous=True)
+            .tz_convert(FUSEAU_ECHEANCE).tz_localize(None))
 
 
 def echeances_utiles(echeances, quote_date=None, dte_max=30, dte_min=0):
@@ -101,7 +158,9 @@ def echeances_utiles(echeances, quote_date=None, dte_max=30, dte_min=0):
 
     `dte_max=None` garde toutes les échéances (le 'all' de main.py).
     """
-    quote_date = _quote_date(quote_date)
+    # Des jours calendaires, donc une comparaison de dates : avec l'heure de
+    # collecte, une échéance du jour rendrait -1 et serait écartée à tort.
+    quote_date = _quote_date(quote_date).normalize()
     dates = pd.to_datetime(pd.Series(list(echeances), dtype="object"),
                            errors="coerce").dropna()
 
@@ -555,15 +614,24 @@ def enumerer(ib, futur, dte_max=30, dte_min=0, quote_date=None, exchange="CME",
         details = ib.reqContractDetails(
             FuturesOption(futur.symbol, lastTradeDateOrContractMonth=jour,
                           exchange=exchange))
+        # L'heure est la même pour toute l'échéance : on la lit sur le premier
+        # contrat qui la porte, et on la sert à tous.
+        horaire = next((d for d in details if getattr(d, "lastTradeTime", "")), None)
+        echue = instant_echeance(
+            exp,
+            getattr(horaire, "lastTradeTime", None) if horaire else None,
+            getattr(horaire, "timeZoneId", None) if horaire else None)
+
         for d in details:
             c = d.contract
             if str(c.right).upper()[:1] not in ("C", "P"):
                 continue
             lignes.append({"conId": c.conId, "StrikePrice": float(c.strike),
-                           "ExpirationDate": pd.Timestamp(exp),
+                           "ExpirationDate": echue,
                            "right": str(c.right).upper()[:1]})
         if progres:
-            print(f"  {jour} : {len(details)} contrats")
+            defaut = "" if horaire else "  (heure non servie : clôture supposée)"
+            print(f"  {jour} : {len(details)} contrats, échéance {echue:%H:%M} NY{defaut}")
 
     if not lignes:
         raise ValueError("Aucun contrat d'option énuméré sur l'horizon demandé.")

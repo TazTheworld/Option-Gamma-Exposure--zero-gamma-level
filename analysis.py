@@ -28,8 +28,16 @@ SOURCES_GAMMA = ("iv", "published")
 # ---=== Filtre d'échéance ===---
 
 def dte_calendaire(df, quote_date):
-    """Jours calendaires jusqu'à l'échéance, une valeur par ligne."""
-    return (df.ExpirationDate - pd.Timestamp(quote_date)).dt.days
+    """Jours calendaires jusqu'à l'échéance, une valeur par ligne.
+
+    Les deux bornes sont ramenées à leur date. Depuis que l'échéance porte son
+    heure de règlement et la valorisation son heure de collecte, soustraire les
+    instants ferait qu'une échéance de demain matin, vue ce soir, compterait zéro
+    jour — « 1DTE » cesserait de vouloir dire « expire demain », et --dte-max
+    filtrerait autre chose que ce qu'il annonce.
+    """
+    return (df.ExpirationDate.dt.normalize()
+            - pd.Timestamp(quote_date).normalize()).dt.days
 
 
 def filtre_echeances(df, quote_date, dte_max=30, dte_min=0):
@@ -44,6 +52,12 @@ def filtre_echeances(df, quote_date, dte_max=30, dte_min=0):
     """
     dte = dte_calendaire(df, quote_date)
     garde = dte >= max(0, dte_min)      # une échéance passée n'a plus de gamma
+
+    # Et le jour même ne suffit plus : depuis que les deux bornes portent une
+    # heure, un 0DTE peut être déjà réglé. Le garder serait pire que l'écarter —
+    # time_to_expiry() plancherait son T à une minute, et le gamma variant en
+    # 1/racine(T), ce contrat mort dominerait toute la chaîne.
+    garde &= echeances_en_utc(df.ExpirationDate) > instant_releve(quote_date)
     if dte_max is not None:
         garde &= dte <= dte_max
     if not garde.any():
@@ -54,6 +68,32 @@ def filtre_echeances(df, quote_date, dte_max=30, dte_min=0):
                          f"(la plus proche est à {int(futures.min())} jours) — "
                          f"élargis avec --dte-max {int(futures.min())}, ou --dte-max all")
     return df[garde].copy()
+
+
+FUSEAU_ECHEANCE = "America/New_York"
+
+
+def echeances_en_utc(expirations):
+    """Les échéances ramenées en UTC.
+
+    ExpirationDate est exprimée en heure de New York et l'instant de valorisation
+    en UTC : c'est le contrat du dépôt, et les relevés déjà archivés le suivent.
+    La conversion est écrite ici et nulle part ailleurs — la dupliquer donnerait
+    deux versions qui finiraient par diverger d'une heure, l'écart le plus discret
+    qui soit puisqu'il ne change ni le signe ni l'ordre de grandeur.
+    """
+    from zoneinfo import ZoneInfo
+    exp = pd.to_datetime(pd.Series(expirations).values)
+    return (pd.DatetimeIndex(exp)
+            .tz_localize(ZoneInfo(FUSEAU_ECHEANCE), nonexistent="shift_forward",
+                         ambiguous=True)
+            .tz_convert("UTC").tz_localize(None))
+
+
+def instant_releve(asof):
+    """L'instant de valorisation, en UTC et sans fuseau attaché."""
+    ts = pd.Timestamp(asof)
+    return ts.tz_convert("UTC").tz_localize(None) if ts.tz else ts
 
 
 CONVENTIONS_TEMPS = ("heures", "bourse")
@@ -80,16 +120,11 @@ def time_to_expiry(expirations, asof, convention="heures"):
             exp.to_numpy().astype("datetime64[D]"))   # pandas ne caste pas en [D]
         return np.where(jours == 0, 1, jours) / TRADING_DAYS, TRADING_DAYS
 
-    from zoneinfo import ZoneInfo
-    # ExpirationDate porte déjà 16h00, entendues en heure de New York ; l'horodatage
-    # de la source est en UTC. On aligne les deux avant de soustraire.
-    ny = ZoneInfo("America/New_York")
-    exp_utc = (pd.DatetimeIndex(exp).tz_localize(ny, nonexistent="shift_forward",
-                                                 ambiguous=True).tz_convert("UTC")
-               .tz_localize(None))
-    maintenant = pd.Timestamp(asof)
-    maintenant = maintenant.tz_convert("UTC").tz_localize(None) if maintenant.tz else maintenant
-    restant = (exp_utc - maintenant).total_seconds().to_numpy()
+    # ExpirationDate porte l'heure de règlement servie par IB, entendue en heure
+    # de New York ; l'horodatage du relevé est en UTC. On aligne avant de
+    # soustraire, faute de quoi l'écart des deux fuseaux passerait pour du temps
+    # restant — c'est exactement ce qui donnait quatre heures de vie à un 0DTE.
+    restant = (echeances_en_utc(exp) - instant_releve(asof)).total_seconds().to_numpy()
     # une minute de plancher : à T strictement nul le gamma diverge
     return np.maximum(restant, 60.0) / (365.0 * 24 * 3600), 365.0
 

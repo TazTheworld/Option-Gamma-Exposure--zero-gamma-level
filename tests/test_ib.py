@@ -772,3 +772,55 @@ def test_avec_conid_preserve_l_ordre_de_selection():
                         "right": ["C", "C", "C"]})
     rendu = ib_data.avec_conid(vif, catalogue)
     assert list(rendu.StrikePrice) == [29_200.0, 29_000.0, 29_100.0]
+
+
+# ---=== l'heure de l'echeance, et celle du releve ===---
+
+def test_instant_echeance_convertit_le_fuseau_de_la_place():
+    """IB sert 15h00 US/Central pour une hebdomadaire NQ, soit 16h00 New York."""
+    obtenu = ib_data.instant_echeance("20260826", "15:00:00", "US/Central")
+    assert obtenu == pd.Timestamp("2026-08-26 16:00:00")
+
+
+def test_instant_echeance_les_mensuelles_sont_reglees_le_matin():
+    """C'est le piège que coder 16h en dur aurait manqué : la mensuelle NQ expire
+    à 08h30 US/Central, soit 9h30 New York — six heures et demie plus tôt que
+    l'hebdomadaire, ce qui le jour de l'échéance sépare le vivant du mort."""
+    obtenu = ib_data.instant_echeance("20260918", "08:30:00", "US/Central")
+    assert obtenu == pd.Timestamp("2026-09-18 09:30:00")
+
+
+def test_instant_echeance_sans_heure_suppose_la_cloture():
+    """IB cesse de servir l'heure une fois l'échéance passée. Le majorant fait
+    survivre le contrat quelques heures de trop plutôt que de le tuer trop tôt."""
+    assert ib_data.instant_echeance("20260825") == pd.Timestamp("2026-08-25 16:00:00")
+    assert ib_data.instant_echeance("20260825", "", "") == pd.Timestamp("2026-08-25 16:00:00")
+
+
+def test_instant_echeance_refuse_un_fuseau_inconnu():
+    """Le traiter comme New York décalerait l'échéance d'une heure ronde sans que
+    rien ne le signale."""
+    with pytest.raises(Exception):
+        ib_data.instant_echeance("20260826", "15:00:00", "Mars/Olympus_Mons")
+
+
+def test_quote_date_garde_l_heure_de_collecte():
+    """La régression que ce test ferme : .normalize() écrasait l'heure, ce qui
+    donnait au 0DTE le décalage EDT/UTC pour temps restant et empêchait
+    main.suivre() de jamais voir un relevé avancer."""
+    assert ib_data._quote_date("2026-08-25 20:04:37") == pd.Timestamp("2026-08-25 20:04:37")
+
+
+def test_quote_date_ramene_a_utc():
+    """L'échéance est en heure de New York, le relevé en UTC : c'est le contrat
+    qu'applique time_to_expiry, et les archives le suivent."""
+    assert (ib_data._quote_date(pd.Timestamp("2026-08-25 16:04:00", tz="America/New_York"))
+            == pd.Timestamp("2026-08-25 20:04:00"))
+
+
+def test_echeances_utiles_compte_des_jours_pas_des_heures():
+    """Avec l'heure de collecte, une échéance du jour rendrait -1 en soustrayant
+    les instants, et serait écartée alors qu'elle est précisément le 0DTE."""
+    retenues = ib_data.echeances_utiles(
+        ["20260825", "20260826"], quote_date="2026-08-25 20:04:00", dte_max=1, dte_min=0)
+    assert [d.date().isoformat() for d in retenues] == ["2026-08-25", "2026-08-26"]
