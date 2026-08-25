@@ -141,12 +141,14 @@ plage. Construire un produit cartésien à partir des strikes et des échéances
 cotés.
 
 Une contrainte de marché s'y ajoute, qu'il ne faut pas prendre pour une anomalie.
-Le CME ne liste, sur une échéance hebdomadaire NQ, que vingt-cinq strikes de part
-et d'autre du règlement de la veille — au pas de vingt-cinq points, cela fait
-environ ±2,5 %. Au-delà, les contrats n'existent pas : seules les échéances
-mensuelles et trimestrielles portent les strikes lointains. Demander `--range
-0.2` ne rend donc pas ±20 % sur les échéances courtes, et `perimetre()` doit le
-savoir plutôt que de compter des contrats manquants comme une erreur.
+Le CME ne liste, sur une échéance hebdomadaire NQ, qu'une vingtaine de strikes de
+part et d'autre du règlement de la veille. Le pas n'est pas régulier : relevé sur
+la chaîne réelle du 25 août 2026, il vaut **cinquante points près de la monnaie et
+cent au large** — 28900, 29000, 29100, 29200, 29250, 29300, 29400, 29500. Au-delà
+de cette grille les contrats n'existent pas : seules les échéances mensuelles et
+trimestrielles portent les strikes lointains. Demander `--range 0.2` ne rend donc
+pas ±20 % sur les échéances courtes, et `perimetre()` doit le savoir plutôt que de
+compter des contrats manquants comme une erreur.
 
 ```
 build_chain(defs, ticks, futures_price, quote_date, rate) -> (df, prix, date)
@@ -166,12 +168,16 @@ interest, alors que le socle vient précisément de mesurer où le gamma se trou
 La sélection est refaite quand le spot sort de la bande couverte, sinon les
 lignes entretenues finissent par ne plus regarder là où ça se passe.
 
-Le budget tombe mieux qu'on ne l'avait prévu. Quatre-vingt-dix lignes font
-quarante-cinq strikes, soit environ ±2,5 % — exactement la grille que le CME
-liste sur une échéance hebdomadaire. Le vif ne couvre donc pas un morceau autour
-du spot : il couvre **toute la chaîne listée de l'échéance proche**. Le tri par
-`|gamma × OI|` sert alors moins à choisir qu'à ordonner le recyclage quand le
-spot glisse et que la grille se déplace.
+Le budget couvre plus large qu'il n'y paraît. Quatre-vingt-dix lignes font
+quarante-cinq strikes ; au pas de cinquante points relevé près de la monnaie, et
+pour un NQ autour de 29 230, cela fait environ **±3,8 %**. Le vif ne surveille
+donc pas une mince bande autour du spot — il couvre l'essentiel de la zone où le
+gamma pèse, sinon toute la grille listée de l'échéance proche. Le tri par
+`|gamma × OI|` sert alors moins à choisir qu'à ordonner le recyclage quand le spot
+glisse et que la grille se déplace.
+
+Le nombre total de strikes listés par échéance reste à confirmer ; c'est lui qui
+fixe le temps de balayage du socle.
 
 Quatre-vingt-dix et non cent : le future lui-même consomme une ligne, le
 recyclage en réclame quelques-unes le temps que les annulations soient prises en
@@ -273,18 +279,38 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Open interest | tick 27/28 via generic 101 (par contrat, vérifié) ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
 | Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
 | Mode snapshot | **incompatible avec les generic ticks** — donc inutilisable pour l'open interest |
-| Grille listée, échéances hebdo NQ | 25 strikes de part et d'autre du règlement, soit environ ±2,5 % |
+| Niveau du NQ (25 août 2026) | environ **29 230**, déduit par parité call-put sur la chaîne réelle |
+| Pas de strike, relevé à l'écran | **50 points** près de la monnaie, **100** au large |
 | Redémarrage de TWS / Gateway | forcé une fois par jour ; sans intervention avec *Auto restart* (v974+) |
 | Authentification manuelle | une fois par semaine, dimanche 1 h heure de New York |
 
 Le budget de cent lignes est ce qui dimensionne tout : quatre-vingt-dix contrats
-entretenus, soit environ quarante-cinq strikes, soit environ ±2,5 % autour du
-spot sur une échéance, au pas de vingt-cinq points du NQ.
+entretenus, soit environ quarante-cinq strikes, soit environ ±3,8 % autour du spot
+sur une échéance, au pas de cinquante points relevé près de la monnaie.
 
 ## Risques, du plus grave au moins grave
 
-**1. L'open interest sur les options SUR FUTURES.** Le risque a été réduit par
-vérification le 25 août 2026, et ce qu'il en reste est étroit.
+**1. L'open interest sur les options SUR FUTURES — LEVÉ le 25 août 2026.**
+Conservé ici parce qu'il conditionnait toute l'architecture, et que le chemin qui
+l'a levé vaut d'être gardé.
+
+*La preuve.* Chaîne d'options NQ ouverte dans TWS, colonne « Positions ouvertes »
+— le libellé français d'*Open Interest*, ce qui n'aide pas à la trouver. Elle se
+remplit : 56, 721, 122, 83, 159, 60, 104, 528 sur huit strikes consécutifs, avec
+la concentration attendue sur les strikes ronds. L'IV et le gamma s'affichent
+également. Or l'API ne dépêche que ce que TWS affiche : le tout-IB tient.
+
+*Un faux problème écarté au passage.* TWS place l'open interest dans une colonne
+centrale, à côté du strike, ce qui ne dit pas s'il s'agit du call ou du put. La
+question ne se pose pas dans l'API : on souscrit à un contrat, un call ou un put,
+et `callOpenInterest` sur un call rend l'OI de ce call. La séparation vient de la
+structure de la souscription, jamais de la présentation.
+
+*Ce qui reste, et qui ne coûte rien.* Rien ne dit si un FOP relève du tick 101 ou
+du 588. On demande `"101,588"` ensemble : les ticks génériques ne consomment
+aucune ligne supplémentaire.
+
+Suit le raisonnement qui avait réduit le risque avant que l'écran ne le lève.
 
 *Ce qui est établi.* Le tick générique 101 rend bien l'open interest du contrat
 souscrit, et non un agrégat du sous-jacent. La docstring de `reqMktData` dans
