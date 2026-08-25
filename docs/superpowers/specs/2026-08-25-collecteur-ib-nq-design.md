@@ -39,12 +39,18 @@ dans les deux cas. Ce qui se joue entre eux, ce n'est pas le temps réel mais le
 périmètre couvert, le délai de démarrage et le nombre de sources à tenir.
 
 **Collecteur persistant, séparé du lecteur.** NQ se traite près de vingt-quatre
-heures sur vingt-quatre, et IB Gateway se redémarre de force une fois par jour.
-Un unique processus qui ferait acquisition et calcul perdrait son socle à chaque
-redémarrage — soit un rebalayage de trois minutes par jour, et une interruption à
-une heure qu'on ne choisit pas. Le collecteur encaisse la reconnexion et réécrit
-son relevé ; le lecteur lit un fichier, et se moque de savoir si le collecteur
-tourne.
+heures sur vingt-quatre, et TWS comme Gateway se redémarrent de force une fois par
+jour — c'est ainsi qu'IB recharge les définitions de contrats modifiées ou
+ajoutées. Un unique processus qui ferait acquisition et calcul perdrait son socle
+à chaque redémarrage : un rebalayage par jour, à une heure qu'on ne choisit pas.
+Le collecteur encaisse la coupure et réécrit son relevé ; le lecteur lit un
+fichier, et se moque de savoir si le collecteur tourne.
+
+L'option *Auto restart* (versions 974 et suivantes) ne change pas cet argument,
+seulement son coût humain. Le redémarrage a toujours lieu et la connexion API est
+toujours coupée ; ce qui disparaît, c'est la ressaisie quotidienne des
+identifiants. Il reste une authentification manuelle par semaine, le dimanche à
+1 h heure de New York, quand IB invalide les jetons de sécurité.
 
 **Le format d'échange existe déjà.** `snapshots.py` archive des chaînes brutes,
 `main.py --replay` les rejoue, et le spot comme la date de valorisation voyagent
@@ -97,7 +103,7 @@ de valeur qui se juge sur une séance, pas sur le papier.
 
 | Module | Rôle |
 |---|---|
-| `ib_data.py` | connexion, énumération des contrats, souscription par lots, et les quatre fonctions pures |
+| `ib_data.py` | connexion, énumération des contrats, souscription par lots, et les cinq fonctions pures |
 | `ib_collector.py` | la boucle : socle au réveil, vif entretenu, réécriture du relevé, reconnexion |
 
 Deux fichiers plutôt qu'un, sur le précédent de `flow_tracker.py` : une boucle
@@ -105,10 +111,10 @@ d'échantillonnage y est déjà séparée de la source qu'elle échantillonne
 (`cboe_data.py`). Un module qui ferait les deux passerait le millier de lignes et
 mélangerait ce qui se teste hors ligne avec ce qui ne se teste qu'en ligne.
 
-### Les quatre fonctions pures
+### Les cinq fonctions pures
 
 Ce sont elles qui portent tout le raisonnement, et elles seules sont écrites
-d'abord — sans réseau, sans Gateway, testées comme les 158 tests actuels. Le
+d'abord — sans réseau, sans Gateway, testées comme le reste de la suite. Le
 patron est celui que `databento_data.py` documente explicitement : « fonction
 pure, séparée de l'accès réseau pour être testable sans clé API ».
 
@@ -225,8 +231,12 @@ et une seule fois par journée de compensation :
 4. Quand le spot sort de la bande couverte, refaire `selection_vif()` et
    recycler les lignes.
 
-**Reconnexion** : à la coupure quotidienne de Gateway, le socle est en mémoire et
-sur disque. Le collecteur se rattache et reprend le vif sans rebalayer.
+**Reconnexion** : à la coupure quotidienne, le socle est en mémoire et sur
+disque. Le collecteur se rattache et reprend le vif sans rebalayer. Avec *Auto
+restart* la coupure dure le temps d'un redémarrage et ne demande personne ; sans
+lui, elle attend une ressaisie. Dans les deux cas le collecteur doit la traiter
+comme un événement normal, pas comme une panne — et une fois par semaine elle
+durera jusqu'à ce qu'un humain se reconnecte.
 
 ### Côté lecteur
 
@@ -264,7 +274,8 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
 | Mode snapshot | **incompatible avec les generic ticks** — donc inutilisable pour l'open interest |
 | Grille listée, échéances hebdo NQ | 25 strikes de part et d'autre du règlement, soit environ ±2,5 % |
-| Redémarrage de Gateway | forcé une fois par jour |
+| Redémarrage de TWS / Gateway | forcé une fois par jour ; sans intervention avec *Auto restart* (v974+) |
+| Authentification manuelle | une fois par semaine, dimanche 1 h heure de New York |
 
 Le budget de cent lignes est ce qui dimensionne tout : quatre-vingt-dix contrats
 entretenus, soit environ quarante-cinq strikes, soit environ ±2,5 % autour du
@@ -297,8 +308,20 @@ même souscription. Quel que soit le tick qu'IB retient pour les FOP, on l'a.
 
 *Le test qui tranche, sans écrire une ligne.* L'API n'est qu'un canal de
 livraison : ce que TWS n'affiche pas, le socket ne le dépêche pas. Il suffit donc
-d'ouvrir la chaîne d'options NQ dans TWS et d'ajouter la colonne Open Interest.
-Si elle se remplit, l'API peut la servir. Sinon, aucune API ne le fera.
+d'ouvrir la chaîne d'options NQ et d'y ajouter la colonne Open Interest.
+
+Deux conditions le rendent concluant, et l'oublier ferait conclure de travers.
+
+**Il faut TWS, pas Gateway.** Gateway n'a aucune interface de trading — c'est une
+passerelle API nue, où aucune chaîne d'options ne s'ouvre. Le test s'y fait donc
+dans TWS, quitte à passer à Gateway ensuite pour la production.
+
+**Un résultat positif est concluant, un résultat négatif ne l'est pas
+forcément.** Sans abonnement CME temps réel, TWS sert du différé, et aucun tick
+différé n'existe pour l'open interest. Une colonne vide peut donc signaler
+l'absence d'abonnement plutôt que l'absence de donnée. L'ordre le moins cher est
+d'essayer d'abord en différé — si la colonne se remplit, c'est réglé et gratuit —
+puis de ne souscrire que si elle reste vide, et de refaire le test.
 
 *Repli si le test échoue* : le socle prend son open interest du fichier
 End-of-Day gratuit du CME, que `cme_data.load_settlement()` lit déjà, et IB ne
@@ -387,7 +410,7 @@ pèse sur le Nasdaq.
 
 ## Vérification
 
-Les quatre fonctions pures se testent hors ligne, sur des trames fabriquées comme
+Les cinq fonctions pures se testent hors ligne, sur des trames fabriquées comme
 `_frames_databento()` le fait déjà dans `tests/test_sources.py`. C'est la règle du
 dépôt et de sa CI : « aucun test ne touche au réseau, la suite doit passer telle
 quelle ».

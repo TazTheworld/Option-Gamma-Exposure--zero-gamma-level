@@ -10,6 +10,15 @@
 
 **Spec :** `docs/superpowers/specs/2026-08-25-collecteur-ib-nq-design.md`
 
+> **Exécuté le 25 août 2026 — ce plan n'est plus à jour, et c'est voulu.** Il
+> consigne ce qui avait été planifié ; la conception a bougé pendant l'exécution
+> et c'est la spec qui fait foi. Deux écarts valent d'être connus avant de lire :
+> `perimetre()` a été scindée en `echeances_utiles()` + `perimetre()`, le plan
+> lui faisant construire un produit cartésien de strikes et d'échéances qui
+> comptait des milliers de contrats jamais cotés ; et une borne flottante y
+> excluait le strike exactement à la limite du périmètre. Les deux sont corrigés
+> dans le code. La suite est passée de 158 à 199 tests.
+
 ## Contraintes générales
 
 - **Aucun test ne touche au réseau.** Règle du dépôt, écrite dans `.github/workflows/tests.yml` : « la suite doit passer telle quelle ».
