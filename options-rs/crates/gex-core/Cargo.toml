@@ -10,3 +10,5 @@ license.workspace = true
 # systeme : gex-core reste incapable de lire un fichier ou d'ouvrir un socket,
 # ce qui est precisement la garantie qu'on cherche.
 libm = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }

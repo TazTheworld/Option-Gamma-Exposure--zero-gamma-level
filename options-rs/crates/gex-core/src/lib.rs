@@ -13,9 +13,11 @@
 #![warn(missing_docs)]
 
 pub mod black76;
+pub mod chaine;
 pub mod contrat;
 pub mod greeks;
 pub mod loi_normale;
+pub mod temps;
 
 pub use black76::Sens;
 pub use contrat::multiplicateur;

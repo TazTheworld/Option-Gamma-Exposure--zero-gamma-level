@@ -18,6 +18,14 @@ repository = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-l
 
 [workspace.dependencies]
 libm = "0.2"
+# `default-features = false` retire la feature "clock", donc Utc::now() et Local
+# n'existent PAS. Ce n'est pas de l'economie de compilation : c'est la garantie
+# que gex-core ne peut pas lire l'horloge. L'instant de valorisation lui est
+# passe, toujours, et un calcul qui dependrait de l'heure courante ne compilerait
+# pas - ce qui rend tout resultat reproductible par construction.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# La base IANA embarquee en donnees statiques : aucune lecture de /usr/share.
+chrono-tz = "0.10"
 
 [profile.release]
 lto = true

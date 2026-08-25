@@ -57,13 +57,29 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | loi normale (Φ, φ) | `scipy.stats.norm` | ✅ `loi_normale.rs` |
 | Black-76, vol implicite | `black76.py` | ✅ `black76.rs` |
 | multiplicateurs | `black76.py` | ✅ `contrat.rs` |
-| format pivot | `chain.py` | ⬜ |
-| greeks Black-Scholes | `greeks.py` | ⬜ |
-| expositions, murs, profil, zero gamma | `analysis.py` | ⬜ |
-| parquet | `snapshots.py` | ⬜ |
-| source IB | `ib_data.py` | ⬜ |
-| démon | `ib_collector.py` | ⬜ |
-| lecteur | `main.py` | ⬜ |
+| expositions gamma / charm / vanna | `greeks.py` | ✅ `greeks.rs` |
+| temps restant, fuseaux, conventions | `analysis.py` | ✅ `temps.rs` |
+| format pivot | `chain.py` | ✅ `chaine.rs` |
+| filtres, murs, profil, zero gamma | `analysis.py` | ⬜ `analyse.rs` |
+| parquet | `snapshots.py` | ⬜ `gex-store` |
+| source IB | `ib_data.py` | ⬜ `gex-ib` |
+| démon | `ib_collector.py` | ⬜ `gex-collector` |
+| lecteur | `main.py` | ⬜ `gex-cli` |
+
+### Ce que le portage a déjà rendu impossible à écrire
+
+`gex-core` déclare `chrono` **sans la feature `clock`** : `Utc::now()` n'existe
+pas dans cette crate. Un calcul qui dépendrait de l'heure courante ne compile
+pas, donc tout résultat est reproductible par construction — l'instant de
+valorisation est toujours passé en paramètre.
+
+`EcheanceNy` et `InstantReleve` sont deux types distincts, l'un en heure de New
+York, l'autre en UTC. Les confondre faisait passer le décalage de fuseau pour du
+temps restant : c'est le défaut qui donnait quatre heures de vie à un contrat
+déjà réglé. Le compilateur le refuse maintenant.
+
+`Position` regroupe les six flottants d'un contrat évalué. En liste d'arguments,
+intervertir `vol` et `t` compilait sans un mot et rendait un chiffre plausible.
 
 **Le risque connu est la couche IB.** `ib_async` n'a pas d'équivalent Rust dont la
 maturité soit établie ; l'alternative est d'implémenter le sous-ensemble du
