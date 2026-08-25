@@ -1,27 +1,31 @@
-"""Gamma Exposure (GEX) et Zero Gamma Level à partir des données CBOE gratuites.
+"""Gamma Exposure (GEX) et Zero Gamma Level sur les options du Nasdaq (NQ).
 
 Ce fichier n'est plus qu'une interface : le calcul est dans analysis.py, les
 greeks dans greeks.py, les graphiques dans plots.py, l'archivage dans
 snapshots.py. Tout ce qui produit un chiffre est donc testable sans réseau.
 
+main.py ne va jamais chercher de données : il lit un relevé écrit sur disque par
+ib_collector.py. C'est cette séparation qui laisse le lecteur tourner pendant que
+le collecteur encaisse le redémarrage quotidien d'IB, et qui fait qu'une séance
+passée se rejoue avec exactement le même code qu'une séance vivante.
+
 Usage :
-    python main.py SPCX
-    python main.py _SPX --dte-max 7
-    python main.py --csv spx_quotedata.csv
-    python main.py _SPX --replay snapshots/SPX/2026-08-12_1436.parquet --dte-max 7
+    python ib_collector.py NQ                 # le collecteur, dans un autre terminal
+    python main.py NQ                         # le relevé courant
+    python main.py NQ --watch 30              # relu toutes les 30 s
+    python main.py NQ --replay snapshots/NQ/2026-08-25_1436.parquet --dte-max 7
 """
 
 import argparse
 import os
+import re
 
 import pandas as pd
 
 import analysis
-import cboe_data
 import plots
 import snapshots
-from cme_data import CONTRACT_SIZES
-from greeks import CONTRACT_SIZE
+from black76 import taille_contrat
 
 pd.options.display.float_format = "{:,.4f}".format
 
@@ -39,26 +43,32 @@ def dte_arg(value):
     return days
 
 
+def duree(txt):
+    """'6h', '90m', '3600' -> secondes.
+
+    Vivait dans flow_tracker.py, qui lisait le CBOE et n'existe plus. --watch et
+    --watch-duration sont désormais les seuls à écrire des durées ainsi, donc
+    l'analyseur les suit ici.
+    """
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([hms]?)", str(txt).strip().lower())
+    if not m:
+        raise argparse.ArgumentTypeError(f"durée invalide : {txt}")
+    val, unit = float(m.group(1)), m.group(2)
+    return int(val * {"h": 3600, "m": 60, "s": 1, "": 1}[unit])
+
+
 def construire_parser():
-    parser = argparse.ArgumentParser(description="Gamma Exposure / Zero Gamma Level (données CBOE)")
-    parser.add_argument("ticker", nargs="?", default="SPCX",
-                        help="ticker du sous-jacent (SPCX, TSLA, _SPX...)")
-    parser.add_argument("--csv", help="utiliser un export CSV CBOE au lieu de l'API JSON")
-    parser.add_argument("--cme", help="export de règlement CME (options sur futures, ex. 6E)")
-    parser.add_argument("--databento", action="store_true",
-                        help="récupérer la chaîne CME via Databento (DATABENTO_API_KEY)")
+    parser = argparse.ArgumentParser(
+        description="Gamma Exposure / Zero Gamma Level (options sur futures, via Interactive Brokers)")
+    parser.add_argument("ticker", nargs="?", default="NQ",
+                        help="produit CME (NQ, ES...) ; défaut : NQ")
     parser.add_argument("--replay", metavar="FICHIER",
                         help="rejouer un relevé archivé (voir python snapshots.py)")
     parser.add_argument("--suivre", action="store_true",
                         help="lire le relevé courant écrit par le collecteur "
-                             "(snapshots/<TICKER>/courant.parquet)")
+                             "(snapshots/<TICKER>/courant.parquet) — c'est le défaut")
     parser.add_argument("--dir", default=snapshots.DOSSIER,
                         help=f"dossier des relevés archivés (défaut : {snapshots.DOSSIER})")
-    parser.add_argument("--date", help="séance à charger AAAA-MM-JJ (défaut : dernière close)")
-    parser.add_argument("--futures-price", type=float,
-                        help="prix du future ; déduit par parité call-put si omis")
-    parser.add_argument("--expiry", help="échéance AAAA-MM-JJ, si absente du fichier CME")
-    parser.add_argument("--quote-date", help="date de valorisation AAAA-MM-JJ (défaut : aujourd'hui)")
     parser.add_argument("--outdir", default="charts", help="dossier de sortie des graphiques")
     parser.add_argument("--no-show", action="store_true", help="enregistrer sans ouvrir les fenêtres")
     parser.add_argument("--no-charts", action="store_true", help="ne produire aucun graphique")
@@ -88,7 +98,7 @@ def construire_parser():
                         help="demi-plage des murs en open interest brut (0.30 = +/-30%%) ; "
                              "plus large que les murs gamma, qui restent collés à la monnaie")
     parser.add_argument("--contract-size", type=float,
-                        help="multiplicateur du contrat (défaut : 100, ou 125000 avec --cme)")
+                        help="multiplicateur du contrat (défaut : celui du produit, x20 pour NQ)")
     parser.add_argument("--history", default="history.csv",
                         help="fichier d'historique des relevés (défaut : history.csv)")
     parser.add_argument("--no-history", action="store_true",
@@ -107,12 +117,16 @@ def construire_parser():
 
 
 def source_relecture(args):
-    """Le fichier à rejouer : --replay tel quel, ou le courant si --suivre."""
+    """Le fichier à lire : --replay tel quel, sinon le relevé courant.
+
+    Il n'y a plus qu'une source, et elle est sur disque : sans --replay, il n'y a
+    rien d'autre à lire que le courant. Exiger --suivre pour le dire ferait un
+    drapeau obligatoire, donc un drapeau inutile — il reste accepté pour
+    l'explicite, et parce que la documentation l'a annoncé.
+    """
     if args.replay:
         return args.replay
-    if args.suivre:
-        return snapshots.courant(args.ticker, args.dir)
-    return None
+    return snapshots.courant(args.ticker, args.dir)
 
 
 def verifier_exclusions(args):
@@ -134,29 +148,23 @@ def verifier_exclusions(args):
 def charger(args):
     """Renvoie (df, spot, quote_date, ticker, rejoue, marche).
 
-    `marche` est le contexte de séance du sous-jacent (OHLCV, iv30). Seul le CBOE
-    le publie : les sources sur futures renvoient un dictionnaire vide, et les
-    ratios au volume sont alors simplement absents plutôt que faux.
+    `marche` est le contexte de séance du sous-jacent (OHLCV, iv30). Aucune source
+    sur futures ne le publie : le dictionnaire reste vide, et les ratios au volume
+    sont alors simplement absents plutôt que faux.
+
+    main.py ne va plus rien chercher sur le réseau. Un relevé absent n'est donc
+    pas une panne mais un collecteur qui ne tourne pas, et le message le dit —
+    sans quoi l'utilisateur lirait une trace de fichier introuvable sans savoir
+    quel programme aurait dû l'écrire.
     """
     source = source_relecture(args)
-    if source:
-        df, spot, quote_date, marche = snapshots.charger(source)
-        return df, spot, quote_date, args.ticker, True, marche
-    if args.databento:
-        import databento_data
-        df, spot, quote_date = databento_data.fetch_chain(args.ticker, day=args.date)
-        return df, args.futures_price or spot, quote_date, args.ticker, False, {}
-    if args.cme:
-        import cme_data
-        df, spot, quote_date = cme_data.load_settlement(
-            args.cme, futures_price=args.futures_price, expiry=args.expiry,
-            quote_date=args.quote_date, product=args.ticker)
-        return df, spot, quote_date, args.ticker, False, {}
-    if args.csv:
-        df, spot, quote_date = cboe_data.load_from_csv(args.csv)
-        return df, spot, quote_date, args.ticker, False, {}
-    df, spot, quote_date, marche = cboe_data.fetch_chain_et_marche(args.ticker)
-    return df, spot, quote_date, cboe_data.cboe_symbol(args.ticker).lstrip("_"), False, marche
+    if not os.path.exists(source):
+        raise OSError(
+            f"Aucun relevé à lire en {source}. Lance le collecteur dans un autre "
+            f"terminal : python ib_collector.py {args.ticker}"
+        )
+    df, spot, quote_date, marche = snapshots.charger(source)
+    return df, spot, quote_date, args.ticker, True, marche
 
 
 def afficher(a):
@@ -304,15 +312,13 @@ def suivre(args, contract_size):
     beaucoup, mais la DISTANCE du prix à ce niveau, elle, se referme ou s'ouvre —
     et c'est elle qui décide du régime dans lequel on se trouve.
 
-    Un passage n'écrit dans l'historique que si le flux a réellement avancé : les
-    données CBOE sont différées d'un quart d'heure, donc deux passages rapprochés
-    renvoient le même relevé, et le réenregistrer n'ajouterait qu'une ligne
-    identique. validate.py ne retient de toute façon qu'une séance par jour, la
+    Un passage n'écrit dans l'historique que si le relevé a réellement avancé : le
+    collecteur réécrit le courant toutes les quinze secondes, donc un --watch plus
+    pressé que lui relit le même fichier, et le réenregistrer n'ajouterait qu'une
+    ligne identique. validate.py ne retient de toute façon qu'une séance par jour, la
     dernière : ces relevés servent à voir la journée, pas à gonfler l'échantillon.
     """
     import time
-
-    from flow_tracker import duree
 
     intervalle = duree(args.watch)
     fin = time.time() + duree(args.watch_duration)
@@ -360,14 +366,25 @@ def suivre(args, contract_size):
     return precedent
 
 
+def multiplicateur(args):
+    """Le multiplicateur du contrat : celui passé, sinon celui du produit.
+
+    Sorti de main() parce que c'est ici qu'un GEX peut être faux d'un facteur
+    entier sans que rien ne le signale. L'ancienne règle le déduisait du drapeau
+    de source — `args.cme or args.databento` — si bien qu'un relevé lu depuis le
+    disque retombait sur les x100 des actions et sortait un GEX cinq fois trop
+    grand sur le NQ. Il n'y a plus de drapeau de source à interroger : le produit
+    seul décide, et un produit inconnu est refusé plutôt que deviné.
+    """
+    if args.contract_size is not None:
+        return args.contract_size
+    return taille_contrat(args.ticker)
+
+
 def main(argv=None):
     args = construire_parser().parse_args(argv)
 
-    # Les options sur futures ont un multiplicateur tout autre que les actions
-    contract_size = args.contract_size
-    if contract_size is None:
-        futures = args.cme or args.databento
-        contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if futures else CONTRACT_SIZE
+    contract_size = multiplicateur(args)
 
     verifier_exclusions(args)
     if args.watch:

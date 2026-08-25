@@ -1,6 +1,6 @@
 """Les fonctions pures du collecteur Interactive Brokers.
 
-Comme pour databento, les jeux d'essai sont fabriqués depuis des paramètres
+Les jeux d'essai sont fabriqués depuis des paramètres
 connus : on vérifie qu'on retrouve la vérité terrain, pas qu'une sortie est figée.
 
 Aucun test ne touche au réseau, et rien ici n'importe ib_async — la dépendance de
@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import ib_data
-from cboe_data import COLUMNS
+from chain import COLUMNS
 
 QUOTE = pd.Timestamp("2026-08-25")
 PRIX = 25_000.0
@@ -122,7 +122,7 @@ T_VRAI = (EXP - QUOTE).total_seconds() / (365.25 * 24 * 3600)
 
 def _trames_ib(avec_gamma=True, iv_en_pourcent=False, oi=500.0):
     """Imite ce que la couche réseau produira : définitions + valeurs par conId."""
-    from cme_data import black76_gamma
+    from black76 import black76_gamma
     strikes = np.arange(24_500.0, 25_525.0, 25.0)
     defs, ticks, cid = [], [], 100_000
     for k in strikes:
@@ -191,7 +191,7 @@ def test_build_chain_recalcule_le_gamma_absent_en_black76():
 
 def test_build_chain_garde_le_gamma_publie_quand_il_existe():
     """--gamma-source published doit avoir de quoi se nourrir."""
-    from cme_data import black76_gamma
+    from black76 import black76_gamma
     chaine, _, _ = ib_data.build_chain(*_trames_ib(avec_gamma=True),
                                        futures_price=PRIX, quote_date=QUOTE)
     atm = chaine.loc[(chaine.StrikePrice - PRIX).abs().idxmin()]
@@ -222,7 +222,7 @@ def test_build_chain_definitions_vides_leve_une_erreur():
 
 def test_build_chain_deduit_le_prix_du_future_par_parite():
     """Sans prix fourni, la parité call-put le retrouve — comme pour le CME."""
-    from cme_data import black76_price
+    from black76 import black76_price
     defs, ticks = _trames_ib()
     prix_par_conid = {}
     for _, d in defs.iterrows():
@@ -398,11 +398,14 @@ def test_suivre_resout_le_chemin_du_courant(tmp_path):
     assert main.source_relecture(args) == snapshots.courant("NQ", str(tmp_path))
 
 
-def test_sans_suivre_ni_replay_aucune_relecture():
-    """Le chemin normal reste le téléchargement, pas un fichier."""
+def test_sans_drapeau_la_source_reste_le_courant():
+    """Il n'y a plus de téléchargement à faire : le collecteur écrit, le lecteur
+    lit. Sans --replay, il ne reste que le courant, et l'exiger par un drapeau
+    ferait un drapeau obligatoire donc inutile."""
     import main
+    import snapshots
     args = main.construire_parser().parse_args(["NQ"])
-    assert main.source_relecture(args) is None
+    assert main.source_relecture(args) == snapshots.courant("NQ", snapshots.DOSSIER)
 
 
 def test_watch_et_replay_restent_exclusifs_sur_une_archive(tmp_path):

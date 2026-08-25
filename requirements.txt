@@ -1,8 +1,6 @@
-# Le necessaire pour les actions et indices US (source CBOE).
-# Les autres sources sont des extras : voir pyproject.toml.
-#   pip install -e ".[databento]"   chaines CME par API
-#   pip install -e ".[cme]"         exports CME au format Excel
-#   pip install -e ".[barchart]"    scraping Barchart (selenium)
+# Le necessaire pour lire un releve et en tirer un GEX, sans collecteur.
+# Le reste est un extra : voir pyproject.toml.
+#   pip install -e ".[ib]"          collecteur Interactive Brokers (ib_async)
 #   pip install -e ".[snapshots]"   archivage en parquet plutot qu'en csv.gz
 #   pip install -e ".[dev]"         tests
 matplotlib==3.11.1

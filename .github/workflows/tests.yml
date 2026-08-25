@@ -25,10 +25,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # databento porte databento_dbn, dont dependent les tests de
-          # build_chain. Sans lui ils se sautent, et le parseur CME n'est
-          # plus couvert : la CI doit donc installer l'extra, pas s'en passer.
-          pip install pytest pyarrow databento
+          pip install pytest pyarrow
+          # Aucun test n'importe ib_async : les fonctions pures d'ib_data se
+          # verifient hors ligne, et c'est voulu. L'extra s'installe quand meme,
+          # parce que c'est la seule chose qui verifie qu'il se resout — une
+          # version incompatible ne se decouvrirait sinon qu'au lancement du
+          # collecteur, sur une machine ou TWS tourne deja.
+          pip install -e ".[ib]"
 
       - name: Tests
         # Aucun test ne touche au reseau : la suite doit passer telle quelle.

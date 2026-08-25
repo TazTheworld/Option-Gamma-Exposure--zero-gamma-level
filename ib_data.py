@@ -3,8 +3,8 @@
 IB ne sert pas une chaîne : il sert des contrats un par un, avec un plafond de
 cent lignes de données simultanées. Tout ce module découle de cette contrainte.
 
-Le fichier est coupé en deux, et la coupe est celle du patron de
-databento_data.py : ce qui produit un chiffre doit être testable hors ligne.
+Le fichier est coupé en deux, et la coupe suit la règle du dépôt : ce qui produit
+un chiffre doit être testable hors ligne.
 
 **Les fonctions pures**, qui décident, traduisent et assemblent. Elles portent
 tout le raisonnement, et la suite de tests les couvre entièrement :
@@ -43,8 +43,8 @@ import math
 import numpy as np
 import pandas as pd
 
-from cboe_data import COLONNES_GRECS, COLUMNS, _clean
-from cme_data import black76_gamma, implied_vol, infer_futures_price
+from black76 import black76_gamma, implied_vol, infer_futures_price
+from chain import COLONNES_GRECS, COLUMNS, _clean
 
 # La forme unique d'un contrat dans ce module. La couche réseau construira ses
 # objets ib_async.Contract à partir de ces trois colonnes, et rien d'autre :
@@ -160,11 +160,11 @@ def perimetre(contrats, prix, plage=0.2):
 def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
     """Définitions + valeurs reçues -> chaîne au format pivot du projet.
 
-    Jumelle de databento_data.build_chain(), et pour les mêmes raisons : des
-    définitions d'un côté, des valeurs de l'autre, une fonction pure au milieu.
-    Séparée de l'accès réseau pour être testable sans IB Gateway. Deux
-    assembleurs qui divergeraient sur la normalisation de l'IV donneraient deux
-    GEX différents pour la même chaîne — d'où le calque plutôt que l'invention.
+    Des définitions d'un côté, des valeurs de l'autre, une fonction pure au
+    milieu : séparée de l'accès réseau, elle se teste sans IB Gateway. C'est le
+    seul assembleur qui reste, les autres sources ayant été retirées — raison de
+    plus pour que la normalisation de l'IV et le repli en Black-76 soient écrits
+    ici et nulle part ailleurs.
 
     `defs`  : conId, StrikePrice, ExpirationDate, right
     `ticks` : conId + ce que la souscription a rendu (CHAMPS_TICK)
@@ -210,15 +210,15 @@ def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
 
     if futures_price is None:
         # IB sert le prix du sous-jacent dans modelGreeks.undPrice, donc dans
-        # CHAQUE tick d'option. La parité call-put ne sert plus que de filet,
-        # pour une source qui ne le donnerait pas — le CME et Databento.
+        # CHAQUE tick d'option. La parité call-put ne sert plus que de filet, pour
+        # un relevé où undPrice manquerait — un contrat resté muet, typiquement.
         futures_price = _undprice(ticks)
     if futures_price is None:
         futures_price = infer_futures_price(chain)
     if futures_price is None:
         raise ValueError(
             "Prix du future indéterminable : ni undPrice, ni parité call-put "
-            "exploitable. Passe-le avec --futures-price."
+            "exploitable. Passe-le à build_chain(futures_price=...)."
         )
     futures_price = float(futures_price)
 
@@ -229,7 +229,7 @@ def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
         iv = pd.to_numeric(chain[f"{side}IV"], errors="coerce")
         # IB publie l'IV tantôt en décimal, tantôt en pourcentage. 18 ne peut pas
         # être 1 800 % de volatilité : au-delà de 3, c'est une échelle et non un
-        # régime. Même test que databento_data, même raison.
+        # régime.
         if iv.notna().any() and iv.max(skipna=True) > 3:
             iv = iv / 100.0
         manque = iv.isna() & chain[f"{side}Settle"].notna()

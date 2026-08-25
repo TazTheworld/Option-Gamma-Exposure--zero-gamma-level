@@ -11,13 +11,14 @@ venv\Scripts\activate                 # Windows
 python -m venv venv                   # première fois
 pip install -r requirements.txt
 pip install -e ".[dev]"               # pytest, pyarrow
+pip install -e ".[ib]"                # ib_async, pour le collecteur seulement
 python -m pytest tests -q             # doit passer sans réseau
 ```
 
 **Ne jamais régénérer `requirements.txt` avec `pip freeze`.** Il ne liste que le
-cœur — numpy, pandas, scipy, matplotlib, requests — pour que `python main.py
-TSLA` n'impose ni selenium, ni databento, ni pyarrow. Tout le reste est un extra
-déclaré dans `pyproject.toml` : `.[databento]`, `.[cme]`, `.[barchart]`,
+cœur — numpy, pandas, scipy, matplotlib, requests — pour que `python main.py NQ`,
+qui ne fait qu'ouvrir un fichier déjà écrit, n'impose pas une dépendance de
+courtier. Tout le reste est un extra déclaré dans `pyproject.toml` :
 `.[snapshots]`, `.[ib]`, `.[dev]`.
 
 Un nouveau module qui a besoin d'une dépendance lourde déclare un extra et
@@ -56,15 +57,20 @@ qui structure le reste.
 | Module | Rôle |
 |---|---|
 | `greeks.py` | **le seul endroit** où une formule Black-Scholes est écrite |
-| `cme_data.py` | Black-76 pour les options sur futures |
+| `black76.py` | **le seul endroit** où Black-76 est écrit, et le multiplicateur de chaque contrat |
+| `chain.py` | le format pivot : les colonnes, et leur nettoyage |
 | `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
+| `ib_data.py` | la seule source : Interactive Brokers, options sur futures |
+| `ib_collector.py` | la boucle qui entretient le relevé courant |
 | `main.py` | interface en ligne de commande, rien d'autre |
 
 Une formule ne s'écrit pas deux fois. Si un module en a besoin, il l'importe.
 
 ### Le patron des sources de données
 
-Toute source suit la même forme, et `databento_data.py` la documente :
+Il n'y a plus qu'une source — le CBOE, le CME, Databento et Barchart ont été
+retirés — mais toute source qu'on rajouterait suit cette forme, et `ib_data.py`
+la documente :
 
 - une **fonction pure d'assemblage** (`build_chain`) qui prend des données déjà
   téléchargées et rend `(df, spot, quote_date)` ;
@@ -76,9 +82,13 @@ par exemple — donneraient deux GEX différents pour la même chaîne.
 
 ### Le format pivot
 
-Toute chaîne produite respecte `cboe_data.COLUMNS` + `COLONNES_GRECS`, et sort de
-`cboe_data._clean()`. En aval, `analysis.analyser(df, spot, quote_date, …)` ne
-sait pas d'où vient la chaîne, et ne doit pas avoir à le savoir.
+Toute chaîne produite respecte `chain.COLUMNS` + `COLONNES_GRECS`, et sort de
+`chain._clean()`. En aval, `analysis.analyser(df, spot, quote_date, …)` ne sait
+pas d'où vient la chaîne, et ne doit pas avoir à le savoir.
+
+Ce format et Black-76 vivent dans des modules qui ne sont la source de personne.
+Ils étaient logés chez `cboe_data.py` et `cme_data.py` : en retirant ces sources,
+on emportait le format et la formule avec elles.
 
 ## Tests
 
@@ -90,9 +100,14 @@ open interest placés à des strikes choisis — pour vérifier qu'on retrouve l
 vérité terrain. On ne fige jamais une sortie observée : un tel test passe encore
 quand le calcul devient faux.
 
-Un test qui dépend d'un extra se saute proprement plutôt que d'échouer, sur le
-modèle de `besoin_databento` dans `tests/test_sources.py`. La CI, elle, installe
-l'extra : sauter partout reviendrait à ne rien tester.
+Aucun test n'importe `ib_async` : les fonctions pures d'`ib_data.py` se vérifient
+hors ligne, et c'est ce qui permet à la suite de couvrir le calcul sans TWS. La CI
+installe quand même l'extra, parce que c'est la seule chose qui vérifie qu'il se
+résout.
+
+**Le multiplicateur est le piège maison.** Se tromper de contrat ne produit aucune
+erreur : un GEX cinq fois trop grand reste un nombre plausible. `black76.py` refuse
+donc de deviner, et `tests/test_main.py` ferme la régression.
 
 ## Ne jamais faire en silence
 

@@ -9,7 +9,7 @@ import pytest
 from scipy.stats import norm
 
 import greeks as G
-from cme_data import black76_gamma, black76_price, implied_vol
+from black76 import black76_gamma, black76_price, implied_vol
 
 CAS = [  # (S, K, vol, T)
     (100, 105, 0.25, 0.10),

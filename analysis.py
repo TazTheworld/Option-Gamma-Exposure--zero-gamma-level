@@ -6,8 +6,8 @@ graphiques (plots.py). Ces fonctions ne touchent ni au réseau, ni au disque, ni
 elles sont testables directement — ce qui n'était pas le cas quand elles étaient
 enfermées dans main().
 
-L'entrée est toujours le format COLUMNS de cboe_data, quelle que soit la source
-(CBOE, CME, Databento).
+L'entrée est toujours le format COLUMNS de chain.py, qu'elle vienne du relevé
+courant ou d'une archive rejouée.
 """
 
 from dataclasses import dataclass, field
@@ -19,7 +19,9 @@ from greeks import (CONTRACT_SIZE, TRADING_DAYS, calc_charm_ex, calc_gamma_ex,
                     calc_vanna_ex)
 
 # "iv" : gamma recalculé en Black-Scholes depuis la volatilité implicite.
-# "published" : gamma tel que diffusé par la source (le CBOE le publie, pas le CME).
+# "published" : gamma tel que diffusé par la source. IB le publie, ce que ni le
+# CME ni Databento ne faisaient — c'est ce qui rend les deux estimateurs
+# comparables sur du future, et pas seulement sur des actions.
 SOURCES_GAMMA = ("iv", "published")
 
 
@@ -33,8 +35,9 @@ def dte_calendaire(df, quote_date):
 def filtre_echeances(df, quote_date, dte_max=30, dte_min=0):
     """Ne garde que les échéances dans la fenêtre [dte_min, dte_max] en jours calendaires.
 
-    Les chaînes CBOE portent plusieurs années d'échéances. Sans filtre, les LEAPS
-    — strikes ronds à très gros OI — dominent les murs et tirent le zero gamma,
+    Une chaîne complète porte des échéances jusqu'à plusieurs trimestres. Sans
+    filtre, les lointaines — strikes ronds à très gros OI — dominent les murs et
+    tirent le zero gamma,
     alors qu'ils ne génèrent quasiment aucun flux de hedging à court terme.
     Le filtre s'applique avant tout calcul, pour que murs et profil de gamma
     portent sur le même périmètre.

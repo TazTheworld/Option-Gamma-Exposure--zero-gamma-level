@@ -32,7 +32,10 @@ COLONNES = ["timestamp", "ticker", "dte_max", "source_gamma", "time_convention",
             "open", "high", "low", "close", "prev_close", "volume",
             "dollar_volume", "iv30", "gex_sur_volume"]
 
-# Les colonnes de contexte portent le même nom dans le payload CBOE, sauf celle-ci.
+# Colonnes de contexte de séance. Aucune source sur futures ne les publie : elles
+# restent vides depuis qu'IB est la seule source, et validate.py bascule alors sur
+# la mesure à la clôture seule. Le schéma les garde pour que les historiques déjà
+# écrits restent lisibles.
 MARCHE_ALIAS = {"prev_close": "prev_day_close"}
 
 # Ce qui rend deux relevés comparables : même sous-jacent, même périmètre

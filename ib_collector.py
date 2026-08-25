@@ -14,8 +14,7 @@ Par défaut le collecteur prend TOUT ce qu'IB liste sur l'horizon, sans filtre d
 strike. Filtrer n'économise pas grand-chose — de ±20 % à ±5 %, on ne retire que
 vingt-sept pour cent des contrats, la grille étant dense près de la monnaie et
 clairsemée au large — alors qu'une donnée non collectée est perdue pour toujours.
-`main.py` filtre au calcul, avec --range et --dte-max, comme il le fait déjà sur
-les chaînes du CBOE.
+`main.py` filtre au calcul, avec --range et --dte-max.
 
 Le relevé courant est réécrit toutes les quinze secondes à chemin fixe, l'archive
 horodatée toutes les quinze minutes. `python main.py NQ --suivre` lit le premier.

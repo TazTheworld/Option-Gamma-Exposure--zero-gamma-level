@@ -16,11 +16,11 @@ import pandas as pd
 import pytest
 
 import analysis
-import cboe_data
+import chain
 import greeks as G
 import plots
 import snapshots
-from cboe_data import COLUMNS
+from chain import COLUMNS
 
 SPOT = 100.0
 QUOTE = pd.Timestamp("2026-08-12")
@@ -75,10 +75,10 @@ def chaine(spot=SPOT, quote_date=QUOTE, jours=(30,), strikes=None,
     df["CallVega"] = np.exp(-((ecart / 0.15) ** 2)) * 0.2
     df["PutVega"] = df["CallVega"]
 
-    for colonne in COLUMNS + cboe_data.COLONNES_GRECS:
+    for colonne in COLUMNS + chain.COLONNES_GRECS:
         if colonne not in df.columns:
             df[colonne] = 0.0
-    return df[COLUMNS + cboe_data.COLONNES_GRECS]
+    return df[COLUMNS + chain.COLONNES_GRECS]
 
 
 # ---=== Filtre d'échéance ===---
@@ -516,18 +516,6 @@ def test_gex_sur_volume_rapporte_le_flux_a_ce_qui_s_echange():
                           marche={"dollar_volume": 1.3808e10})
     assert a.gex_sur_volume == pytest.approx(abs(a.total_gex) / 1.3808e10)
     assert analysis.analyser(chaine(), spot=SPOT, quote_date=QUOTE).gex_sur_volume is None
-
-
-def test_marche_depuis_payload_lit_la_seance_et_calcule_le_volume_en_dollars():
-    """Le payload CBOE porte déjà l'OHLCV : le projet le téléchargeait sans le lire."""
-    payload = {"data": {"current_price": 144.865, "open": 135.05, "high": 146.13,
-                        "low": 134.01, "close": 144.865, "prev_day_close": 133.29,
-                        "volume": 95_310_234, "iv30": 70.242, "options": []}}
-    m = cboe_data.marche_depuis_payload(payload)
-    assert m["high"] == 146.13 and m["iv30"] == 70.242
-    assert m["dollar_volume"] == pytest.approx(95_310_234 * 144.865)
-    # Un champ absent vaut None, jamais une valeur inventée
-    assert cboe_data.marche_depuis_payload({"data": {"current_price": 1.0}})["volume"] is None
 
 
 def test_snapshot_permet_de_changer_d_horizon_apres_coup():

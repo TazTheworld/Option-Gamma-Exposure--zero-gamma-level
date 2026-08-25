@@ -11,9 +11,9 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Taz" }]
 
-# Le strict necessaire pour `python main.py TSLA`. Le pip freeze precedent
-# imposait selenium, databento, aiohttp et pyarrow a quiconque voulait juste
-# tracer le GEX d'une action : plusieurs centaines de Mo pour rien.
+# Le strict necessaire pour lire un releve et en tirer un GEX. Le collecteur IB
+# est un extra : `python main.py NQ` ouvre un fichier deja ecrit et ne doit pas
+# payer une dependance de courtier pour ca.
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",
@@ -25,15 +25,9 @@ dependencies = [
 [project.optional-dependencies]
 # Archivage des chaines brutes en parquet. Sans, snapshots.py bascule sur csv.gz.
 snapshots = ["pyarrow>=14"]
-# Exports CME au format Excel (les CSV passent sans).
-cme = ["openpyxl>=3.1"]
-# Chaines CME par API, sans telechargement manuel.
-databento = ["databento>=0.40"]
-# Scraping Barchart (shadow DOM), gratuit mais aleatoire.
-barchart = ["selenium>=4.20", "webdriver-manager>=4.0"]
 # Collecteur Interactive Brokers. ib_async est le fork maintenu d'ib_insync, dont
-# l'auteur est mort en 2024. Rien du coeur ne l'importe : `python main.py TSLA`
-# ne doit pas payer une dependance de courtier.
+# l'auteur est mort en 2024. Seul ib_collector.py l'importe, et seulement dans la
+# couche reseau : les fonctions pures d'ib_data.py se testent sans lui.
 ib = ["ib_async>=1.0"]
 dev = ["pytest>=8.0", "pyarrow>=14"]
 
@@ -42,10 +36,8 @@ Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-lev
 
 [tool.setuptools]
 py-modules = [
-    "main", "greeks", "analysis", "plots", "snapshots", "price_data",
-    "cboe_data", "cme_data", "databento_data", "ib_data", "ib_collector",
-    "barchart_data",
-    "flow_tracker", "history", "validate",
+    "main", "chain", "greeks", "black76", "analysis", "plots", "snapshots",
+    "ib_data", "ib_collector", "price_data", "history", "validate",
 ]
 
 [tool.pytest.ini_options]

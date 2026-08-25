@@ -6,9 +6,10 @@
   </a>
 </p>
 
-> Le projet a pour but de rendre option gamma exposure et zero gamma level accessible à tous.
-> Les actions et indices US passent par l'API publique du CBOE (gratuite, sans clé) ; l'EUR/USD
-> est scrapé sur barchart.com (options sur futures 6E). Le calcul s'appuie sur le script de
+> Gamma exposure et zero gamma level sur les options du Nasdaq-100 (NQ, CME), rafraîchis
+> pendant la séance. Un collecteur Interactive Brokers entretient un relevé sur disque, un
+> lecteur le calcule et le trace — les deux tournent séparément, pour que le lecteur survive
+> au redémarrage quotidien d'IB. Le calcul s'appuie sur le script de
 > https://perfiliev.com/author/perfiliev/.
 
 ### 🏠 [Homepage](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level)
@@ -22,49 +23,60 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` ne contient que le nécessaire pour les actions et indices US :
-numpy, pandas, scipy, matplotlib, requests. Les autres sources sont des extras, à
-n'installer que si on s'en sert :
+`requirements.txt` ne contient que le nécessaire pour **lire** un relevé et en tirer
+un GEX : numpy, pandas, scipy, matplotlib, requests. Collecter en demande davantage,
+et c'est un extra — le lecteur ne doit pas payer une dépendance de courtier pour
+ouvrir un fichier déjà écrit :
 
 ```sh
-pip install -e ".[databento]"    # chaînes CME par API
-pip install -e ".[cme]"          # exports CME au format Excel
-pip install -e ".[barchart]"     # scraping Barchart (selenium)
+pip install -e ".[ib]"           # collecteur Interactive Brokers (ib_async)
 pip install -e ".[snapshots]"    # archivage en parquet plutôt qu'en csv.gz
-pip install -e ".[ib]"           # collecteur Interactive Brokers (à venir)
 pip install -e ".[dev]"          # tests
 ```
+
+Le collecteur exige en plus **TWS ou IB Gateway** en fonctionnement, avec l'API
+activée. Le mode différé suffit et ne demande aucun abonnement.
 
 ## Organisation
 
 | Module | Rôle |
 |---|---|
 | `main.py` | interface en ligne de commande, rien d'autre |
+| `chain.py` | le format pivot des chaînes : les colonnes, et leur nettoyage |
 | `greeks.py` | gamma, charm, vanna Black-Scholes, vectorisés — le seul endroit où une formule est écrite |
+| `black76.py` | Black-76 pour les options sur futures, et le multiplicateur de chaque contrat |
 | `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
 | `plots.py` | les quatre graphiques |
 | `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
 | `history.py` | historique des relevés |
 | `validate.py` | le modèle tient-il ? |
-| `cboe_data.py`, `cme_data.py`, `databento_data.py`, `barchart_data.py` | sources d'options |
-| `ib_data.py` | collecteur Interactive Brokers — fonctions pures écrites, couche réseau à venir |
+| `ib_data.py` | source Interactive Brokers : connexion, énumération des contrats, souscription par lots |
+| `ib_collector.py` | la boucle qui alimente le relevé courant : socle quotidien, vif entretenu |
 | `price_data.py` | historique de prix du sous-jacent (API à clé gratuite) |
-| `flow_tracker.py` | suivi du flux et signe réel de la position dealer |
 
-Tout ce qui produit un chiffre est dans `analysis.py` et `greeks.py`, donc appelable
-sans réseau et couvert par les tests. C'était auparavant enfermé dans `main()`.
+Tout ce qui produit un chiffre est dans `analysis.py`, `greeks.py` et `black76.py`,
+donc appelable sans réseau et couvert par les tests. C'était auparavant enfermé dans
+`main()`.
+
+`chain.py` et `black76.py` ne sont la source de personne : ils portent le format et
+la formule que toute source doit servir. Ils vivaient dans `cboe_data.py` et
+`cme_data.py` ; les y laisser aurait fait qu'en retirant une source on emportait le
+format avec elle.
 
 ## Utilisation
 
-Actions et indices US, données récupérées automatiquement :
+Deux programmes, dans deux terminaux. Le collecteur écrit, le lecteur lit :
 
 ```sh
-python main.py SPCX          # SpaceX
-python main.py TSLA
-python main.py _SPX          # les indices se préfixent d'un underscore
-python main.py SPCX --range 0.35 --no-show
-python main.py --csv spx_quotedata.csv   # export CSV manuel du site CBOE
+python ib_collector.py NQ                 # le collecteur : il tourne et entretient le relevé
+python main.py NQ                         # le lecteur : un passage sur le relevé courant
+python main.py NQ --watch 30              # relu toutes les 30 s
+python main.py NQ --range 0.35 --no-show
 ```
+
+`main.py` ne va jamais chercher de données. C'est cette séparation qui lui permet de
+tourner pendant que le collecteur encaisse le redémarrage quotidien d'IB, et qui fait
+qu'une séance passée se rejoue avec exactement le même code qu'une séance vivante.
 
 Le script affiche le Total GEX, le **Zero Gamma Level**, le Call Wall et le Put Wall,
 puis enregistre quatre graphiques dans `charts/` :
@@ -78,8 +90,10 @@ puis enregistre quatre graphiques dans `charts/` :
 
 ### D'où vient le gamma (`--gamma-source`)
 
-Le CBOE publie un gamma par contrat, et on peut aussi le recalculer en Black-Scholes
-depuis la volatilité implicite. Le script **mélangeait les deux sans le dire** : le
+IB publie un gamma par contrat, et on peut aussi le recalculer en Black-76 depuis la
+volatilité implicite. Ni le CME ni Databento ne le publiaient, si bien que cette
+confrontation n'était possible que sur des actions ; elle l'est désormais sur du
+future. Le script **mélangeait les deux sans le dire** : le
 Total GEX prenait le gamma publié pendant que le profil — donc le Zero Gamma affiché
 juste en dessous — recalculait depuis l'IV. Deux estimateurs pour deux chiffres
 présentés comme cohérents.
@@ -88,8 +102,8 @@ Une seule source alimente désormais tout le pipeline, rappelée dans l'en-tête
 dans le titre des graphiques :
 
 ```sh
-python main.py _SPX                             # --gamma-source iv (défaut)
-python main.py _SPX --gamma-source published    # le gamma tel que diffusé
+python main.py NQ                             # --gamma-source iv (défaut)
+python main.py NQ --gamma-source published    # le gamma tel que publié par IB
 ```
 
 Le défaut est `iv` parce que c'est le seul choix cohérent de bout en bout : à un
@@ -115,9 +129,14 @@ le signale.
 
 ### Le GEX rapporté à ce qui s'échange
 
-Un montant de couverture nu ne dit rien. Le payload CBOE porte déjà l'OHLCV et
-l'iv30 du sous-jacent — le projet les téléchargeait sans les lire. Ils sont
-désormais captés, archivés, et le rapport qui rend le GEX lisible est affiché :
+Un montant de couverture nu ne dit rien : rapporté au volume échangé du jour, si.
+
+> **Indisponible sur futures.** Ce contexte de séance (OHLCV, iv30) venait du payload
+> CBOE. Aucune source sur futures ne le publie, donc la ligne `GEX/volume` ne
+> s'affiche plus — elle est absente plutôt que fausse. Le mécanisme et le schéma
+> d'historique restent en place pour que les relevés déjà écrits restent lisibles.
+
+L'affichage, du temps où la donnée existait :
 
 ```
 Total GEX  : 125.55 millions $ / mouvement de 1%
@@ -135,7 +154,9 @@ validation ci-dessous.
 
 ### Horizon d'échéance (`--dte-max`)
 
-Une chaîne CBOE porte plusieurs années d'échéances — jusqu'à 2031 sur le SPX. Prises
+Une chaîne complète porte plusieurs années d'échéances — les trimestrielles du NQ
+courent bien au-delà de l'horizon utile, et la mesure ci-dessous a été faite sur le
+SPX, où l'effet est le plus net : jusqu'à 2031. Prises
 en bloc, les LEAPS écrasent l'analyse : leurs strikes ronds concentrent un OI énorme
 mais purement spéculatif, qui ne produit aucun flux de hedging à court terme. Sur le
 SPX du 10 août 2026, la chaîne complète donnait un GEX de **+70,8 Md$** (régime de
@@ -145,9 +166,9 @@ donnait **−1,1 Md$**, soit le régime inverse.
 `--dte-max` ne retient donc que les échéances proches, **défaut 30 jours calendaires** :
 
 ```sh
-python main.py _SPX                    # 30 jours (défaut)
-python main.py _SPX --dte-max 7        # semaine en cours
-python main.py _SPX --dte-max all      # toute la chaîne
+python main.py NQ                    # 30 jours (défaut)
+python main.py NQ --dte-max 7        # semaine en cours
+python main.py NQ --dte-max all      # toute la chaîne collectée
 ```
 
 Le filtre s'applique avant tout calcul : murs, profil de gamma et zero gamma portent
@@ -196,8 +217,8 @@ Le profil de gamma évalue l'exposition à des niveaux de spot hypothétiques. R
 à décider ce que devient l'IV en chemin, et les deux réponses encadrent la réalité :
 
 ```sh
-python main.py _SPX                                  # sticky-strike (défaut)
-python main.py _SPX --vol-regime sticky-moneyness
+python main.py NQ                                  # sticky-strike (défaut)
+python main.py NQ --vol-regime sticky-moneyness
 ```
 
 - **sticky-strike** : chaque contrat garde son IV. Le prix glisse le long du skew
@@ -223,7 +244,7 @@ Total GEX, mesuré au spot, n'en dépend pas du tout.
 ### Suivre une séance (`--watch`)
 
 ```sh
-python main.py SPCX --watch 5m --watch-duration 6h --no-charts
+python main.py NQ --watch 30s --watch-duration 6h --no-charts
 ```
 
 L'open interest ne bouge qu'une fois par jour : en séance, seuls le spot et l'IV
@@ -234,9 +255,10 @@ prix à ce niveau, elle, se referme ou s'ouvre — et c'est elle qui décide du 
   depuis le relevé précédent : spot +0.18, zero gamma +1.06, distance au zero gamma +9.72%
 ```
 
-Un passage n'écrit dans l'historique que si le flux a réellement avancé : les données
-CBOE étant différées d'un quart d'heure, deux passages rapprochés renvoient le même
-relevé, et le réenregistrer n'ajouterait qu'une ligne identique.
+Un passage n'écrit dans l'historique que si le relevé a réellement avancé : le
+collecteur réécrit le courant toutes les quinze secondes, donc un `--watch` plus
+pressé que lui relit le même fichier, et le réenregistrer n'ajouterait qu'une ligne
+identique.
 
 ### Suivre un relevé vivant (`--suivre`)
 
@@ -251,8 +273,11 @@ D'où deux différences : `--watch` est permis sur le courant alors qu'il reste
 interdit sur une archive, et `snapshots.lister()` exclut le courant — un fichier
 qui change sous les pieds n'a rien à faire dans un historique de validation.
 
-Rien ne l'écrit encore : le collecteur Interactive Brokers est en cours
-d'écriture. L'option est en place, sa source viendra.
+Ce qui l'écrit : `python ib_collector.py NQ`, qui exige TWS ou Gateway et l'extra
+`.[ib]`. Il balaie la chaîne entière une fois par journée de compensation — l'open
+interest n'est publié qu'une fois par jour, le relire en séance coûterait treize
+minutes pour le même chiffre — puis entretient en continu les contrats qui portent
+le gamma, et réécrit le courant toutes les quinze secondes.
 
 ### Rejouer une séance (`--replay`)
 
@@ -268,7 +293,7 @@ python snapshots.py SPX
 
 python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --dte-max 7
 python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --gamma-source published
-python main.py SPCX --no-snapshot  # ne pas archiver
+python main.py NQ --no-snapshot  # ne pas archiver
 ```
 
 Un rejeu ne réarchive pas et ne consomme aucune requête réseau. Le format est parquet
@@ -307,9 +332,9 @@ instantané et les séries n'existent nulle part.
 
 ```sh
 python history.py              # dernier relevé de chaque ticker
-python history.py SPCX         # la trajectoire d'un sous-jacent
-python history.py SPCX --last 5
-python main.py SPCX --no-history      # ne pas enregistrer
+python history.py NQ         # la trajectoire d'un sous-jacent
+python history.py NQ --last 5
+python main.py NQ --no-history      # ne pas enregistrer
 ```
 
 ```
@@ -334,7 +359,7 @@ de colonnes.
 
 ```sh
 python validate.py            # tous les tickers
-python validate.py SPCX
+python validate.py NQ
 ```
 
 Le modèle avance trois affirmations vérifiables, et `validate.py` les mesure sur
@@ -377,8 +402,8 @@ clôture :
 
 ```sh
 export ALPHAVANTAGE_API_KEY=...        # ou TWELVEDATA_API_KEY, TIINGO_API_KEY
-python validate.py SPCX --prix
-python validate.py SPCX --prix --fournisseur tiingo
+python validate.py NQ --prix
+python validate.py NQ --prix --fournisseur tiingo
 ```
 
 Trois fournisseurs, tous avec une API documentée et une clé gratuite ; celui dont
@@ -389,9 +414,12 @@ retombe sur les relevés seuls — `--prix` n'est jamais bloquant.
 et le zero gamma ont été calculés, et le substituer rendrait les distances
 incohérentes avec les niveaux qu'elles mesurent. Il n'ajoute que la séance suivante.
 
-Deux réserves dites franchement. Ces API cotent les actions, rarement les indices :
-un ticker comme `_SPX` est **substitué par son ETF** (SPY), qui le suit sans
-l'égaler — la substitution est annoncée à l'écran, jamais faite en silence. Et
+Deux réserves dites franchement. Ces API cotent les actions, rarement les indices, et
+**pas les futures du tout** : il n'existe aucune série pour NQ, donc `--prix` ne sert
+plus rien sur le seul produit désormais couvert, et la validation retombe sur la
+mesure à la clôture. Le module est conservé tel quel, sa substitution d'indice par un
+ETF comprise — annoncée à l'écran, jamais faite en silence — mais il attend une source
+de prix pour futures. Et
 **Stooq n'est pas utilisé** : il servait des CSV sans clé, mais sert désormais une
 épreuve de calcul dont le seul objet est d'écarter les clients non-navigateurs.
 C'est un refus d'accès automatisé, et on le respecte.
@@ -450,7 +478,7 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 158 tests, aucun accès réseau
+python -m pytest tests -q        # 222 tests, aucun accès réseau
 ```
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
@@ -470,143 +498,20 @@ passerait sur du vide.
 La CI (`.github/workflows/tests.yml`) lance la suite sur Python 3.11 et 3.13 à chaque
 push et chaque pull request.
 
-### Options sur futures (EUR/USD via le 6E, ES, ...)
-
-Le CME interdit l'accès automatisé à son site (Data Terms of Use) : il n'y a donc pas
-de scraper ici. On part d'un fichier téléchargé à la main depuis l'
-[Option Settlement Tool](https://www.cmegroup.com/tools-information/quikstrike/option-settlement.html),
-et `cme_data.py` le convertit au format du pipeline.
-
-```sh
-python main.py 6E --cme reglement_6E.csv --expiry 2026-09-04 --range 0.05
-python main.py ES --cme reglement_ES.csv --contract-size 50
-python -c "import cme_data; cme_data.inspect('reglement_6E.csv')"   # si le parsing échoue
-```
-
-Le CME ne publiant pas le gamma, il est calculé en **Black-76** à partir de la volatilité
-implicite du fichier — et si elle est absente, elle est inversée depuis le prix de règlement.
-Le prix du future est déduit par parité call-put s'il n'est pas fourni (`--futures-price`).
-La détection des colonnes est tolérante (formats large et long, alias, casse libre).
-
-À `r = q = 0`, le gamma Black-Scholes est identiquement égal au gamma Black-76 : le même
-code sert donc aux actions et aux options sur futures, seul le multiplicateur change
-(100 par défaut, 125 000 pour le 6E).
-
-### Databento : le 6E sans téléchargement manuel
-
-[Databento](https://databento.com) redistribue légalement les données CME Globex,
-donc la chaîne complète est récupérable par API — sans scraping.
-
-```sh
-pip install databento
-export DATABENTO_API_KEY=db-xxxxxxxx      # $env:DATABENTO_API_KEY="db-..." sous PowerShell
-
-python main.py 6E --databento             # dernière séance close
-python main.py 6E --databento --date 2026-08-03
-python main.py ES --databento --contract-size 50
-```
-
-Deux requêtes par appel : le schéma `definition` fournit strike, échéance et
-call/put, le schéma `statistics` fournit l'open interest (`stat_type` 9), le prix
-de règlement et, quand le CME le publie, la volatilité implicite. Le prix du
-future vient du règlement de première échéance, à défaut de la parité call-put.
-
-Chaque requête est facturée au volume de données : une séance d'options 6E reste
-modeste, mais évite les boucles sur de longues périodes.
-
-### Barchart (options sur futures, gratuit mais aléatoire)
-
-```sh
-python barchart_data.py E6U26 --expiry aug-26 --out barchart_6E.csv
-python main.py 6E --cme barchart_6E.csv --expiry 2026-08-28
-```
-
-Le script fusionne deux vues — `volatility-greeks` (IV, gamma) et `options`
-(volume, **open interest**, indispensable au GEX) — sur (strike, type), et écrit
-un CSV que `cme_data.py` relit tel quel.
-
-Barchart rend ses tableaux dans un shadow DOM (`<bc-data-grid>`) : le texte n'est
-pas accessible par `.text`, il faut descendre dans le `shadowRoot`. Surtout, le
-site **sert des cellules vides aux navigateurs automatisés selon l'adresse IP** :
-les en-têtes chargent, les valeurs non. Le script échoue alors avec un message
-explicite plutôt que d'écrire un fichier vide. Essayer `--visible` le cas échéant.
-
-### Suivi du flux (qui achète, qui vend)
-
-Le GEX dit *où* sont les positions, pas *qui* les a initiées. Pour ça il faut
-comparer chaque transaction à la fourchette bid/ask du moment : au-dessus du mid
-l'acheteur était à l'initiative, en dessous c'est le vendeur.
-
-`flow_tracker.py` approche ça gratuitement en échantillonnant le CBOE : entre
-deux relevés, un contrat dont le volume a augmenté **et** dont l'horodatage du
-dernier trade a avancé fournit un trade neuf, situable dans sa fourchette.
-
-```sh
-python flow_tracker.py ORCL --interval 300 --duration 6h
-python flow_tracker.py SPCX --interval 180 --out flux_spcx.csv
-python flow_tracker.py ES --interval 300 --contract-size 50   # le multiplicateur n'est pas toujours 100
-```
-
-À lancer **pendant la séance** (9h30–16h ET), en comptant 15 minutes de plus :
-le flux CBOE est différé d'autant, et hors séance volume et derniers trades
-restent figés sur la clôture précédente. Le script prévient si le marché est
-fermé. L'horodatage du payload CBOE est en UTC, celui des trades en heure de
-New York — la classification compare les horodatages entre relevés plutôt qu'à
-l'heure courante, ce qui rend le décalage sans effet.
-
-Ses limites, à garder en tête : on ne voit que le **dernier** trade de chaque
-fenêtre, dont le côté est appliqué à tout le volume de la fenêtre. Le signal
-n'a de sens qu'agrégé sur de nombreux contrats. Pour de vrais prints il faut le
-tape OPRA — Tradier (gratuit avec un compte), Polygon ou Databento.
-
-#### Mesurer le sens au lieu de le supposer
-
-Tout le reste du projet postule que les dealers sont longs calls et shorts puts.
-C'est l'hypothèse la plus fragile de la méthode. Le flux collecté permet de la
-remplacer par une mesure — la position dealer est le miroir du flux client agressif :
-
-```
-position_dealer[strike] = ventes_clients - achats_clients
-```
-
-```sh
-python flow_tracker.py ORCL --signed flux_orcl.csv
-```
-
-```
-GEX signé par le flux    :   -4.76 M$   (inventaire pris aujourd'hui)
-GEX signé par convention : +470.78 M$   (structure accumulée, mêmes strikes)
--> SIGNES OPPOSÉS
-
-contrats nets pris par les dealers : calls -6,598  puts +2,603
-```
-
-Ici les clients ont acheté des calls et vendu des puts, donc les dealers sont **shorts
-calls** — l'inverse de ce que postule la convention. Les trades au milieu de la
-fourchette sont écartés, pas devinés.
-
-Deux réserves qui interdisent de substituer l'un à l'autre :
-
-- cela mesure la **variation d'inventaire de la séance**, partant de zéro à l'ouverture,
-  pas le book existant. Un strike non traité pèse zéro ici alors qu'il peut porter un
-  open interest massif. Les ordres de grandeur ne sont donc pas comparables ;
-- la classification reste grossière (voir plus haut), donc c'est une indication de sens,
-  pas une mesure fine.
-
-Les deux lectures sont complémentaires : la convention décrit la structure accumulée,
-le flux décrit ce que les dealers ont pris aujourd'hui.
-
-### Sources de données
+### Source de données
 
 | Module | Source | Accès |
 |---|---|---|
-| `cboe_data.py` | `cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json` | libre, sans clé, différé |
-| `cboe_data.load_from_csv()` | export CSV du site CBOE | téléchargement manuel |
-| `cme_data.load_settlement()` | export du CME Option Settlement Tool | téléchargement manuel |
-| `databento_data.fetch_chain()` | Databento GLBX.MDP3 | clé API, facturé à l'usage |
+| `ib_data.py` | Interactive Brokers (TWS / Gateway), options sur futures CME | forfait, temps réel ou différé |
 
-Le JSON CBOE fournit strike, expiration, OI, IV et gamma. `to_cboe_csv()` permet de
-réécrire une chaîne au format CSV historique pour d'autres outils.
+Il n'y en a plus qu'une. Le CBOE, le CME, Databento et Barchart ont été retirés : tous
+ne servaient que le règlement de la veille, et aucun ne publiait le gamma — `black76.py`
+le recalculait faute de mieux. IB apporte les trois choses qu'aucun n'avait : le temps
+réel, un tarif forfaitaire, et un gamma **publié**, ce qui permet enfin à
+`--gamma-source` de confronter deux estimateurs sur du future.
+
+Le prix comptant du future ne se cherche pas : IB le sert dans `modelGreeks.undPrice`,
+donc dans chaque tick d'option. La parité call-put ne reste qu'un filet.
 
 ## Auteur
 
