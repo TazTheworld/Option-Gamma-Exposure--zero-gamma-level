@@ -25,7 +25,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pyarrow
+          # databento porte databento_dbn, dont dependent les tests de
+          # build_chain. Sans lui ils se sautent, et le parseur CME n'est
+          # plus couvert : la CI doit donc installer l'extra, pas s'en passer.
+          pip install pytest pyarrow databento
 
       - name: Tests
         # Aucun test ne touche au reseau : la suite doit passer telle quelle.

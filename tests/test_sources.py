@@ -5,6 +5,8 @@ de vérifier qu'on retrouve la vérité terrain plutôt que de figer une sortie.
 Aucun test ne touche au réseau.
 """
 
+import importlib.util
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -119,6 +121,15 @@ def test_cme_alias_latest_de_barchart_reconnu(tmp_path):
 
 # ---=== databento_data ===---
 
+# databento_dbn n'arrive qu'avec l'extra [databento], que le coeur du projet
+# n'impose pas. Ces tests se sautent donc chez qui ne l'a pas, au lieu d'echouer
+# sur un ModuleNotFoundError qui ressemble a une regression. La CI, elle,
+# l'installe : sauter partout reviendrait a ne plus tester le parseur du tout.
+besoin_databento = pytest.mark.skipif(
+    importlib.util.find_spec("databento_dbn") is None,
+    reason='extra absent : pip install -e ".[databento]"')
+
+
 def _frames_databento(strikes_en_entier_fixe):
     """Imite la sortie de .to_df() : definitions + statistics."""
     from databento_dbn import StatType
@@ -144,6 +155,7 @@ def _frames_databento(strikes_en_entier_fixe):
     return pd.DataFrame(defs), pd.DataFrame(stats)
 
 
+@besoin_databento
 @pytest.mark.parametrize("entier_fixe", [True, False])
 def test_databento_assemble_la_chaine(entier_fixe):
     chaine, prix, _ = dbd.build_chain(*_frames_databento(entier_fixe), quote_date=QUOTE)
@@ -153,6 +165,7 @@ def test_databento_assemble_la_chaine(entier_fixe):
     assert chaine.CallOpenInt.sum() == 500 * len(STRIKES)
 
 
+@besoin_databento
 def test_databento_codes_stat_lus_depuis_l_enumeration():
     """La doc publique donnait des valeurs fausses : on lit le paquet, pas la doc."""
     from databento_dbn import StatType
@@ -161,6 +174,7 @@ def test_databento_codes_stat_lus_depuis_l_enumeration():
     assert codes["settle"] == int(StatType.SETTLEMENT_PRICE)
 
 
+@besoin_databento
 def test_databento_definitions_vides_leve_une_erreur():
     with pytest.raises(ValueError):
         dbd.build_chain(pd.DataFrame({"instrument_class": []}), pd.DataFrame({"stat_type": []}))
