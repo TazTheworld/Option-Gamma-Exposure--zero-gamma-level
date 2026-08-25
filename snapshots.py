@@ -29,6 +29,7 @@ DOSSIER = "snapshots"
 META_SPOT = "_spot"
 META_DATE = "_quote_date"
 PREFIXE_MARCHE = "_marche_"
+NOM_COURANT = "courant"
 
 
 def _sans_parquet():
@@ -45,6 +46,22 @@ def chemin(ticker, quote_date, dossier=DOSSIER):
     horodatage = pd.Timestamp(quote_date).strftime("%Y-%m-%d_%H%M")
     extension = "csv.gz" if _sans_parquet() else "parquet"
     return os.path.join(dossier, str(ticker).upper(), f"{horodatage}.{extension}")
+
+
+def courant(ticker, dossier=DOSSIER):
+    """snapshots/NQ/courant.parquet — le relevé vivant, réécrit en place.
+
+    chemin() horodate à la minute. Un collecteur qui réécrit toutes les quinze
+    secondes y créerait un fichier neuf par minute, soit près de mille cinq cents
+    par jour et par sous-jacent : une archive illisible, et un lecteur incapable
+    de savoir lequel est le dernier sans lister le dossier à chaque fois.
+
+    Le courant a donc un chemin fixe, et les archives horodatées gardent
+    chemin(). Même format dans les deux cas : sauver() et charger() servent les
+    deux sans changement, et main.py --replay ouvre l'un comme l'autre.
+    """
+    extension = "csv.gz" if _sans_parquet() else "parquet"
+    return os.path.join(dossier, str(ticker).upper(), f"{NOM_COURANT}.{extension}")
 
 
 def sauver(df, ticker, spot, quote_date, dossier=DOSSIER, marche=None):
@@ -97,9 +114,17 @@ def charger(source):
 
 
 def lister(ticker=None, dossier=DOSSIER):
-    """Chemins archivés, du plus ancien au plus récent."""
+    """Chemins archivés, du plus ancien au plus récent.
+
+    Le relevé courant est exclu : il porte le même format que les archives, mais
+    pas le même rôle. Le laisser entrer le ferait remonter dans dernier(), donc
+    dans les relectures et dans validate.py — où un fichier qui change sous les
+    pieds n'a rien à faire.
+    """
     motif = os.path.join(dossier, str(ticker).upper() if ticker else "*", "*.*")
-    return sorted(f for f in glob.glob(motif) if f.endswith((".parquet", ".csv.gz")))
+    return sorted(f for f in glob.glob(motif)
+                  if f.endswith((".parquet", ".csv.gz"))
+                  and not os.path.basename(f).startswith(NOM_COURANT + "."))
 
 
 def dernier(ticker, dossier=DOSSIER):

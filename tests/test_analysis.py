@@ -9,6 +9,8 @@ placés à des strikes choisis), ce qui permet de vérifier qu'on retrouve la
 réponse attendue plutôt que de figer une sortie.
 """
 
+import shutil
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -547,6 +549,39 @@ def test_snapshot_lister_et_dernier(tmp_path):
     assert len(snapshots.lister(dossier=str(tmp_path))) == 3
     assert snapshots.dernier("AAA", str(tmp_path)) == dernier
     assert snapshots.dernier("ZZZ", str(tmp_path)) is None
+
+
+def test_snapshot_courant_a_un_chemin_fixe(tmp_path):
+    """Le relevé vivant est réécrit en place : sinon 1 500 fichiers par jour."""
+    un = snapshots.courant("NQ", str(tmp_path))
+    deux = snapshots.courant("nq", str(tmp_path))
+    assert un == deux                       # insensible à la casse, comme chemin()
+    assert un.endswith(("courant.parquet", "courant.csv.gz"))
+    assert "NQ" in un
+
+
+def test_snapshot_lister_ignore_le_courant(tmp_path):
+    """Le courant n'est pas une archive : il ne doit pas remonter dans --replay."""
+    archive = snapshots.sauver(chaine(), "NQ", SPOT, QUOTE, str(tmp_path))
+    vivant = snapshots.courant("NQ", str(tmp_path))
+    shutil.copy(archive, vivant)            # le courant existe sur disque
+
+    trouves = snapshots.lister("NQ", str(tmp_path))
+    assert vivant not in trouves
+    assert archive in trouves
+    assert snapshots.dernier("NQ", str(tmp_path)) != vivant
+
+
+def test_snapshot_courant_relu_comme_une_archive(tmp_path):
+    """Même format que les archives : main.py --replay doit pouvoir l'ouvrir."""
+    df = chaine(jours=(1, 8))
+    archive = snapshots.sauver(df, "NQ", SPOT, QUOTE, str(tmp_path))
+    cible = snapshots.courant("NQ", str(tmp_path))
+    shutil.copy(archive, cible)
+
+    relu, spot, quote_date, marche = snapshots.charger(cible)
+    assert spot == SPOT and pd.Timestamp(quote_date) == QUOTE
+    assert len(relu) == len(df)
 
 
 def test_charger_un_fichier_qui_n_est_pas_un_releve(tmp_path):
