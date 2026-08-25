@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod analyse;
 pub mod black76;
 pub mod chaine;
 pub mod contrat;

@@ -45,6 +45,14 @@ une fois, avec le multiplicateur du contrat.
 |---|---|
 | `nq-2026-08-25.parquet` | la chaîne brute, telle qu'écrite par `ib_collector.py` |
 | `nq-2026-08-25.expected.json` | GEX, zero gamma, murs, charm, vanna, et cinq Black-76 exacts |
+| `chaine-synthetique.json` | l'oracle du moteur : une chaîne construite depuis des paramètres connus, et tout ce que Python en tire |
+
+Les deux ont des rôles distincts. Le relevé IB prouve que le moteur tient sur des
+données réelles, avec leurs trous et leurs échéances qui ne s'accordent pas. La
+chaîne synthétique — skew injecté à -0,15, open interest asymétrique, trois
+échéances dont une mensuelle réglée le matin — est celle contre laquelle
+`analyse.rs` se vérifie, parce qu'on y connaît la vérité terrain : le test du skew
+doit retrouver exactement le -0,15 qu'on y a mis.
 
 Les tests n'y comparent jamais une sortie figée sans la comprendre : les jeux
 d'essai restent construits depuis des paramètres connus, et l'oracle sert à
@@ -60,7 +68,7 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | expositions gamma / charm / vanna | `greeks.py` | ✅ `greeks.rs` |
 | temps restant, fuseaux, conventions | `analysis.py` | ✅ `temps.rs` |
 | format pivot | `chain.py` | ✅ `chaine.rs` |
-| filtres, murs, profil, zero gamma | `analysis.py` | ⬜ `analyse.rs` |
+| filtres, murs, profil, zero gamma | `analysis.py` | ✅ `analyse.rs` |
 | parquet | `snapshots.py` | ⬜ `gex-store` |
 | source IB | `ib_data.py` | ⬜ `gex-ib` |
 | démon | `ib_collector.py` | ⬜ `gex-collector` |
