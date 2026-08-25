@@ -34,96 +34,11 @@ pip install -e ".[snapshots]"    # archivage en parquet plutôt qu'en csv.gz
 pip install -e ".[dev]"          # tests
 ```
 
-## Interface web locale
-
-```sh
-python serve.py            # http://127.0.0.1:8000, s'ouvre tout seul
-python serve.py --port 8080 --no-browser
-```
-
-Une page unique pour lire un relevé : le régime en chiffre d'appel, les six niveaux
-en tuiles, puis le profil de gamma, l'exposition par strike, la décomposition
-calls / puts, le charm et la vanna. Les réglages — sous-jacent, horizon, source de
-gamma, convention de temps, plage — sont en une seule rangée en haut, et
-rejouent tout le relevé d'un coup.
-
-Le serveur n'ajoute **aucune dépendance** : `http.server` de la bibliothèque
-standard, du HTML et du JavaScript sans framework, des graphiques en SVG écrits à
-la main. Il ne fait que servir `web/` et exposer `analysis.analyser()` en JSON,
-donc la page ne peut afficher aucun chiffre que les tests ne couvrent pas. La
-chaîne brute est gardée trois minutes en mémoire par sous-jacent : changer
-d'horizon ou de source recalcule en local, sans retélécharger. Les relevés
-archivés apparaissent dans un sélecteur, pour rejouer une séance passée.
-
-### L'échelle de prix
-
-La carte en tête de page reprend l'exposition **lue comme un carnet** : strikes en
-vertical, spot en ligne qui traverse la page, murs en paliers. Sept onglets pour
-la grandeur tracée — **GEX** (en dollars par 1 % ou en **titres par dollar** de
-mouvement), **DEX** (delta), **VEX** (vega), **CEX** (charm), **vGEX** (vanna),
-**OI net**. Le delta et le vega viennent du payload CBOE, qui les publie par
-contrat et que le projet ignorait.
-
-Le trait fin derrière chaque barre est une **mèche** : l'exposition de ce strike au
-premier relevé archivé de la même séance. L'open interest ne bougeant qu'une fois
-par jour, ce qui s'est déplacé depuis vient du prix et de la volatilité. Elle
-n'apparaît que s'il existe un relevé antérieur du même jour, analysé aux mêmes
-réglages — comparer deux horizons ne dirait rien d'un déplacement intraséance.
-
-Le **smile de volatilité** occupe un panneau séparé à gauche, sur le même axe de
-strikes. Le superposer au gamma sur une seconde échelle horizontale, comme le font
-certains outils, cale deux grandeurs l'une sur l'autre de façon arbitraire et fait
-lire une relation qui n'est pas dans les données.
-
-Le zéro reste à sa vraie place mais chaque côté est cadré sur ses propres valeurs :
-une échelle symétrique laisse la moitié du champ vide dès que les expositions
-penchent d'un côté, ce qui est le cas ordinaire.
-
-#### L'axe des strikes
-
-**Un rang par strike, tous de la même hauteur.** Une chaîne n'a pas un pas
-régulier — sur SPCX, 1 point près de la monnaie et 2,5 plus loin — et un axe
-proportionnel au prix laisse alors le haut du graphique presque vide tout en
-écrasant la zone dense, celle qui porte l'information.
-
-Ce n'est pas pour autant un axe catégoriel. C'est une **échelle de prix affine par
-morceaux, dont les strikes sont les nœuds** : exacte à chaque strike, monotone
-partout, et interpolée linéairement entre deux strikes voisins. Un prix quelconque
-y a donc une position unique et juste. Le spot à 148,49 se pose à 49 % du chemin
-entre les rangs 148 et 149 — vérifié à 0,00 px près, parce qu'une ligne de spot
-posée au rang le plus proche mentirait d'un demi-strike, soit plusieurs dizaines
-de points sur un indice.
-
-Ce que cette échelle perd : des écarts de prix égaux n'occupent plus des hauteurs
-égales. Plutôt que de laisser cette déformation implicite, elle est **montrée** —
-quelques niveaux ronds sont tracés à leur position réelle, étiquetés à droite. Là
-où les strikes se resserrent la bande est haute, là où ils s'espacent elle est
-courte, et le lecteur le voit au lieu de le subir.
-
-Trois cartes s'ajoutent quand il y a de quoi les remplir, et disparaissent sinon
-plutôt que d'afficher du vide : **la dérive** trace le prix et le zero gamma côte à
-côte au fil des relevés enregistrés — c'est leur écart qui décrit le régime, et le
-voir se refermer vaut mieux qu'une photo ; **le signe du flux** confronte la
-convention au flux réellement observé dès qu'un `flux_<ticker>.csv` existe ; et le
-sélecteur **Rafraîchir** rejoue le relevé à intervalle régulier, sans descendre sous
-la minute puisque le flux CBOE est différé d'un quart d'heure.
-
-Sur le fond clair, les couleurs de données sortent d'une palette validée
-(bande de clarté, plancher de chroma, séparation en vision daltonienne,
-contraste sur la surface). Le bleu et le rouge n'y encodent qu'une polarité —
-la couverture amortit ou amplifie — jamais une identité. Les repères (spot,
-zero gamma, murs) ne prennent aucune couleur de série : ce sont des pastilles
-en encre, parce qu'un trait fin teinté ne porte pas le contraste. Chaque
-graphique a une légende, une infobulle au survol et **une vue tableau** listant
-exactement les mêmes strikes que le tracé : aucune valeur n'est accessible par
-la seule couleur.
-
 ## Organisation
 
 | Module | Rôle |
 |---|---|
 | `main.py` | interface en ligne de commande, rien d'autre |
-| `serve.py` + `web/` | interface web locale |
 | `greeks.py` | gamma, charm, vanna Black-Scholes, vectorisés — le seul endroit où une formule est écrite |
 | `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
 | `plots.py` | les quatre graphiques |
