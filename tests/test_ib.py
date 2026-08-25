@@ -357,3 +357,37 @@ def test_fusionner_ignore_un_contrat_absent_du_socle():
     fusionnee, _ = ib_data.fusionner(socle, vif, spot=PRIX)
     assert len(fusionnee) == len(socle)
     assert 99_999.0 not in set(fusionnee.StrikePrice)
+
+
+# ---=== branchement du lecteur ===---
+
+def test_suivre_resout_le_chemin_du_courant(tmp_path):
+    """--suivre NQ évite de taper snapshots/NQ/courant.parquet à la main."""
+    import main
+    import snapshots
+    args = main.construire_parser().parse_args(["NQ", "--suivre", "--dir", str(tmp_path)])
+    assert main.source_relecture(args) == snapshots.courant("NQ", str(tmp_path))
+
+
+def test_sans_suivre_ni_replay_aucune_relecture():
+    """Le chemin normal reste le téléchargement, pas un fichier."""
+    import main
+    args = main.construire_parser().parse_args(["NQ"])
+    assert main.source_relecture(args) is None
+
+
+def test_watch_et_replay_restent_exclusifs_sur_une_archive(tmp_path):
+    """Une archive horodatée ne bouge plus : la suivre n'a aucun sens."""
+    import main
+    args = main.construire_parser().parse_args(
+        ["NQ", "--watch", "60", "--replay", str(tmp_path / "2026-08-25_1436.parquet")])
+    with pytest.raises(ValueError, match="archive"):
+        main.verifier_exclusions(args)
+
+
+def test_watch_est_permis_sur_le_courant(tmp_path):
+    """Le courant bouge : le suivre est exactement l'usage visé."""
+    import main
+    args = main.construire_parser().parse_args(
+        ["NQ", "--watch", "60", "--suivre", "--dir", str(tmp_path)])
+    main.verifier_exclusions(args)          # ne doit rien lever

@@ -49,6 +49,11 @@ def construire_parser():
                         help="récupérer la chaîne CME via Databento (DATABENTO_API_KEY)")
     parser.add_argument("--replay", metavar="FICHIER",
                         help="rejouer un relevé archivé (voir python snapshots.py)")
+    parser.add_argument("--suivre", action="store_true",
+                        help="lire le relevé courant écrit par le collecteur "
+                             "(snapshots/<TICKER>/courant.parquet)")
+    parser.add_argument("--dir", default=snapshots.DOSSIER,
+                        help=f"dossier des relevés archivés (défaut : {snapshots.DOSSIER})")
     parser.add_argument("--date", help="séance à charger AAAA-MM-JJ (défaut : dernière close)")
     parser.add_argument("--futures-price", type=float,
                         help="prix du future ; déduit par parité call-put si omis")
@@ -101,6 +106,31 @@ def construire_parser():
     return parser
 
 
+def source_relecture(args):
+    """Le fichier à rejouer : --replay tel quel, ou le courant si --suivre."""
+    if args.replay:
+        return args.replay
+    if args.suivre:
+        return snapshots.courant(args.ticker, args.dir)
+    return None
+
+
+def verifier_exclusions(args):
+    """Les combinaisons d'options qui n'ont pas de sens, refusées à l'entrée.
+
+    --watch relit sa source à intervalle régulier. Sur une archive horodatée
+    c'est absurde : elle ne bougera plus. Sur le relevé courant c'est l'usage
+    même, puisque le collecteur le réécrit toutes les quinze secondes.
+    L'exclusion porte donc sur --replay, jamais sur --suivre.
+    """
+    if args.watch and args.replay:
+        raise ValueError("--watch et --replay s'excluent : une archive ne bouge plus. "
+                         "Pour suivre un relevé vivant, utilise --suivre.")
+    if args.replay and args.suivre:
+        raise ValueError("--replay et --suivre s'excluent : choisis une archive "
+                         "précise, ou le relevé courant.")
+
+
 def charger(args):
     """Renvoie (df, spot, quote_date, ticker, rejoue, marche).
 
@@ -108,8 +138,9 @@ def charger(args):
     le publie : les sources sur futures renvoient un dictionnaire vide, et les
     ratios au volume sont alors simplement absents plutôt que faux.
     """
-    if args.replay:
-        df, spot, quote_date, marche = snapshots.charger(args.replay)
+    source = source_relecture(args)
+    if source:
+        df, spot, quote_date, marche = snapshots.charger(source)
         return df, spot, quote_date, args.ticker, True, marche
     if args.databento:
         import databento_data
@@ -338,9 +369,8 @@ def main(argv=None):
         futures = args.cme or args.databento
         contract_size = CONTRACT_SIZES.get(args.ticker.upper(), 125_000) if futures else CONTRACT_SIZE
 
+    verifier_exclusions(args)
     if args.watch:
-        if args.replay:
-            raise ValueError("--watch et --replay s'excluent : une archive ne bouge plus")
         return suivre(args, contract_size)
     return un_passage(args, contract_size)
 
