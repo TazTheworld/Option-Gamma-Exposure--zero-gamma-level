@@ -37,6 +37,12 @@ CONTRAT = ["ExpirationDate", "StrikePrice", "right"]
 # faire échouer l'assemblage des trois mille autres.
 CHAMPS_TICK = ["OpenInt", "IV", "Gamma", "Delta", "Vega", "Theta", "Settle"]
 
+# Ce que le vif peut rafraîchir. L'open interest n'y est PAS, et c'est le coeur de
+# la fusion : la chambre de compensation le calcule après la clôture et ne le
+# publie qu'une fois par jour. Le figer en séance n'est pas une approximation,
+# c'est la seule valeur qui existe.
+CHAMPS_VIFS = ["IV", "Gamma"]
+
 
 def _quote_date(valeur=None):
     """Date de valorisation normalisée, sans fuseau."""
@@ -230,6 +236,48 @@ def selection_vif(chaine, budget_lignes=90):
     tous = tous.sort_values(["poids", "ExpirationDate", "StrikePrice", "right"],
                             ascending=[False, True, True, True])
     return tous.head(int(budget_lignes))[CONTRAT].reset_index(drop=True)
+
+
+def fusionner(socle, ticks_vif, spot):
+    """Open interest du socle, IV et gamma du vif, spot du vif -> (df, spot).
+
+    Rend exactement ce qu'analysis.analyser() prend en entrée : c'est tout
+    l'objet de la fonction. Rien en aval n'a à savoir qu'il existe un socle et un
+    vif — ni analysis, ni greeks, ni plots, ni history, ni validate.
+
+    Le vif ne couvre qu'environ ±2,5 %. Partout ailleurs l'IV reste celle du
+    socle, ce qui pèse peu : le gamma s'effondre loin de la monnaie, et l'IV y
+    bouge peu. Un contrat que le vif porte mais que le socle ignore est écarté —
+    on ne fabrique pas de ligne à partir d'un tick isolé.
+    """
+    df = socle.copy()
+    if ticks_vif is None or len(ticks_vif) == 0:
+        return df, float(spot)
+
+    vif = ticks_vif.copy()
+    vif["ExpirationDate"] = pd.to_datetime(vif["ExpirationDate"], errors="coerce")
+    vif["StrikePrice"] = pd.to_numeric(vif["StrikePrice"], errors="coerce")
+    vif["right"] = vif["right"].astype(str).str.upper().str[0]
+
+    cle = pd.MultiIndex.from_arrays([df.ExpirationDate, df.StrikePrice])
+    for side, right in (("Call", "C"), ("Put", "P")):
+        part = vif[vif.right == right]
+        if part.empty:
+            continue
+        for champ in CHAMPS_VIFS:
+            if champ not in part.columns:
+                continue
+            valeurs = pd.to_numeric(part[champ], errors="coerce")
+            # last() plutôt que first() : le dernier tick reçu est le bon. Le
+            # groupby dédoublonne aussi, sans quoi reindex refuserait de servir.
+            maj = valeurs.groupby([part.ExpirationDate, part.StrikePrice]).last().dropna()
+            if maj.empty:
+                continue
+            nouvelles = maj.reindex(cle).to_numpy()
+            colonne = f"{side}{champ}"
+            df[colonne] = np.where(pd.isna(nouvelles), df[colonne].to_numpy(), nouvelles)
+
+    return df, float(spot)
 
 
 if __name__ == "__main__":

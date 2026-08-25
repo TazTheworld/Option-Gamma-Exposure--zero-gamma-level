@@ -272,3 +272,88 @@ def test_selection_vif_est_deterministe_a_egalite():
     un = ib_data.selection_vif(chaine, budget_lignes=20)
     deux = ib_data.selection_vif(chaine, budget_lignes=20)
     assert un.equals(deux)
+
+
+# ---=== fusionner ===---
+
+def _socle():
+    chaine, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    return chaine
+
+
+def _vif(**champs):
+    """Une ligne de vif sur le call 25 000, à l'échéance du socle."""
+    ligne = {"ExpirationDate": EXP, "StrikePrice": 25_000.0, "right": "C"}
+    ligne.update(champs)
+    return pd.DataFrame([ligne])
+
+
+def test_fusionner_rafraichit_l_iv_la_ou_le_vif_parle():
+    """Ce qui bouge en séance, c'est le spot et l'IV."""
+    fusionnee, spot = ib_data.fusionner(_socle(), _vif(IV=0.42), spot=25_100.0)
+    ligne = fusionnee[fusionnee.StrikePrice == 25_000.0].iloc[0]
+    assert ligne.CallIV == pytest.approx(0.42)
+    assert spot == pytest.approx(25_100.0)
+
+
+def test_fusionner_laisse_l_iv_du_socle_ailleurs():
+    """Le vif ne couvre que ±2,5 % : les ailes gardent l'IV du socle."""
+    fusionnee, _ = ib_data.fusionner(_socle(), _vif(IV=0.42), spot=PRIX)
+    loin = fusionnee[fusionnee.StrikePrice == 24_500.0].iloc[0]
+    assert loin.CallIV == pytest.approx(VOL_VRAI)
+
+
+def test_fusionner_ne_touche_jamais_l_open_interest():
+    """L'OI ne bouge pas en séance : la chambre de compensation le calcule après
+    la clôture. Le figer n'est pas une approximation, c'est la seule valeur."""
+    socle = _socle()
+    fusionnee, _ = ib_data.fusionner(socle, _vif(IV=0.42, OpenInt=999_999.0),
+                                     spot=PRIX)
+    assert fusionnee.CallOpenInt.equals(socle.CallOpenInt)
+
+
+def test_fusionner_distingue_les_calls_des_puts():
+    """Même strike, même échéance : le sens doit trancher."""
+    vif = _vif(IV=0.42)
+    vif["right"] = "P"
+    fusionnee, _ = ib_data.fusionner(_socle(), vif, spot=PRIX)
+    ligne = fusionnee[fusionnee.StrikePrice == 25_000.0].iloc[0]
+    assert ligne.PutIV == pytest.approx(0.42)
+    assert ligne.CallIV == pytest.approx(VOL_VRAI)      # le call n'a pas bougé
+
+
+def test_fusionner_rafraichit_aussi_le_gamma_publie():
+    """--gamma-source published lirait sinon un gamma périmé."""
+    fusionnee, _ = ib_data.fusionner(_socle(), _vif(IV=VOL_VRAI, Gamma=0.00123),
+                                     spot=PRIX)
+    ligne = fusionnee[fusionnee.StrikePrice == 25_000.0].iloc[0]
+    assert ligne.CallGamma == pytest.approx(0.00123)
+
+
+def test_fusionner_sans_vif_rend_le_socle_intact():
+    """Au démarrage, ou après une déconnexion, le socle seul doit rester lisible."""
+    socle = _socle()
+    for vide in (None, pd.DataFrame(columns=ib_data.CONTRAT + ["IV"])):
+        fusionnee, spot = ib_data.fusionner(socle, vide, spot=PRIX)
+        assert fusionnee.equals(socle)
+        assert spot == pytest.approx(PRIX)
+
+
+def test_fusionner_alimente_analyser_sans_retouche():
+    """Le but de toute la fonction : (df, spot) est l'entrée d'analyser()."""
+    import analysis
+    df, spot = ib_data.fusionner(_socle(), _vif(IV=0.42), spot=25_100.0)
+    a = analysis.analyser(df, spot=spot, quote_date=QUOTE, ticker="NQ",
+                          contract_size=20, dte_max=None)
+    assert np.isfinite(a.total_gex)
+
+
+def test_fusionner_ignore_un_contrat_absent_du_socle():
+    """Le vif peut porter un strike que le socle n'avait pas : on ne l'invente pas."""
+    socle = _socle()
+    vif = _vif(IV=0.42)
+    vif["StrikePrice"] = 99_999.0
+    fusionnee, _ = ib_data.fusionner(socle, vif, spot=PRIX)
+    assert len(fusionnee) == len(socle)
+    assert 99_999.0 not in set(fusionnee.StrikePrice)
