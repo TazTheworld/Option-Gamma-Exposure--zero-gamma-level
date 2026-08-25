@@ -23,11 +23,19 @@ Conception : docs/superpowers/specs/2026-08-25-collecteur-ib-nq-design.md
 import numpy as np
 import pandas as pd
 
+from cboe_data import COLONNES_GRECS, COLUMNS, _clean
+from cme_data import black76_gamma, implied_vol, infer_futures_price
+
 # La forme unique d'un contrat dans ce module. La couche réseau construira ses
 # objets ib_async.Contract à partir de ces trois colonnes, et rien d'autre :
 # perimetre() et selection_vif() rendent toutes deux cette forme, pour qu'il n'y
 # ait jamais deux façons de désigner un contrat.
 CONTRAT = ["ExpirationDate", "StrikePrice", "right"]
+
+# Ce que la couche réseau collecte par contrat. Les colonnes absentes valent NaN
+# plutôt que de manquer : un contrat illiquide qui ne répond jamais ne doit pas
+# faire échouer l'assemblage des trois mille autres.
+CHAMPS_TICK = ["OpenInt", "IV", "Gamma", "Delta", "Vega", "Theta", "Settle"]
 
 
 def _quote_date(valeur=None):
@@ -89,6 +97,98 @@ def perimetre(strikes, echeances, prix, plage=0.2, dte_max=30, dte_min=0,
     df["ExpirationDate"] = pd.to_datetime(df["ExpirationDate"])
     df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors="coerce")
     return df
+
+
+def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
+    """Définitions + valeurs reçues -> chaîne au format pivot du projet.
+
+    Jumelle de databento_data.build_chain(), et pour les mêmes raisons : des
+    définitions d'un côté, des valeurs de l'autre, une fonction pure au milieu.
+    Séparée de l'accès réseau pour être testable sans IB Gateway. Deux
+    assembleurs qui divergeraient sur la normalisation de l'IV donneraient deux
+    GEX différents pour la même chaîne — d'où le calque plutôt que l'invention.
+
+    `defs`  : conId, StrikePrice, ExpirationDate, right
+    `ticks` : conId + ce que la souscription a rendu (CHAMPS_TICK)
+
+    Renvoie (df, futures_price, quote_date) au format COLUMNS.
+    """
+    manquantes = {"conId", "StrikePrice", "ExpirationDate", "right"} - set(defs.columns)
+    if manquantes:
+        raise ValueError(
+            f"Définitions IB inattendues, colonnes absentes : {sorted(manquantes)}. "
+            f"Reçu : {list(defs.columns)}"
+        )
+
+    d = defs.copy()
+    d["right"] = d["right"].astype(str).str.upper().str[0]
+    d = d[d.right.isin(["C", "P"])]
+    d = d.drop_duplicates("conId", keep="last")
+    d["StrikePrice"] = pd.to_numeric(d.StrikePrice, errors="coerce")
+    d["ExpirationDate"] = pd.to_datetime(d.ExpirationDate, errors="coerce")
+    d = d.dropna(subset=["StrikePrice", "ExpirationDate"])
+    if d.empty:
+        raise ValueError("Aucune option (call/put) dans les définitions IB reçues.")
+
+    t = ticks.copy() if ticks is not None else pd.DataFrame(columns=["conId"])
+    if "conId" not in t.columns:
+        raise ValueError(f"Valeurs IB inattendues : {list(t.columns)}")
+    for champ in CHAMPS_TICK:
+        if champ not in t.columns:
+            t[champ] = np.nan
+        t[champ] = pd.to_numeric(t[champ], errors="coerce")
+    t = t.drop_duplicates("conId", keep="last").set_index("conId")
+
+    df = d.join(t[CHAMPS_TICK], on="conId")
+
+    # last() ignore les NaN : un contrat sans valeur reçue n'écrase donc pas
+    # celle d'un contrat voisin du même strike, et n'ajoute pas de ligne.
+    keys = ["ExpirationDate", "StrikePrice"]
+    calls = df[df.right == "C"].groupby(keys)[CHAMPS_TICK].last().add_prefix("Call")
+    puts = df[df.right == "P"].groupby(keys)[CHAMPS_TICK].last().add_prefix("Put")
+    chain = calls.join(puts, how="outer").reset_index()
+
+    quote_date = _quote_date(quote_date).to_pydatetime()
+
+    if futures_price is None:
+        futures_price = infer_futures_price(chain)
+        if futures_price is None:
+            raise ValueError(
+                "Prix du future indéterminable : passe-le avec --futures-price."
+            )
+    futures_price = float(futures_price)
+
+    T = ((chain.ExpirationDate - pd.Timestamp(quote_date)).dt.total_seconds()
+         / (365.25 * 24 * 3600)).clip(lower=0)
+
+    for side, opt in (("Call", "C"), ("Put", "P")):
+        iv = pd.to_numeric(chain[f"{side}IV"], errors="coerce")
+        # IB publie l'IV tantôt en décimal, tantôt en pourcentage. 18 ne peut pas
+        # être 1 800 % de volatilité : au-delà de 3, c'est une échelle et non un
+        # régime. Même test que databento_data, même raison.
+        if iv.notna().any() and iv.max(skipna=True) > 3:
+            iv = iv / 100.0
+        manque = iv.isna() & chain[f"{side}Settle"].notna()
+        if manque.any():
+            iv.loc[manque] = [
+                implied_vol(prix, futures_price, k, tt, rate, opt)
+                for prix, k, tt in zip(chain.loc[manque, f"{side}Settle"],
+                                       chain.loc[manque, "StrikePrice"], T[manque])
+            ]
+        chain[f"{side}IV"] = iv
+
+        # Le gamma publié par IB est gardé tel quel ; là où il manque, Black-76 le
+        # retrouve depuis l'IV. Sans ce repli, --gamma-source published et le
+        # profil ne travailleraient pas sur le même périmètre de strikes.
+        gamma = pd.to_numeric(chain[f"{side}Gamma"], errors="coerce")
+        calcule = pd.Series(black76_gamma(futures_price, chain.StrikePrice, iv, T, rate),
+                            index=chain.index)
+        chain[f"{side}Gamma"] = gamma.where(gamma.notna(), calcule)
+
+    chain["Calls"] = ""
+    chain["Puts"] = ""
+    chain = chain.reindex(columns=COLUMNS + COLONNES_GRECS)
+    return _clean(chain), futures_price, quote_date
 
 
 if __name__ == "__main__":
