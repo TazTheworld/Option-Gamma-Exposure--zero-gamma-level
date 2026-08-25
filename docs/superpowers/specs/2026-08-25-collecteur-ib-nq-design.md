@@ -418,15 +418,25 @@ Le calcul, sur la grille mesurée : quatorze échéances, 3 348 strikes, **6 696
 contrats** sur les vingt-quatre jours à venir, soit soixante-quinze lots de
 quatre-vingt-dix.
 
-Le coût d'un lot a été chronométré le 25 août 2026 : **6,6 secondes** pour un
-délai de garde de six, l'écart étant le temps de souscrire puis d'annuler
-quatre-vingt-dix lignes. Le périmètre entier demande donc **huit minutes**, et
-non les trois à cinq qu'on avait estimées. Le coût n'est pas « des milliers de
-contrats à cadencer » mais « soixante-quinze lots dont chacun attend ».
+Le coût d'un lot a été chronométré le 25 août 2026, sur 1 676 contrats, à trois
+délais de garde différents :
 
-Cinq pour cent des contrats ne répondent pas même à six secondes. Ce sont des
-strikes lointains sans cotation, et allonger le délai ne les ferait pas
-apparaître : il ferait payer tous les lots pour quelques-uns.
+| Délai de garde | Contrats muets | Coût par lot |
+|---|---|---|
+| 4 s | **24 %** | 6,6 s |
+| 6 s | 5 % | 6,6 s |
+| **10 s** (retenu) | **0,8 %** | 10,6 s |
+
+Le délai retenu est le plus généreux, contre l'intuition d'économiser du temps.
+La raison tient en une phrase : **un contrat muet ne se distingue pas d'un contrat
+sans open interest** — les deux arrivent en NaN. Un délai trop court ne produit
+donc pas une erreur, mais un GEX silencieusement amputé d'un quart. Et le socle ne
+se balaie qu'une fois par journée de compensation : payer quelques minutes de plus
+une fois par jour pour ne rien manquer est un marché évident.
+
+Le périmètre entier revient donc à **treize minutes**, et non aux trois à cinq
+qu'on avait estimées. Le coût n'est pas « des milliers de contrats à cadencer »
+mais « soixante-quinze lots dont chacun attend ».
 
 Les deux leviers ne se valent pas, et la mesure contredit l'intuition. Sur sept
 jours d'horizon, resserrer `--range` de ±20 % à ±5 % ne retire que vingt-sept

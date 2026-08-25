@@ -463,12 +463,18 @@ MARCHE_TEMPS_REEL, MARCHE_DIFFERE = 1, 3
 # FOP, et les demander ensemble ne coûte aucune ligne supplémentaire.
 TICKS_GENERIQUES = "101,588"
 
-# Delai de garde par lot, en secondes. Mesure : a six secondes, cinq pour cent des
-# contrats ne repondent toujours pas — un lot coute alors 6,6 s, l'ecart etant le
-# temps de souscrire puis d'annuler quatre-vingt-dix lignes. Quatre secondes est
-# le compromis retenu : les contrats muets le restent souvent quelle que soit
-# l'attente, et allonger le delai fait payer tous les lots pour quelques-uns.
-ATTENTE_LOT = 4.0
+# Delai de garde par lot, en secondes. Mesure le 25 aout 2026 sur 1 676 contrats :
+# a quatre secondes VINGT-QUATRE pour cent restent muets, a six cinq pour cent, et
+# a dix moins d'UN pour cent. La generosite gagne, et de loin. Un contrat muet ne se distingue pas d'un
+# contrat sans open interest — les deux arrivent en NaN — si bien qu'un delai trop
+# court ne produit pas une erreur mais un GEX silencieusement ampute.
+#
+# Dix secondes, donc. Le socle ne se balaie qu'une fois par journee de
+# compensation : payer quelques minutes de plus une fois par jour pour ne rien
+# manquer est un marche evident. L'ecart entre l'attente et le cout reel d'un lot
+# — environ 2,6 s — est le temps de souscrire puis d'annuler quatre-vingt-dix
+# lignes.
+ATTENTE_LOT = 10.0
 
 
 def connecter(hote=HOTE_DEFAUT, port=PORT_DEFAUT, client_id=CLIENT_ID_DEFAUT,
@@ -562,6 +568,32 @@ def enumerer(ib, futur, dte_max=30, dte_min=0, quote_date=None, exchange="CME",
     if not lignes:
         raise ValueError("Aucun contrat d'option énuméré sur l'horizon demandé.")
     return pd.DataFrame(lignes)
+
+
+def avec_conid(contrats_vif, catalogue):
+    """Recolle le conId sur une sélection qui n'en porte pas.
+
+    `selection_vif()` travaille sur la chaîne au format LARGE, où chaque ligne
+    porte un call ET un put : les conId n'y survivent pas — il y en aurait deux
+    par ligne. Le catalogue des contrats énumérés les redonne, en joignant sur
+    l'échéance, le strike et le sens.
+
+    Ce qui n'est pas au catalogue est écarté : un contrat sans conId n'est pas
+    souscriptible, et le garder ferait échouer la boucle au premier reqMktData.
+
+    L'ordre de la sélection est préservé — il porte la priorité du vif, celle qui
+    décide quels contrats survivent au recyclage quand le budget est atteint.
+    """
+    cles = ["ExpirationDate", "StrikePrice", "right"]
+    gauche = contrats_vif.copy()
+    gauche["ExpirationDate"] = pd.to_datetime(gauche["ExpirationDate"])
+
+    droite = catalogue[cles + ["conId"]].copy()
+    droite["ExpirationDate"] = pd.to_datetime(droite["ExpirationDate"])
+    droite = droite.drop_duplicates(cles, keep="last")
+
+    joint = gauche.merge(droite, on=cles, how="left")
+    return joint.dropna(subset=["conId"]).reset_index(drop=True)
 
 
 def _contrat_ib(ligne):

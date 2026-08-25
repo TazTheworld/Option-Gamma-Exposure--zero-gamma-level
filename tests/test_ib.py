@@ -660,3 +660,112 @@ def test_ligne_ticker_alimente_build_chain():
     assert chaine.CallOpenInt.sum() == pytest.approx(40.0)
     assert chaine.PutOpenInt.sum() == pytest.approx(60.0)
     assert prix == pytest.approx(29_020.0)      # undPrice a servi de prix
+
+
+# ---=== ib_collector : les decisions ===---
+
+def test_rebalayage_une_fois_par_journee_de_compensation():
+    """L'open interest ne bouge pas en séance : rebalayer plus souvent serait
+    payer huit minutes pour relire le même chiffre."""
+    import ib_collector as ic
+    socle = pd.Timestamp("2026-08-25 20:00")          # avant 23 h UTC
+    assert not ic.faut_il_rebalayer(socle, pd.Timestamp("2026-08-25 22:00"))
+    assert ic.faut_il_rebalayer(socle, pd.Timestamp("2026-08-26 01:00"))
+
+
+def test_rebalayage_si_aucun_socle():
+    """Au démarrage il n'y a rien : il faut balayer."""
+    import ib_collector as ic
+    assert ic.faut_il_rebalayer(None, pd.Timestamp("2026-08-25 10:00"))
+
+
+def test_journee_compensation_bascule_a_l_heure_du_cme():
+    """Le CME publie l'open interest préliminaire à 18 h Chicago, soit 23 h UTC :
+    après cette heure, on est déjà sur la publication du lendemain."""
+    import ib_collector as ic
+    avant = ic.journee_compensation(pd.Timestamp("2026-08-25 22:59"))
+    apres = ic.journee_compensation(pd.Timestamp("2026-08-25 23:01"))
+    assert apres > avant
+
+
+def test_bande_couverte_encadre_le_vif():
+    """La bande dit jusqu'où le vif voit, donc quand il cesse de voir."""
+    import ib_collector as ic
+    vif = pd.DataFrame({"StrikePrice": [28_900.0, 29_000.0, 29_100.0],
+                        "ExpirationDate": [EXP] * 3, "right": ["C", "C", "P"]})
+    assert ic.bande_couverte(vif) == (pytest.approx(28_900.0), pytest.approx(29_100.0))
+    assert ic.bande_couverte(pd.DataFrame(columns=["StrikePrice"])) is None
+    assert ic.bande_couverte(None) is None
+
+
+def test_reselection_quand_le_spot_sort_de_la_bande():
+    """Sans ça, les lignes entretenues finissent par regarder ailleurs que là où
+    ça se passe."""
+    import ib_collector as ic
+    bande = (28_900.0, 29_100.0)
+    assert not ic.faut_il_reselectionner(29_000.0, bande)
+    assert ic.faut_il_reselectionner(29_500.0, bande)
+    assert ic.faut_il_reselectionner(28_000.0, bande)
+
+
+def test_reselection_avec_une_marge_avant_le_bord():
+    """Attendre la sortie franche serait attendre d'être aveugle : on recycle
+    quand le spot approche du bord."""
+    import ib_collector as ic
+    assert ic.faut_il_reselectionner(29_095.0, (28_900.0, 29_100.0), marge=0.10)
+    assert not ic.faut_il_reselectionner(29_000.0, (28_900.0, 29_100.0), marge=0.10)
+
+
+def test_reselection_sans_bande():
+    """Aucun vif encore sélectionné : il en faut un."""
+    import ib_collector as ic
+    assert ic.faut_il_reselectionner(29_000.0, None)
+
+
+# ---=== avec_conid ===---
+
+def test_avec_conid_recolle_les_identifiants():
+    """selection_vif travaille sur le format LARGE, où chaque ligne porte un call
+    ET un put : les conId n'y survivent pas. Sans eux, rien n'est souscriptible."""
+    catalogue = _contrats_cotes(strikes=[29_000.0, 29_100.0])
+    vif = pd.DataFrame({"ExpirationDate": [pd.Timestamp("2026-09-04")] * 2,
+                        "StrikePrice": [29_000.0, 29_100.0],
+                        "right": ["C", "P"]})
+    rendu = ib_data.avec_conid(vif, catalogue)
+    assert "conId" in rendu.columns
+    assert rendu.conId.notna().all()
+    attendu_c = catalogue[(catalogue.StrikePrice == 29_000.0)
+                          & (catalogue.right == "C")].conId.iloc[0]
+    assert rendu.iloc[0].conId == attendu_c
+
+
+def test_avec_conid_distingue_call_et_put_au_meme_strike():
+    """Même échéance, même strike : seul le sens sépare les deux conId."""
+    catalogue = _contrats_cotes(strikes=[29_000.0])
+    vif = pd.DataFrame({"ExpirationDate": [pd.Timestamp("2026-09-04")] * 2,
+                        "StrikePrice": [29_000.0, 29_000.0],
+                        "right": ["C", "P"]})
+    rendu = ib_data.avec_conid(vif, catalogue)
+    assert rendu.conId.nunique() == 2
+
+
+def test_avec_conid_ecarte_ce_qui_n_est_pas_au_catalogue():
+    """Un contrat sans conId n'est pas souscriptible : le garder ferait planter
+    la boucle au premier reqMktData."""
+    catalogue = _contrats_cotes(strikes=[29_000.0])
+    vif = pd.DataFrame({"ExpirationDate": [pd.Timestamp("2026-09-04")] * 2,
+                        "StrikePrice": [29_000.0, 99_999.0],
+                        "right": ["C", "C"]})
+    rendu = ib_data.avec_conid(vif, catalogue)
+    assert len(rendu) == 1
+    assert rendu.iloc[0].StrikePrice == pytest.approx(29_000.0)
+
+
+def test_avec_conid_preserve_l_ordre_de_selection():
+    """L'ordre porte la priorité du vif : le recyclage doit garder les premiers."""
+    catalogue = _contrats_cotes(strikes=[29_000.0, 29_100.0, 29_200.0])
+    vif = pd.DataFrame({"ExpirationDate": [pd.Timestamp("2026-09-04")] * 3,
+                        "StrikePrice": [29_200.0, 29_000.0, 29_100.0],
+                        "right": ["C", "C", "C"]})
+    rendu = ib_data.avec_conid(vif, catalogue)
+    assert list(rendu.StrikePrice) == [29_200.0, 29_000.0, 29_100.0]
