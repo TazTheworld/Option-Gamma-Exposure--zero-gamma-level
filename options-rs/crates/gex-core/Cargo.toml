@@ -1,0 +1,12 @@
+[package]
+name = "gex-core"
+description = "Le calcul pur : format pivot, Black-76, greeks, expositions. Aucune E/S."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# libm porte erf, que la lib standard n'a pas. C'est du Rust pur, sans acces au
+# systeme : gex-core reste incapable de lire un fichier ou d'ouvrir un socket,
+# ce qui est precisement la garantie qu'on cherche.
+libm = { workspace = true }

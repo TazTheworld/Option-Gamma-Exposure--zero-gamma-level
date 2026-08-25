@@ -1,0 +1,2 @@
+# Artefacts de compilation Rust : plusieurs centaines de Mo, tous regenerables.
+target/

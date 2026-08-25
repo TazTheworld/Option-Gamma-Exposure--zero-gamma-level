@@ -1,0 +1,24 @@
+# Moteur gamma exposure sur options du Nasdaq (NQ, CME), en Rust.
+#
+# La decoupe en crates n'est pas cosmetique : elle rend structurel ce que le
+# depot Python n'imposait que par convention. `gex-core` ne declare aucune
+# dependance capable d'ouvrir un fichier ou un socket, donc « tout ce qui produit
+# un chiffre est testable sans reseau » cesse d'etre une regle qu'on peut
+# enfreindre par distraction — le compilateur la refuse.
+
+[workspace]
+resolver = "3"
+members = ["crates/gex-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level"
+
+[workspace.dependencies]
+libm = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
