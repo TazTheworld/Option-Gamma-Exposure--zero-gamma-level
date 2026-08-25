@@ -121,6 +121,14 @@ oblige à élaguer **avant** de demander, sous peine de brûler le budget de lig
 sur des strikes sans intérêt. `--range` et `--dte-max` cessent donc d'être des
 réglages d'affichage pour devenir le périmètre d'acquisition.
 
+Une contrainte de marché s'y ajoute, qu'il ne faut pas prendre pour une anomalie.
+Le CME ne liste, sur une échéance hebdomadaire NQ, que vingt-cinq strikes de part
+et d'autre du règlement de la veille — au pas de vingt-cinq points, cela fait
+environ ±2,5 %. Au-delà, les contrats n'existent pas : seules les échéances
+mensuelles et trimestrielles portent les strikes lointains. Demander `--range
+0.2` ne rend donc pas ±20 % sur les échéances courtes, et `perimetre()` doit le
+savoir plutôt que de compter des contrats manquants comme une erreur.
+
 ```
 build_chain(defs, ticks, futures_price, quote_date, rate) -> (df, prix, date)
 ```
@@ -138,6 +146,13 @@ serait plus simple mais dilapiderait des lignes sur des strikes sans open
 interest, alors que le socle vient précisément de mesurer où le gamma se trouve.
 La sélection est refaite quand le spot sort de la bande couverte, sinon les
 lignes entretenues finissent par ne plus regarder là où ça se passe.
+
+Le budget tombe mieux qu'on ne l'avait prévu. Quatre-vingt-dix lignes font
+quarante-cinq strikes, soit environ ±2,5 % — exactement la grille que le CME
+liste sur une échéance hebdomadaire. Le vif ne couvre donc pas un morceau autour
+du spot : il couvre **toute la chaîne listée de l'échéance proche**. Le tri par
+`|gamma × OI|` sert alors moins à choisir qu'à ordonner le recyclage quand le
+spot glisse et que la grille se déplace.
 
 Quatre-vingt-dix et non cent : le future lui-même consomme une ligne, le
 recyclage en réclame quelques-unes le temps que les annulations soient prises en
@@ -172,8 +187,12 @@ et une seule fois par journée de compensation :
    underlyingConId=…)` → strikes et échéances. Repli `reqContractDetails` si ça
    échoue, malgré la mise en garde d'IB sur le throttling.
 3. `perimetre()` élague au périmètre d'analyse.
-4. Balayer par lots d'environ quatre-vingt-dix : `reqMktData(genericTickList="101")`,
-   attendre la stabilisation, lire, `cancelMktData`, lot suivant.
+4. Balayer par lots d'environ quatre-vingt-dix :
+   `reqMktData(genericTickList="101,588", snapshot=False)`, attendre la
+   stabilisation, lire, `cancelMktData`, lot suivant. Le streaming n'est pas un
+   choix : le mode snapshot n'accepte aucun generic tick, donc aucun open
+   interest. Et `"101,588"` plutôt que `"101"` seul parce que rien ne dit lequel
+   des deux IB retient pour un FOP — les demander ensemble ne coûte aucune ligne.
 5. `build_chain()`, puis `snapshots.sauver()`.
 
 **Vif**, en continu :
@@ -222,6 +241,8 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Grecs | tick 13 en temps réel, tick 83 en différé |
 | Open interest | tick 27/28 via generic 101 (par contrat, vérifié) ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
 | Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
+| Mode snapshot | **incompatible avec les generic ticks** — donc inutilisable pour l'open interest |
+| Grille listée, échéances hebdo NQ | 25 strikes de part et d'autre du règlement, soit environ ±2,5 % |
 | Redémarrage de Gateway | forcé une fois par jour |
 
 Le budget de cent lignes est ce qui dimensionne tout : quatre-vingt-dix contrats
@@ -268,9 +289,24 @@ déconseille explicitement `reqContractDetails` pour les chaînes complètes, ma
 le premier est réputé capricieux sur les options sur futures. Si les deux
 échouent, la liste des strikes se déduit du fichier CME.
 
-**3. Le balayage du socle est long.** Deux à trois minutes, à recommencer si le
-socle est perdu avant d'avoir été écrit. D'où l'écriture du socle sur disque
-avant toute chose.
+**3. Le balayage du socle est long, et pour une raison qu'on ne peut pas
+contourner.** Le mode snapshot de `reqMktData` n'accepte aucun generic tick — or
+l'open interest en est un. Il est donc impossible de l'obtenir par une requête
+ponctuelle : chaque lot doit être souscrit en streaming, attendu, puis annulé. Ce
+qui coûte n'est pas le réseau mais l'attente de stabilisation, puisqu'il faut
+avoir reçu l'open interest, l'IV et les grecs avant d'annuler — et qu'un contrat
+illiquide ne répond parfois jamais, donc chaque lot paie un délai de garde.
+
+Le calcul, avec la grille réellement listée plutôt qu'un produit cartésien : une
+vingtaine d'échéances quotidiennes ou hebdomadaires à cinquante strikes et deux
+côtés font environ deux mille cent contrats, auxquels s'ajoutent une ou deux
+échéances mensuelles à grille plus large. Soit deux mille cinq cents à trois
+mille cinq cents contrats, une trentaine ou une quarantaine de lots, et une à
+deux minutes et demie. Le coût n'est pas « des milliers de contrats à cadencer »
+mais « trente-cinq lots dont chacun attend ».
+
+Le socle est écrit sur disque dès qu'il est assemblé : le perdre avant coûterait
+tout le balayage.
 
 ## Ce que la mesure dit, et ce qu'elle ne dit pas
 
