@@ -408,10 +408,18 @@ avoir reçu l'open interest, l'IV et les grecs avant d'annuler — et qu'un cont
 illiquide ne répond parfois jamais, donc chaque lot paie un délai de garde.
 
 Le calcul, sur la grille mesurée : quatorze échéances, 3 348 strikes, **6 696
-contrats** sur les vingt-quatre jours à venir. Soit soixante-quinze lots de
-quatre-vingt-dix, et trois à cinq minutes selon le délai de garde. Le coût n'est
-pas « des milliers de contrats à cadencer » mais « soixante-quinze lots dont
-chacun attend ».
+contrats** sur les vingt-quatre jours à venir, soit soixante-quinze lots de
+quatre-vingt-dix.
+
+Le coût d'un lot a été chronométré le 25 août 2026 : **6,6 secondes** pour un
+délai de garde de six, l'écart étant le temps de souscrire puis d'annuler
+quatre-vingt-dix lignes. Le périmètre entier demande donc **huit minutes**, et
+non les trois à cinq qu'on avait estimées. Le coût n'est pas « des milliers de
+contrats à cadencer » mais « soixante-quinze lots dont chacun attend ».
+
+Cinq pour cent des contrats ne répondent pas même à six secondes. Ce sont des
+strikes lointains sans cotation, et allonger le délai ne les ferait pas
+apparaître : il ferait payer tous les lots pour quelques-uns.
 
 Les deux leviers ne se valent pas, et la mesure contredit l'intuition. Sur sept
 jours d'horizon, resserrer `--range` de ±20 % à ±5 % ne retire que vingt-sept

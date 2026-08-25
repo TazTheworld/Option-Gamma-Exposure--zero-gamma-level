@@ -3,16 +3,27 @@
 IB ne sert pas une chaîne : il sert des contrats un par un, avec un plafond de
 cent lignes de données simultanées. Tout ce module découle de cette contrainte.
 
-Ce fichier ne contient que les fonctions pures — celles qui décident, assemblent
-et fusionnent, et qui se vérifient sans réseau. C'est le patron de
-databento_data.py, pour la même raison qui y est écrite : ce qui produit un
-chiffre doit être testable hors ligne.
+Le fichier est coupé en deux, et la coupe est celle du patron de
+databento_data.py : ce qui produit un chiffre doit être testable hors ligne.
+
+**Les fonctions pures**, qui décident, traduisent et assemblent. Elles portent
+tout le raisonnement, et la suite de tests les couvre entièrement :
 
     echeances_utiles()  quelles échéances énumérer
     perimetre()         parmi les contrats cotés, lesquels demander
+    lots()              découper le périmètre en paquets souscriptibles
+    ligne_ticker()      un Ticker d'ib_async -> le vocabulaire du projet
     build_chain()       définitions + valeurs -> chaîne au format du projet
     selection_vif()     les contrats à garder souscrits en permanence
     fusionner()         open interest du socle + IV du vif -> entrée d'analyser()
+
+**La couche réseau**, qui ne fait que boucler autour des précédentes. Elle exige
+TWS, donc aucun test automatisé ne la touche : elle se vérifie à la main.
+
+    connecter()         session TWS en lecture seule
+    front_month()       le future de première échéance
+    enumerer()          les contrats réellement cotés dans l'horizon
+    collecter()         le balayage par lots
 
 L'ordre compte. reqSecDefOptParams ne sert qu'à lister les échéances, son union
 d'échéances étant exacte ; son union de STRIKES ne l'est pas, et croiser les deux
@@ -20,9 +31,9 @@ fabriquerait des dizaines de milliers de contrats jamais cotés. On énumère do
 les contrats réels échéance par échéance, avec reqContractDetails, et perimetre()
 n'élague que ce qui est hors plage.
 
-La connexion, l'énumération et la souscription vivent ailleurs : elles demandent
-IB Gateway, donc elles ne se testent pas ici. Rien dans ce fichier n'importe
-ib_async — `python main.py TSLA` ne doit pas payer une dépendance de courtier.
+`ib_async` n'est jamais importé en tête de fichier, seulement dans le corps des
+fonctions qui s'en servent : `python main.py TSLA` ne doit pas payer une
+dépendance de courtier pour tracer le GEX d'une action.
 
 Conception : docs/superpowers/specs/2026-08-25-collecteur-ib-nq-design.md
 """
@@ -452,6 +463,13 @@ MARCHE_TEMPS_REEL, MARCHE_DIFFERE = 1, 3
 # FOP, et les demander ensemble ne coûte aucune ligne supplémentaire.
 TICKS_GENERIQUES = "101,588"
 
+# Delai de garde par lot, en secondes. Mesure : a six secondes, cinq pour cent des
+# contrats ne repondent toujours pas — un lot coute alors 6,6 s, l'ecart etant le
+# temps de souscrire puis d'annuler quatre-vingt-dix lignes. Quatre secondes est
+# le compromis retenu : les contrats muets le restent souvent quelle que soit
+# l'attente, et allonger le delai fait payer tous les lots pour quelques-uns.
+ATTENTE_LOT = 4.0
+
 
 def connecter(hote=HOTE_DEFAUT, port=PORT_DEFAUT, client_id=CLIENT_ID_DEFAUT,
               differe=None):
@@ -544,6 +562,55 @@ def enumerer(ib, futur, dte_max=30, dte_min=0, quote_date=None, exchange="CME",
     if not lignes:
         raise ValueError("Aucun contrat d'option énuméré sur l'horizon demandé.")
     return pd.DataFrame(lignes)
+
+
+def _contrat_ib(ligne):
+    """Une ligne du périmètre -> un objet Contract, par conId.
+
+    Le conId suffit et vaut mieux que le reste : il désigne exactement un
+    contrat, là où symbole + échéance + strike + sens peut rester ambigu quand
+    plusieurs classes de cotation coexistent — et il y en a quatorze sur NQ.
+    """
+    from ib_async import Contract
+
+    return Contract(conId=int(ligne.conId), exchange="CME")
+
+
+def collecter(ib, contrats, budget=BUDGET_LIGNES, attente=ATTENTE_LOT, progres=True):
+    """Balaie le périmètre par lots et rend les valeurs reçues.
+
+    Le mode snapshot de reqMktData n'accepte aucun generic tick — donc aucun open
+    interest. Il faut souscrire en streaming, attendre, annuler, recommencer :
+    c'est ce qui rend le socle long, et rien ne peut le contourner.
+
+    `attente` est un délai de garde, pas une mesure : un contrat illiquide ne
+    répond parfois jamais, et sans plafond le lot bloquerait indéfiniment. C'est
+    pourquoi le coût suit le nombre de lots et non le nombre de contrats.
+    """
+    paquets = lots(contrats, budget)
+    recues = []
+    for i, paquet in enumerate(paquets, 1):
+        souscrits = []
+        for ligne in paquet.itertuples():
+            contrat = _contrat_ib(ligne)
+            ib.reqMktData(contrat, TICKS_GENERIQUES, False, False)
+            souscrits.append(contrat)
+
+        ib.sleep(attente)
+        for contrat in souscrits:
+            recues.append(ligne_ticker(ib.ticker(contrat)))
+            ib.cancelMktData(contrat)
+        # Laisser les annulations rendre leurs lignes avant le lot suivant :
+        # sans ce répit, le quota reste saturé et les souscriptions échouent
+        # en silence.
+        ib.sleep(0.3)
+
+        if progres:
+            print(f"  lot {i}/{len(paquets)} — {len(recues)} contrats lus",
+                  end="\r", flush=True)
+    if progres:
+        print()
+    return pd.DataFrame(recues)
 
 
 if __name__ == "__main__":
