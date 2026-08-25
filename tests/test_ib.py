@@ -532,3 +532,131 @@ def test_lots_refuse_une_taille_absurde():
     """Zéro contrat par lot bouclerait indéfiniment : échouer bruyamment."""
     with pytest.raises(ValueError):
         ib_data.lots(_contrats_cotes(), taille=0)
+
+
+# ---=== ligne_ticker ===---
+
+class _Grecs:
+    """Imite ib_async.OptionComputation : seuls les champs lus comptent."""
+
+    def __init__(self, impliedVol=None, delta=None, gamma=None, vega=None,
+                 theta=None, undPrice=None):
+        self.impliedVol, self.delta, self.gamma = impliedVol, delta, gamma
+        self.vega, self.theta, self.undPrice = vega, theta, undPrice
+
+
+class _Contrat:
+    def __init__(self, conId, right, strike=29_050.0):
+        self.conId, self.right, self.strike = conId, right, strike
+
+
+class _Ticker:
+    """Imite ib_async.Ticker, avec les valeurs relevées au sondage."""
+
+    def __init__(self, contract, **champs):
+        self.contract = contract
+        defauts = dict(bid=float("nan"), ask=float("nan"), bidSize=float("nan"),
+                       askSize=float("nan"), last=float("nan"),
+                       lastSize=float("nan"), close=float("nan"),
+                       volume=float("nan"), callOpenInterest=float("nan"),
+                       putOpenInterest=float("nan"), modelGreeks=None)
+        defauts.update(champs)
+        for cle, valeur in defauts.items():
+            setattr(self, cle, valeur)
+
+
+def test_ligne_ticker_lit_un_call():
+    """Valeurs relevées sur Q4BQ6 C29050 le 25 août 2026."""
+    t = _Ticker(_Contrat(909426450, "C"),
+                bid=199.5, ask=203.5, bidSize=2.0, askSize=2.0,
+                last=207.0, close=134.5, volume=21.0,
+                callOpenInterest=15.0, putOpenInterest=0.0,
+                modelGreeks=_Grecs(impliedVol=0.2056, delta=0.8589,
+                                   gamma=0.0015764, vega=1.5863, theta=-10.236,
+                                   undPrice=29_206.85))
+    ligne = ib_data.ligne_ticker(t)
+    assert ligne["conId"] == 909426450
+    assert ligne["OpenInt"] == pytest.approx(15.0)      # le CALL prend callOpenInterest
+    assert ligne["Bid"] == pytest.approx(199.5)
+    assert ligne["Ask"] == pytest.approx(203.5)
+    assert ligne["BidSize"] == pytest.approx(2.0)
+    assert ligne["Vol"] == pytest.approx(21.0)
+    assert ligne["LastSale"] == pytest.approx(207.0)
+    assert ligne["IV"] == pytest.approx(0.2056)
+    assert ligne["Gamma"] == pytest.approx(0.0015764)
+    assert ligne["Delta"] == pytest.approx(0.8589)
+    assert ligne["UndPrice"] == pytest.approx(29_206.85)
+
+
+def test_ligne_ticker_lit_un_put_du_bon_cote():
+    """Valeurs relevées sur Q4BQ6 P29050 : l'OI est dans putOpenInterest."""
+    t = _Ticker(_Contrat(909426451, "P"),
+                callOpenInterest=0.0, putOpenInterest=39.0)
+    assert ib_data.ligne_ticker(t)["OpenInt"] == pytest.approx(39.0)
+
+
+def test_ligne_ticker_traduit_le_moins_un_en_absence():
+    """IB code « pas de prix » par -1. Le laisser passer donnerait des primes
+    négatives, et un implied_vol calculé sur du vide."""
+    t = _Ticker(_Contrat(1, "C"), bid=-1.0, ask=-1.0, last=-1.0, close=-1.0)
+    ligne = ib_data.ligne_ticker(t)
+    for champ in ("Bid", "Ask", "LastSale", "Settle"):
+        assert np.isnan(ligne[champ]), f"{champ} vaut {ligne[champ]}, attendu NaN"
+
+
+def test_ligne_ticker_garde_une_taille_nulle():
+    """Zéro au bid est une information — aucune quantité affichée — pas une
+    absence de donnée. Contrairement au -1 des prix."""
+    t = _Ticker(_Contrat(1, "C"), bidSize=0.0, askSize=0.0)
+    ligne = ib_data.ligne_ticker(t)
+    assert ligne["BidSize"] == pytest.approx(0.0)
+    assert ligne["AskSize"] == pytest.approx(0.0)
+
+
+def test_ligne_ticker_sans_grecs_ne_plante_pas():
+    """Un contrat illiquide ne répond parfois jamais : modelGreeks reste None."""
+    ligne = ib_data.ligne_ticker(_Ticker(_Contrat(1, "C"), callOpenInterest=7.0))
+    assert ligne["OpenInt"] == pytest.approx(7.0)
+    for champ in ("IV", "Gamma", "Delta", "Vega", "Theta", "UndPrice"):
+        assert np.isnan(ligne[champ])
+
+
+def test_ligne_ticker_prend_close_comme_settle():
+    """Le règlement de la veille : ce dont infer_futures_price a besoin quand
+    undPrice manque."""
+    t = _Ticker(_Contrat(1, "C"), close=134.5)
+    assert ib_data.ligne_ticker(t)["Settle"] == pytest.approx(134.5)
+
+
+def test_ligne_ticker_rend_toutes_les_cles_attendues():
+    """build_chain lit CHAMPS_TICK : une clé manquante ferait une colonne vide
+    sans que rien ne le signale."""
+    ligne = ib_data.ligne_ticker(_Ticker(_Contrat(1, "P")))
+    for champ in ib_data.CHAMPS_TICK:
+        assert champ in ligne, f"{champ} absent de la ligne"
+    assert "conId" in ligne and "UndPrice" in ligne
+
+
+def test_ligne_ticker_alimente_build_chain():
+    """Le contrat de bout en bout : des Tickers doivent traverser build_chain, et
+    l'undPrice y servir de prix du future."""
+    tickers = []
+    for i, (k, r) in enumerate([(29_000.0, "C"), (29_000.0, "P"),
+                                (29_050.0, "C"), (29_050.0, "P")]):
+        tickers.append(_Ticker(
+            _Contrat(500_000 + i, r, strike=k),
+            bid=10.0, ask=11.0, callOpenInterest=20.0, putOpenInterest=30.0,
+            modelGreeks=_Grecs(impliedVol=0.20, delta=0.5, gamma=0.0015,
+                               vega=1.5, theta=-10.0, undPrice=29_020.0)))
+    ticks = pd.DataFrame([ib_data.ligne_ticker(t) for t in tickers])
+    defs = pd.DataFrame([{"conId": t.contract.conId,
+                          "StrikePrice": t.contract.strike,
+                          "ExpirationDate": EXP,
+                          "right": t.contract.right} for t in tickers])
+
+    chaine, prix, _ = ib_data.build_chain(defs, ticks, futures_price=None,
+                                          quote_date=QUOTE)
+    assert len(chaine) == 2
+    assert chaine.CallOpenInt.sum() == pytest.approx(40.0)
+    assert chaine.PutOpenInt.sum() == pytest.approx(60.0)
+    assert prix == pytest.approx(29_020.0)      # undPrice a servi de prix

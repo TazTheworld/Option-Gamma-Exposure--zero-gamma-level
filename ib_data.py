@@ -27,6 +27,8 @@ ib_async — `python main.py TSLA` ne doit pas payer une dépendance de courtier
 Conception : docs/superpowers/specs/2026-08-25-collecteur-ib-nq-design.md
 """
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -196,11 +198,17 @@ def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
     quote_date = _quote_date(quote_date).to_pydatetime()
 
     if futures_price is None:
+        # IB sert le prix du sous-jacent dans modelGreeks.undPrice, donc dans
+        # CHAQUE tick d'option. La parité call-put ne sert plus que de filet,
+        # pour une source qui ne le donnerait pas — le CME et Databento.
+        futures_price = _undprice(ticks)
+    if futures_price is None:
         futures_price = infer_futures_price(chain)
-        if futures_price is None:
-            raise ValueError(
-                "Prix du future indéterminable : passe-le avec --futures-price."
-            )
+    if futures_price is None:
+        raise ValueError(
+            "Prix du future indéterminable : ni undPrice, ni parité call-put "
+            "exploitable. Passe-le avec --futures-price."
+        )
     futures_price = float(futures_price)
 
     T = ((chain.ExpirationDate - pd.Timestamp(quote_date)).dt.total_seconds()
@@ -302,6 +310,88 @@ def lots(contrats, taille=BUDGET_LIGNES):
         return []
     return [contrats.iloc[i:i + taille].reset_index(drop=True)
             for i in range(0, len(contrats), taille)]
+
+
+# IB ne dit pas « pas de valeur » par NaN mais par -1 sur les prix. Laisser
+# passer un -1 donnerait des primes negatives, un implied_vol calcule sur du
+# vide, et un GEX faux sans que rien ne le signale. Les TAILLES, elles, valent
+# legitimement zero : aucune quantite affichee est une information.
+PRIX_ABSENT = -1.0
+
+
+def _prix(valeur):
+    """Prix IB -> flottant, avec -1 traduit en absence."""
+    if valeur is None:
+        return np.nan
+    valeur = float(valeur)
+    if math.isnan(valeur) or valeur == PRIX_ABSENT:
+        return np.nan
+    return valeur
+
+
+def _taille(valeur):
+    """Taille IB -> flottant. Zero est une valeur, pas une absence."""
+    return np.nan if valeur is None else float(valeur)
+
+
+def ligne_ticker(ticker):
+    """Un Ticker d'ib_async -> une ligne au vocabulaire du projet.
+
+    C'est la seule traduction entre les noms d'IB et ceux du format pivot, et
+    c'est pourquoi elle est pure : tout le reste de la couche reseau n'est qu'une
+    boucle autour d'elle, et se verifie contre TWS plutot que dans la suite.
+
+    Trois pieges, tous releves au sondage du 25 aout 2026 :
+
+      - l'open interest est dans `callOpenInterest` OU `putOpenInterest` selon le
+        sens du contrat, jamais dans les deux ;
+      - `modelGreeks` vaut None pour un contrat qui ne repond pas ;
+      - `undPrice` voyage avec les grecs : le prix du future arrive dans chaque
+        tick d'option, ce qui evite de le demander separement.
+    """
+    contrat = ticker.contract
+    droit = str(getattr(contrat, "right", "") or "").upper()[:1]
+
+    oi = ticker.callOpenInterest if droit == "C" else ticker.putOpenInterest
+    grecs = ticker.modelGreeks
+
+    def grec(nom):
+        valeur = getattr(grecs, nom, None) if grecs is not None else None
+        return np.nan if valeur is None else float(valeur)
+
+    return {
+        "conId": getattr(contrat, "conId", None),
+        "OpenInt": _taille(oi),
+        "IV": grec("impliedVol"),
+        "Gamma": grec("gamma"),
+        "Delta": grec("delta"),
+        "Vega": grec("vega"),
+        "Theta": grec("theta"),
+        # Le reglement de la veille, dont infer_futures_price a besoin si
+        # undPrice venait a manquer.
+        "Settle": _prix(ticker.close),
+        "Bid": _prix(ticker.bid),
+        "Ask": _prix(ticker.ask),
+        "BidSize": _taille(ticker.bidSize),
+        "AskSize": _taille(ticker.askSize),
+        "Vol": _taille(ticker.volume),
+        "LastSale": _prix(ticker.last),
+        "UndPrice": grec("undPrice"),
+    }
+
+
+def _undprice(ticks):
+    """Le prix du sous-jacent tel qu'IB le sert avec les grecs, ou None.
+
+    La mediane plutot que la derniere valeur : les ticks d'un meme balayage
+    n'arrivent pas tous a la meme seconde, et un contrat isole peut porter un
+    undPrice decale sans que rien ne le signale.
+    """
+    if ticks is None or "UndPrice" not in getattr(ticks, "columns", []):
+        return None
+    valeurs = pd.to_numeric(ticks["UndPrice"], errors="coerce").dropna()
+    valeurs = valeurs[valeurs > 0]
+    return None if valeurs.empty else float(valeurs.median())
 
 
 def fusionner(socle, ticks_vif, spot):
