@@ -277,6 +277,33 @@ def selection_vif(chaine, budget_lignes=90):
     return tous.head(int(budget_lignes))[CONTRAT].reset_index(drop=True)
 
 
+# Cent lignes de données simultanées chez IB, par défaut. Le future en consomme
+# une, et le recyclage quelques-unes le temps que les annulations soient prises en
+# compte : on ne demande donc jamais le quota entier.
+BUDGET_LIGNES = 90
+
+
+def lots(contrats, taille=BUDGET_LIGNES):
+    """Découpe le périmètre en paquets souscriptibles d'un coup.
+
+    C'est le nombre de LOTS qui fixe le temps de balayage, pas le nombre de
+    contrats : chaque lot coûte une attente de stabilisation, et cette attente ne
+    dépend pas de sa taille. Les six mille sept cents contrats mesurés sur NQ
+    font soixante-quinze lots, soit trois à cinq minutes.
+
+    Un périmètre vide rend une liste vide — une échéance sans strike dans la
+    plage n'est pas une panne. Une taille nulle, elle, en est une : elle
+    bouclerait indéfiniment.
+    """
+    taille = int(taille)
+    if taille < 1:
+        raise ValueError(f"taille de lot absurde : {taille} (attendu : au moins 1)")
+    if contrats is None or len(contrats) == 0:
+        return []
+    return [contrats.iloc[i:i + taille].reset_index(drop=True)
+            for i in range(0, len(contrats), taille)]
+
+
 def fusionner(socle, ticks_vif, spot):
     """Open interest du socle, IV et gamma du vif, spot du vif -> (df, spot).
 

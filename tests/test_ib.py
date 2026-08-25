@@ -495,3 +495,40 @@ def test_le_carnet_ne_derange_pas_analyser():
     b = analysis.analyser(sans, spot=prix, quote_date=date_val, ticker="NQ",
                           contract_size=20, dte_max=None)
     assert a.total_gex == pytest.approx(b.total_gex, rel=1e-12)
+
+
+# ---=== lots ===---
+
+def test_lots_ne_depasse_jamais_la_taille():
+    """Saturer le quota de cent lignes fait échouer les souscriptions en silence."""
+    paquets = ib_data.lots(_contrats_cotes(), taille=90)
+    assert all(len(p) <= 90 for p in paquets)
+
+
+def test_lots_ne_perd_ni_ne_duplique_aucun_contrat():
+    """Un contrat oublié est un trou dans la chaîne, un contrat compté deux fois
+    est une ligne payée deux fois."""
+    contrats = _contrats_cotes()
+    recolles = pd.concat(ib_data.lots(contrats, taille=90), ignore_index=True)
+    assert len(recolles) == len(contrats)
+    assert sorted(recolles.conId) == sorted(contrats.conId)
+
+
+def test_lots_compte_juste():
+    """Le nombre de lots est ce qui fixe le temps de balayage."""
+    contrats = _contrats_cotes()
+    n = len(contrats)
+    assert len(ib_data.lots(contrats, taille=90)) == -(-n // 90)
+    assert len(ib_data.lots(contrats, taille=n)) == 1
+    assert len(ib_data.lots(contrats, taille=n + 1)) == 1
+
+
+def test_lots_vide_rend_une_liste_vide():
+    """Une échéance sans contrat dans la plage n'est pas une panne."""
+    assert ib_data.lots(pd.DataFrame(columns=["conId", "StrikePrice"])) == []
+
+
+def test_lots_refuse_une_taille_absurde():
+    """Zéro contrat par lot bouclerait indéfiniment : échouer bruyamment."""
+    with pytest.raises(ValueError):
+        ib_data.lots(_contrats_cotes(), taille=0)
