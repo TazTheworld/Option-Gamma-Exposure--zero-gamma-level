@@ -31,6 +31,10 @@ cme = ["openpyxl>=3.1"]
 databento = ["databento>=0.40"]
 # Scraping Barchart (shadow DOM), gratuit mais aleatoire.
 barchart = ["selenium>=4.20", "webdriver-manager>=4.0"]
+# Collecteur Interactive Brokers. ib_async est le fork maintenu d'ib_insync, dont
+# l'auteur est mort en 2024. Rien du coeur ne l'importe : `python main.py TSLA`
+# ne doit pas payer une dependance de courtier.
+ib = ["ib_async>=1.0"]
 dev = ["pytest>=8.0", "pyarrow>=14"]
 
 [project.urls]
@@ -39,7 +43,7 @@ Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-lev
 [tool.setuptools]
 py-modules = [
     "main", "greeks", "analysis", "plots", "snapshots", "price_data",
-    "cboe_data", "cme_data", "databento_data", "barchart_data",
+    "cboe_data", "cme_data", "databento_data", "ib_data", "barchart_data",
     "flow_tracker", "history", "validate",
 ]
 
