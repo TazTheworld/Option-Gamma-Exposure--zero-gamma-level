@@ -420,3 +420,78 @@ def test_watch_est_permis_sur_le_courant(tmp_path):
     args = main.construire_parser().parse_args(
         ["NQ", "--watch", "60", "--suivre", "--dir", str(tmp_path)])
     main.verifier_exclusions(args)          # ne doit rien lever
+
+
+# ---=== les champs que la souscription rend gratuitement ===---
+
+def _trames_carnet():
+    """Ce que le probe a vu arriver reellement : carnet, seance, grecs."""
+    defs, ticks = _trames_ib()
+    ticks = ticks.copy()
+    ticks["Bid"] = 6.50
+    ticks["Ask"] = 7.25
+    ticks["BidSize"] = 71.0
+    ticks["AskSize"] = 27.0
+    ticks["Vol"] = 313.0
+    ticks["LastSale"] = 10.0
+    return defs, ticks
+
+
+def test_build_chain_remplit_le_carnet_prevu_par_COLUMNS():
+    """CallBid, CallAsk, CallVol, CallLastSale sont dans COLUMNS depuis toujours et
+    sortaient vides. IB les sert dans la MEME souscription, sans ligne ni requete
+    de plus : les jeter serait perdre une donnee gratuite."""
+    chaine, _, _ = ib_data.build_chain(*_trames_carnet(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    for colonne in ("CallBid", "CallAsk", "CallVol", "CallLastSale",
+                    "PutBid", "PutAsk", "PutVol", "PutLastSale"):
+        assert chaine[colonne].notna().any(), f"{colonne} est vide"
+    assert chaine.CallBid.iloc[0] == pytest.approx(6.50)
+    assert chaine.CallVol.iloc[0] == pytest.approx(313.0)
+
+
+def test_build_chain_garde_les_tailles_du_carnet():
+    """Hors COLUMNS, donc a preserver explicitement du reindex. snapshots.py dit
+    pourquoi : on archive le brut pour pouvoir mesurer autre chose plus tard."""
+    chaine, _, _ = ib_data.build_chain(*_trames_carnet(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    for colonne in ("CallBidSize", "CallAskSize", "PutBidSize", "PutAskSize"):
+        assert colonne in chaine.columns, f"{colonne} a ete jetee par le reindex"
+    assert chaine.CallBidSize.iloc[0] == pytest.approx(71.0)
+    assert chaine.CallAskSize.iloc[0] == pytest.approx(27.0)
+
+
+def test_build_chain_sans_carnet_reste_valide():
+    """Une source qui ne sert pas le carnet ne doit pas echouer pour autant."""
+    chaine, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    assert chaine.CallBid.isna().all()
+    assert "CallBidSize" in chaine.columns
+    assert chaine.CallOpenInt.sum() > 0          # le reste marche toujours
+
+
+def test_le_carnet_traverse_un_aller_retour_snapshot(tmp_path):
+    """Archiver puis relire doit conserver les tailles : sinon l'archive ne
+    permet pas de reconstituer le flux a posteriori."""
+    import snapshots
+    chaine, prix, date_val = ib_data.build_chain(*_trames_carnet(),
+                                                 futures_price=PRIX,
+                                                 quote_date=QUOTE)
+    chemin = snapshots.sauver(chaine, "NQ", prix, date_val, str(tmp_path))
+    relu, _, _, _ = snapshots.charger(chemin)
+    assert relu.CallBidSize.iloc[0] == pytest.approx(71.0)
+    assert relu.CallVol.iloc[0] == pytest.approx(313.0)
+
+
+def test_le_carnet_ne_derange_pas_analyser():
+    """Des colonnes en plus ne doivent rien changer aux chiffres produits."""
+    import analysis
+    avec, prix, date_val = ib_data.build_chain(*_trames_carnet(),
+                                               futures_price=PRIX, quote_date=QUOTE)
+    sans, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                     quote_date=QUOTE)
+    a = analysis.analyser(avec, spot=prix, quote_date=date_val, ticker="NQ",
+                          contract_size=20, dte_max=None)
+    b = analysis.analyser(sans, spot=prix, quote_date=date_val, ticker="NQ",
+                          contract_size=20, dte_max=None)
+    assert a.total_gex == pytest.approx(b.total_gex, rel=1e-12)

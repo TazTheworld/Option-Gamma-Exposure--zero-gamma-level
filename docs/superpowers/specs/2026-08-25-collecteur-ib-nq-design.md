@@ -134,25 +134,44 @@ sur des strikes sans intérêt. `--range` et `--dte-max` cessent donc d'être de
 réglages d'affichage pour devenir le périmètre d'acquisition.
 
 Cette fonction **filtre, elle ne fabrique pas** — et la distinction est le fond du
-problème. Elle reçoit les contrats réellement cotés, ceux qu'un
-`reqContractDetails` par échéance vient de rendre, et n'écarte que ce qui est hors
-plage. Construire un produit cartésien à partir des strikes et des échéances de
-`reqSecDefOptParams` compterait des dizaines de milliers de contrats jamais
-cotés.
+problème, que le sondage a chiffré. `reqSecDefOptParams` rend une entrée **par
+classe de cotation**, et chaque classe porte **une seule échéance avec ses propres
+strikes**. Les croiser serait une faute d'arithmétique : la chaîne est la **somme**
+des grilles, jamais leur produit.
 
-Une contrainte de marché s'y ajoute, qu'il ne faut pas prendre pour une anomalie.
-Le CME ne liste, sur une échéance hebdomadaire NQ, qu'une vingtaine de strikes de
-part et d'autre du règlement de la veille. Le pas n'est pas régulier : relevé sur
-la chaîne réelle du 25 août 2026, il vaut **cinquante points près de la monnaie et
-cent au large** — 28900, 29000, 29100, 29200, 29250, 29300, 29400, 29500. Au-delà
-de cette grille les contrats n'existent pas : seules les échéances mensuelles et
-trimestrielles portent les strikes lointains. Demander `--range 0.2` ne rend donc
-pas ±20 % sur les échéances courtes, et `perimetre()` doit le savoir plutôt que de
-compter des contrats manquants comme une erreur.
+Sur NQ au 25 août 2026 : quatorze classes, 3 348 strikes au total, soit **6 696
+contrats**. Le produit cartésien en aurait compté 424 × 14 × 2 = **11 872**, soit
+soixante-dix-sept pour cent de trop — et la majorité n'aurait jamais été cotée.
+
+`perimetre()` reçoit donc les contrats que `reqContractDetails` a réellement
+rendus, échéance par échéance, et n'écarte que ce qui est hors plage.
+
+La grille réelle, mesurée par sondage le 25 août 2026, est bien plus large et
+bien moins régulière que prévu. Quatorze échéances sont cotées sur les vingt-quatre
+jours à venir, chacune avec sa propre grille :
+
+| Échéance | Classe | Strikes | Pas les plus fins |
+|---|---|---|---|
+| 20260825 (0DTE) | Q4B | **424** | 5, 10, 25 |
+| 20260828 | QN4 | 420 | 5, 10, 25 |
+| 20260831 | QNE | 297 | 25, 50 |
+| 20260902 | Q1C | 186 | 25, 50 |
+| 20260909 | Q2C | **111** | 50, 200 |
+| 20260918 (mensuelle) | NQ | 195 | 50, 100 |
+
+Deux enseignements. Le pas se resserre à l'approche de l'échéance — jusqu'à
+**cinq points** sur les 0DTE — et le nombre de strikes varie du simple au
+quadruple, de 111 à 424. Aucune règle simple du type « vingt-cinq strikes de part
+et d'autre » ne décrit ça, et `perimetre()` ne doit rien présumer : il filtre ce
+qu'on lui donne.
 
 ```
 build_chain(defs, ticks, futures_price, quote_date, rate) -> (df, prix, date)
 ```
+Le prix du future n'a plus à être cherché : IB le sert dans `modelGreeks.undPrice`
+de **chaque tick d'option**, mesuré à 29 207 au sondage. `infer_futures_price()`
+devient donc un filet de sécurité — pour un relevé qui n'aurait pas d'`undPrice` —
+au lieu du chemin principal qu'il est chez `cme_data` et `databento_data`.
 Jumelle de `databento_data.build_chain()`, et pour les mêmes raisons : mêmes
 entrées conceptuelles (des définitions de contrats d'un côté, des valeurs de
 l'autre), même sortie au format `COLUMNS`, même Black-76 pour le gamma quand il
@@ -279,8 +298,12 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Open interest | tick 27/28 via generic 101 (par contrat, vérifié) ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
 | Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
 | Mode snapshot | **incompatible avec les generic ticks** — donc inutilisable pour l'open interest |
-| Niveau du NQ (25 août 2026) | environ **29 230**, déduit par parité call-put sur la chaîne réelle |
-| Pas de strike, relevé à l'écran | **50 points** près de la monnaie, **100** au large |
+| Niveau du NQ (25 août 2026) | **29 207**, servi par IB dans `modelGreeks.undPrice` |
+| Pas de strike, mesuré | **5 points** sur les 0DTE, 25 à 50 sur les hebdomadaires, 100 au large |
+| Échéances cotées sur 24 jours | **14**, une par classe de cotation |
+| Contrats sur ce périmètre | **6 696** — la somme des grilles, pas leur produit |
+| Prix du sous-jacent | **servi gratuitement** par `undPrice`, dans chaque tick d'option |
+| Champs servis par souscription | bid, ask, bidSize, askSize, close, high, low, last, volume, open interest, IV, delta, gamma, vega, theta — **sans generic tick supplémentaire** |
 | Redémarrage de TWS / Gateway | forcé une fois par jour ; sans intervention avec *Auto restart* (v974+) |
 | Authentification manuelle | une fois par semaine, dimanche 1 h heure de New York |
 
@@ -384,13 +407,15 @@ qui coûte n'est pas le réseau mais l'attente de stabilisation, puisqu'il faut
 avoir reçu l'open interest, l'IV et les grecs avant d'annuler — et qu'un contrat
 illiquide ne répond parfois jamais, donc chaque lot paie un délai de garde.
 
-Le calcul, avec la grille réellement listée plutôt qu'un produit cartésien : une
-vingtaine d'échéances quotidiennes ou hebdomadaires à cinquante strikes et deux
-côtés font environ deux mille cent contrats, auxquels s'ajoutent une ou deux
-échéances mensuelles à grille plus large. Soit deux mille cinq cents à trois
-mille cinq cents contrats, une trentaine ou une quarantaine de lots, et une à
-deux minutes et demie. Le coût n'est pas « des milliers de contrats à cadencer »
-mais « trente-cinq lots dont chacun attend ».
+Le calcul, sur la grille mesurée : quatorze échéances, 3 348 strikes, **6 696
+contrats** sur les vingt-quatre jours à venir. Soit soixante-quinze lots de
+quatre-vingt-dix, et trois à cinq minutes selon le délai de garde. Le coût n'est
+pas « des milliers de contrats à cadencer » mais « soixante-quinze lots dont
+chacun attend ».
+
+C'est le périmètre entier. Le resserrer est le seul levier qui compte : `--range`
+et `--dte-max` divisent ce chiffre bien plus vite que n'importe quelle
+optimisation de la boucle, et les 0DTE à eux seuls pèsent 424 strikes sur 3 348.
 
 Le socle est écrit sur disque dès qu'il est assemblé : le perdre avant coûterait
 tout le balayage.

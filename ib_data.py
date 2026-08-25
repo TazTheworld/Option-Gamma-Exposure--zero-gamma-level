@@ -42,7 +42,23 @@ CONTRAT = ["ExpirationDate", "StrikePrice", "right"]
 # Ce que la couche réseau collecte par contrat. Les colonnes absentes valent NaN
 # plutôt que de manquer : un contrat illiquide qui ne répond jamais ne doit pas
 # faire échouer l'assemblage des trois mille autres.
-CHAMPS_TICK = ["OpenInt", "IV", "Gamma", "Delta", "Vega", "Theta", "Settle"]
+#
+# La seconde moitié — carnet et séance — arrive dans la MÊME souscription, sans
+# generic tick, sans ligne ni requête supplémentaire. La jeter serait perdre une
+# donnée gratuite, et snapshots.py dit pourquoi c'est un mauvais calcul : on
+# archive le brut parce qu'une donnée non collectée est perdue pour toujours,
+# alors qu'une colonne que rien ne lit encore ne coûte que quelques octets.
+CHAMPS_TICK = [
+    "OpenInt", "IV", "Gamma", "Delta", "Vega", "Theta", "Settle",
+    "Bid", "Ask", "BidSize", "AskSize", "Vol", "LastSale",
+]
+
+# Les tailles au meilleur bid et au meilleur ask n'ont pas de place dans COLUMNS,
+# qui suit le format historique du CBOE. Elles sont donc préservées à part du
+# reindex : rien ne les lit aujourd'hui, mais sans elles une archive ne permettra
+# jamais de reconstituer la pression du carnet a posteriori.
+COLONNES_CARNET = [f"{cote}{champ}" for cote in ("Call", "Put")
+                   for champ in ("BidSize", "AskSize")]
 
 # Ce que le vif peut rafraîchir. L'open interest n'y est PAS, et c'est le coeur de
 # la fusion : la chambre de compensation le calcule après la clôture et ne le
@@ -216,7 +232,7 @@ def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
 
     chain["Calls"] = ""
     chain["Puts"] = ""
-    chain = chain.reindex(columns=COLUMNS + COLONNES_GRECS)
+    chain = chain.reindex(columns=COLUMNS + COLONNES_GRECS + COLONNES_CARNET)
     return _clean(chain), futures_price, quote_date
 
 
