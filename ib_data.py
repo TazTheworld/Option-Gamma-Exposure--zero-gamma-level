@@ -436,6 +436,116 @@ def fusionner(socle, ticks_vif, spot):
     return df, float(spot)
 
 
+# ---=== Accès réseau — non testable hors ligne ===---
+
+HOTE_DEFAUT, PORT_DEFAUT = "127.0.0.1", 7496
+CLIENT_ID_DEFAUT = 17
+
+# 3 = différé. Sans abonnement CME temps réel, le type 1 ne rend RIEN — pas
+# d'erreur, juste des champs vides — alors que le différé sert tout, open
+# interest compris. Le mode retenu est annoncé à l'écran : le projet n'accepte
+# pas qu'une donnée dégradée passe en silence.
+MARCHE_TEMPS_REEL, MARCHE_DIFFERE = 1, 3
+
+# Les generic ticks demandés à chaque souscription. 101 porte l'open interest des
+# options, 588 celui des futures : rien ne documente lequel IB retient pour un
+# FOP, et les demander ensemble ne coûte aucune ligne supplémentaire.
+TICKS_GENERIQUES = "101,588"
+
+
+def connecter(hote=HOTE_DEFAUT, port=PORT_DEFAUT, client_id=CLIENT_ID_DEFAUT,
+              differe=None):
+    """Ouvre une session TWS en LECTURE SEULE.
+
+    readonly=True n'est pas une précaution de style : le collecteur ne doit pas
+    pouvoir passer d'ordre, même par un bug.
+
+    Le mode de données effectif est écrit sur la sortie standard — une donnée
+    différée qui passerait pour du temps réel fausserait toute lecture.
+    """
+    from ib_async import IB
+
+    ib = IB()
+    try:
+        ib.connect(hote, port, clientId=client_id, timeout=15, readonly=True)
+    except Exception as err:
+        raise ValueError(
+            f"Connexion à TWS impossible sur {hote}:{port} — {err}\n"
+            "TWS ou IB Gateway tourne-t-il, et 'Enable ActiveX and Socket "
+            "Clients' est-il coché dans Global Configuration > API > Settings ?"
+        )
+
+    mode = MARCHE_DIFFERE if differe else MARCHE_TEMPS_REEL
+    ib.reqMarketDataType(mode)
+    print(f"Connecté à {hote}:{port} — données "
+          f"{'DIFFÉRÉES (~15 min)' if mode == MARCHE_DIFFERE else 'temps réel'}")
+    return ib
+
+
+def front_month(ib, produit="NQ", exchange="CME"):
+    """Le future de première échéance : c'est lui que les options suivent."""
+    from ib_async import Future
+
+    details = ib.reqContractDetails(Future(produit, exchange=exchange))
+    if not details:
+        raise ValueError(f"Aucun future '{produit}' sur {exchange}.")
+    proche = min(details, key=lambda d: d.contract.lastTradeDateOrContractMonth)
+    return proche.contract
+
+
+def enumerer(ib, futur, dte_max=30, dte_min=0, quote_date=None, exchange="CME",
+             progres=True):
+    """Les contrats d'options RÉELLEMENT cotés dans l'horizon demandé.
+
+    Deux appels de nature différente, et l'ordre compte.
+
+    `reqSecDefOptParams` d'abord, uniquement pour les échéances : il rend une
+    entrée PAR CLASSE DE COTATION — quatorze sur NQ — et chaque classe ne porte
+    qu'une échéance avec ses propres strikes. Ne lire que la première en fait
+    manquer treize.
+
+    `reqContractDetails` ensuite, une fois par échéance retenue, le strike laissé
+    indéfini : IB rend alors tous les contrats de cette échéance avec leurs
+    conId. C'est la seule façon d'obtenir les couples existants. Croiser les
+    strikes et les échéances de reqSecDefOptParams fabriquerait un produit
+    cartésien — 11 872 contrats là où il n'en existe que 6 696, la majorité
+    jamais cotée.
+    """
+    from ib_async import FuturesOption
+
+    params = ib.reqSecDefOptParams(futur.symbol, exchange, "FUT", futur.conId)
+    if not params:
+        raise ValueError(
+            f"reqSecDefOptParams ne rend rien pour {futur.symbol}. "
+            "Sans liste d'échéances, il n'y a rien à énumérer."
+        )
+    toutes = sorted({e for classe in params for e in classe.expirations})
+    retenues = echeances_utiles(toutes, quote_date, dte_max, dte_min)
+    if progres:
+        print(f"{len(params)} classes de cotation, {len(toutes)} échéances, "
+              f"{len(retenues)} dans l'horizon")
+
+    lignes = []
+    for exp in retenues:
+        jour = pd.Timestamp(exp).strftime("%Y%m%d")
+        details = ib.reqContractDetails(
+            FuturesOption(futur.symbol, lastTradeDateOrContractMonth=jour,
+                          exchange=exchange))
+        for d in details:
+            c = d.contract
+            if str(c.right).upper()[:1] not in ("C", "P"):
+                continue
+            lignes.append({"conId": c.conId, "StrikePrice": float(c.strike),
+                           "ExpirationDate": pd.Timestamp(exp),
+                           "right": str(c.right).upper()[:1]})
+        if progres:
+            print(f"  {jour} : {len(details)} contrats")
+
+    if not lignes:
+        raise ValueError("Aucun contrat d'option énuméré sur l'horizon demandé.")
+    return pd.DataFrame(lignes)
+
+
 if __name__ == "__main__":
     # Sans réseau : ce que coûte un périmètre, en requêtes puis en lots.
     import sys

@@ -413,9 +413,16 @@ quatre-vingt-dix, et trois à cinq minutes selon le délai de garde. Le coût n'
 pas « des milliers de contrats à cadencer » mais « soixante-quinze lots dont
 chacun attend ».
 
-C'est le périmètre entier. Le resserrer est le seul levier qui compte : `--range`
-et `--dte-max` divisent ce chiffre bien plus vite que n'importe quelle
-optimisation de la boucle, et les 0DTE à eux seuls pèsent 424 strikes sur 3 348.
+Les deux leviers ne se valent pas, et la mesure contredit l'intuition. Sur sept
+jours d'horizon, resserrer `--range` de ±20 % à ±5 % ne retire que vingt-sept
+pour cent des contrats — 4 106 contre 3 004 — parce que la grille est dense près
+de la monnaie et clairsemée au large : les strikes existent de 5 500 à 43 000,
+mais ils sont rares au-delà de quelques pour cent.
+
+`--dte-min 1` pèse bien plus lourd. L'échéance du jour porte à elle seule 848
+contrats sur 4 312, un cinquième du total, avec sa grille au pas de cinq points —
+et ce sont précisément les 0DTE dont `main.py` avertit déjà que les grecs sont
+instables sur des données différées. Les écarter coûte peu et rapporte beaucoup.
 
 Le socle est écrit sur disque dès qu'il est assemblé : le perdre avant coûterait
 tout le balayage.
