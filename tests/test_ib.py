@@ -20,68 +20,97 @@ STRIKES = np.arange(20_000.0, 30_025.0, 25.0)
 ECHEANCES = ["20260826", "20260828", "20260904", "20260918", "20261120"]
 
 
+# ---=== echeances_utiles ===---
+
+def test_echeances_utiles_coupe_l_horizon():
+    """dte_max=30 écarte le 20 novembre, dte_min=2 écarte le lendemain."""
+    gardees = ib_data.echeances_utiles(ECHEANCES, QUOTE, dte_max=30, dte_min=2)
+    assert [d.strftime("%Y%m%d") for d in gardees] == ["20260828", "20260904", "20260918"]
+
+
+def test_echeances_utiles_dte_max_none_garde_tout():
+    """Le 'all' de main.py arrive ici en None : aucune échéance ne doit tomber."""
+    assert len(ib_data.echeances_utiles(ECHEANCES, QUOTE, dte_max=None)) == len(ECHEANCES)
+
+
+def test_echeances_utiles_dedoublonne_et_trie():
+    """C'est le nombre d'appels a reqContractDetails : un doublon est une requête
+    payée pour rien, et l'ordre doit être reproductible."""
+    gardees = ib_data.echeances_utiles(["20260904", "20260904", "20260828"], QUOTE)
+    assert [d.strftime("%Y%m%d") for d in gardees] == ["20260828", "20260904"]
+
+
+def test_echeances_utiles_vide_sans_erreur():
+    """Un horizon qui ne contient rien n'est pas une panne."""
+    assert ib_data.echeances_utiles(ECHEANCES, QUOTE, dte_max=0) == []
+
+
 # ---=== perimetre ===---
+
+def _contrats_cotes(strikes=None, echeance="2026-09-04"):
+    """Ce que reqContractDetails rend : les contrats REELLEMENT cotes, avec conId."""
+    strikes = np.arange(24_375.0, 25_650.0, 25.0) if strikes is None else strikes
+    lignes = []
+    for i, k in enumerate(strikes):
+        for j, r in enumerate(("C", "P")):
+            lignes.append({"conId": 200_000 + i * 2 + j, "StrikePrice": float(k),
+                           "ExpirationDate": pd.Timestamp(echeance), "right": r})
+    return pd.DataFrame(lignes)
+
 
 def test_perimetre_coupe_les_strikes_hors_plage():
     """±2 % autour de 25 000, c'est 24 500 à 25 500 et rien d'autre."""
-    p = ib_data.perimetre(STRIKES, ["20260904"], PRIX, plage=0.02, quote_date=QUOTE)
+    p = ib_data.perimetre(_contrats_cotes(), PRIX, plage=0.02)
     assert p.StrikePrice.min() == pytest.approx(24_500.0)
     assert p.StrikePrice.max() == pytest.approx(25_500.0)
 
 
-def test_perimetre_coupe_les_echeances_hors_horizon():
-    """dte_max=30 écarte le 20 novembre, dte_min=2 écarte le lendemain."""
-    p = ib_data.perimetre(STRIKES, ECHEANCES, PRIX, plage=0.01,
-                          dte_max=30, dte_min=2, quote_date=QUOTE)
-    gardees = sorted(pd.Timestamp(d).strftime("%Y%m%d") for d in p.ExpirationDate.unique())
-    assert gardees == ["20260828", "20260904", "20260918"]
+def test_perimetre_garde_le_strike_exactement_a_la_borne():
+    """25 000 x 1,025 vaut 25 624,999999999996 en flottant : sans marge, le strike
+    25 625 pourtant demandé tombe — et de façon variable selon le prix."""
+    p = ib_data.perimetre(_contrats_cotes(), PRIX, plage=0.025)
+    assert 25_625.0 in set(p.StrikePrice)
+    assert 24_375.0 in set(p.StrikePrice)
 
 
-def test_perimetre_produit_les_deux_cotes():
-    """Un contrat par (échéance, strike, sens) : le GEX a besoin des deux jambes."""
-    p = ib_data.perimetre([25_000.0], ["20260904"], PRIX, quote_date=QUOTE)
+def test_perimetre_conserve_les_conid():
+    """C'est la seule chose que la couche réseau ne peut pas reconstruire."""
+    p = ib_data.perimetre(_contrats_cotes(), PRIX, plage=0.01)
+    assert "conId" in p.columns
+    assert p.conId.is_unique
+
+
+def test_perimetre_ne_fabrique_aucun_contrat():
+    """Le fond de la correction : on filtre ce qui est coté, on n'invente pas de
+    couple. reqSecDefOptParams rend l'union des strikes et des échéances, pas les
+    contrats existants — leur produit cartésien est un majorant, pas une chaîne."""
+    cotes = _contrats_cotes(strikes=[24_900.0, 25_000.0, 25_100.0])
+    p = ib_data.perimetre(cotes, PRIX, plage=0.2)
+    assert len(p) == len(cotes)              # rien de plus que ce qui est coté
+    assert set(p.conId) <= set(cotes.conId)
+
+
+def test_perimetre_garde_les_deux_cotes():
+    """Le GEX a besoin des deux jambes."""
+    p = ib_data.perimetre(_contrats_cotes(strikes=[25_000.0]), PRIX, plage=0.01)
     assert sorted(p.right) == ["C", "P"]
-    assert len(p) == 2
-
-
-def test_perimetre_compte_les_contrats_a_demander():
-    """C'est ce nombre qui décide du temps de balayage : il doit être prévisible."""
-    p = ib_data.perimetre(STRIKES, ECHEANCES, PRIX, plage=0.025,
-                          dte_max=30, dte_min=0, quote_date=QUOTE)
-    n_strikes = p.StrikePrice.nunique()
-    n_echeances = p.ExpirationDate.nunique()
-    assert len(p) == n_strikes * n_echeances * 2
-    assert n_strikes == 51            # 25 de part et d'autre, plus la monnaie
-
-
-def test_perimetre_dte_max_none_garde_tout():
-    """Le 'all' de main.py arrive ici en None : aucune échéance ne doit tomber."""
-    p = ib_data.perimetre([25_000.0], ECHEANCES, PRIX, dte_max=None, quote_date=QUOTE)
-    assert p.ExpirationDate.nunique() == len(ECHEANCES)
 
 
 def test_perimetre_vide_rend_une_trame_typee_pas_une_erreur():
-    """Une grille sans strike dans la plage n'est pas une panne : le CME ne liste
-    que vingt-cinq strikes autour du règlement sur les échéances courtes."""
-    p = ib_data.perimetre(STRIKES, ECHEANCES, prix=1.0, plage=0.02, quote_date=QUOTE)
+    """Une échéance dont aucun strike n'est dans la plage n'est pas une panne."""
+    p = ib_data.perimetre(_contrats_cotes(), prix=1.0, plage=0.02)
     assert p.empty
-    assert list(p.columns) == ["ExpirationDate", "StrikePrice", "right"]
+    assert "StrikePrice" in p.columns and "conId" in p.columns
 
 
-def test_perimetre_dedoublonne_et_trie():
-    """reqSecDefOptParams rend des ensembles : l'unicité et l'ordre sont à nous.
-
-    L'ordre compte pour de vrai : c'est celui dans lequel les lots partiront, et
-    deux appels qui rendraient deux ordres différents feraient re-souscrire les
-    mêmes contrats à chaque recyclage.
-    """
-    p = ib_data.perimetre([25_000.0, 25_000.0, 24_975.0], ["20260904", "20260904"],
-                          PRIX, plage=0.01, quote_date=QUOTE)
-    assert p.StrikePrice.nunique() == 2
-    assert p.ExpirationDate.nunique() == 1
-    assert len(p) == 4                                  # 2 strikes x 2 sens
-    assert p.StrikePrice.is_monotonic_increasing
-    assert list(p.right) == ["C", "P", "C", "P"]
+def test_perimetre_trie_pour_que_les_lots_soient_reproductibles():
+    """L'ordre est celui dans lequel les lots partiront : deux appels identiques
+    doivent rendre la même liste, sinon le recyclage re-souscrit pour rien."""
+    cotes = _contrats_cotes()
+    un = ib_data.perimetre(cotes, PRIX, plage=0.01)
+    deux = ib_data.perimetre(cotes.sample(frac=1, random_state=0), PRIX, plage=0.01)
+    assert un.equals(deux)
+    assert un.StrikePrice.is_monotonic_increasing
 
 
 # ---=== build_chain ===---

@@ -113,13 +113,26 @@ patron est celui que `databento_data.py` documente explicitement : « fonction
 pure, séparée de l'accès réseau pour être testable sans clé API ».
 
 ```
-perimetre(strikes, echeances, prix, plage, dte_max, dte_min) -> [contrats]
+echeances_utiles(echeances, quote_date, dte_max, dte_min) -> [Timestamp]
+```
+Quelles échéances énumérer, donc combien d'appels à `reqContractDetails`. C'est
+le seul usage fiable de `reqSecDefOptParams`.
+
+```
+perimetre(contrats, prix, plage) -> [contrats]
 ```
 Quels contrats demander. C'est l'inversion que le projet n'avait jamais eu à
 faire : le CBOE sert toute la chaîne et `filtre_echeances()` élague ensuite ; IB
 oblige à élaguer **avant** de demander, sous peine de brûler le budget de lignes
 sur des strikes sans intérêt. `--range` et `--dte-max` cessent donc d'être des
 réglages d'affichage pour devenir le périmètre d'acquisition.
+
+Cette fonction **filtre, elle ne fabrique pas** — et la distinction est le fond du
+problème. Elle reçoit les contrats réellement cotés, ceux qu'un
+`reqContractDetails` par échéance vient de rendre, et n'écarte que ce qui est hors
+plage. Construire un produit cartésien à partir des strikes et des échéances de
+`reqSecDefOptParams` compterait des dizaines de milliers de contrats jamais
+cotés.
 
 Une contrainte de marché s'y ajoute, qu'il ne faut pas prendre pour une anomalie.
 Le CME ne liste, sur une échéance hebdomadaire NQ, que vingt-cinq strikes de part
@@ -183,17 +196,25 @@ lendemain matin. Le socle est donc rebalayé au premier réveil qui suit 18 h CT
 et une seule fois par journée de compensation :
 
 1. Résoudre le future NQ de première échéance : `conId` et prix.
-2. Énumérer les options : `reqSecDefOptParams(underlyingSecType="FUT",
-   underlyingConId=…)` → strikes et échéances. Repli `reqContractDetails` si ça
-   échoue, malgré la mise en garde d'IB sur le throttling.
-3. `perimetre()` élague au périmètre d'analyse.
-4. Balayer par lots d'environ quatre-vingt-dix :
+2. Lister les échéances : `reqSecDefOptParams(underlyingSecType="FUT",
+   underlyingConId=…)`, puis `echeances_utiles()` pour ne garder que l'horizon.
+   C'est la seule chose pour laquelle cet appel est fiable — son union
+   d'échéances est exacte, son union de strikes ne l'est pas.
+3. Énumérer les contrats réellement cotés : **un `reqContractDetails` par
+   échéance**, `secType="FOP"`, le strike laissé indéfini. Un contrat
+   incomplètement défini fait rendre à IB tous ceux qui lui correspondent, avec
+   leurs `conId`. Une vingtaine de requêtes, et la mise en garde d'IB sur le
+   throttling ne s'applique pas : elle vise la requête ambiguë qui demande tous
+   les strikes ET toutes les échéances d'un coup.
+4. `perimetre()` élague les strikes hors plage. Il filtre ce qui est coté ; il ne
+   fabrique aucun contrat.
+5. Balayer par lots d'environ quatre-vingt-dix :
    `reqMktData(genericTickList="101,588", snapshot=False)`, attendre la
    stabilisation, lire, `cancelMktData`, lot suivant. Le streaming n'est pas un
    choix : le mode snapshot n'accepte aucun generic tick, donc aucun open
    interest. Et `"101,588"` plutôt que `"101"` seul parce que rien ne dit lequel
    des deux IB retient pour un FOP — les demander ensemble ne coûte aucune ligne.
-5. `build_chain()`, puis `snapshots.sauver()`.
+6. `build_chain()`, puis `snapshots.sauver()`.
 
 **Vif**, en continu :
 
@@ -284,10 +305,27 @@ End-of-Day gratuit du CME, que `cme_data.load_settlement()` lit déjà, et IB ne
 garde que le vif. Le reste de l'architecture est inchangé — c'est la raison pour
 laquelle `fusionner()` sépare l'origine de l'OI de celle de l'IV.
 
-**2. Énumérer les contrats FOP.** IB recommande `reqSecDefOptParams` et
-déconseille explicitement `reqContractDetails` pour les chaînes complètes, mais
-le premier est réputé capricieux sur les options sur futures. Si les deux
-échouent, la liste des strikes se déduit du fichier CME.
+**2. Énumérer les contrats FOP.** Réduit par vérification, et la solution a
+corrigé une erreur de conception plus grave que le risque lui-même.
+
+`reqSecDefOptParams` rend l'union des strikes et l'union des échéances du
+sous-jacent, **jamais les couples existants**. Croiser les deux fabrique un
+produit cartésien qui est un majorant, pas une chaîne : sur NQ à ±20 %, vingt-quatre
+mille contrats dont la vaste majorité n'a jamais été cotée, puisque le CME ne
+liste que vingt-cinq strikes autour du règlement sur les hebdomadaires. Souscrire
+à ces fantômes coûterait des minutes pour récolter une erreur 200 par contrat.
+
+La doc IB donne la sortie : un contrat incomplètement défini — le strike laissé
+vide — fait rendre à `reqContractDetails` tous les contrats qui lui
+correspondent, `conId` compris. Une requête par échéance suffit donc, soit une
+vingtaine, et l'on obtient les contrats réels. La mise en garde d'IB contre
+`reqContractDetails` vise la requête ambiguë qui demande tous les strikes ET
+toutes les échéances ensemble ; une échéance à la fois est précisément la
+granularité qu'elle recommande.
+
+`reqSecDefOptParams` reste utile pour ce qu'il fait bien : lister les échéances.
+Si `reqContractDetails` devait échouer sur les FOP, la liste des contrats se
+déduit du fichier End-of-Day du CME.
 
 **3. Le balayage du socle est long, et pour une raison qu'on ne peut pas
 contourner.** Le mode snapshot de `reqMktData` n'accepte aucun generic tick — or

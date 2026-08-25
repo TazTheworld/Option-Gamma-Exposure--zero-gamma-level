@@ -8,10 +8,17 @@ et fusionnent, et qui se vérifient sans réseau. C'est le patron de
 databento_data.py, pour la même raison qui y est écrite : ce qui produit un
 chiffre doit être testable hors ligne.
 
-    perimetre()      quels contrats demander, avant de les demander
-    build_chain()    définitions + valeurs -> chaîne au format du projet
-    selection_vif()  les contrats à garder souscrits en permanence
-    fusionner()      open interest du socle + IV du vif -> entrée d'analyser()
+    echeances_utiles()  quelles échéances énumérer
+    perimetre()         parmi les contrats cotés, lesquels demander
+    build_chain()       définitions + valeurs -> chaîne au format du projet
+    selection_vif()     les contrats à garder souscrits en permanence
+    fusionner()         open interest du socle + IV du vif -> entrée d'analyser()
+
+L'ordre compte. reqSecDefOptParams ne sert qu'à lister les échéances, son union
+d'échéances étant exacte ; son union de STRIKES ne l'est pas, et croiser les deux
+fabriquerait des dizaines de milliers de contrats jamais cotés. On énumère donc
+les contrats réels échéance par échéance, avec reqContractDetails, et perimetre()
+n'élague que ce qui est hors plage.
 
 La connexion, l'énumération et la souscription vivent ailleurs : elles demandent
 IB Gateway, donc elles ne se testent pas ici. Rien dans ce fichier n'importe
@@ -52,42 +59,23 @@ def _quote_date(valeur=None):
     return ts.normalize()
 
 
-def perimetre(strikes, echeances, prix, plage=0.2, dte_max=30, dte_min=0,
-              quote_date=None):
-    """Les contrats à demander, un par (échéance, strike, sens).
+def echeances_utiles(echeances, quote_date=None, dte_max=30, dte_min=0):
+    """Les échéances à énumérer, triées et dédoublonnées.
 
-    C'est l'inversion que le projet n'avait jamais eu à faire. Le CBOE sert toute
-    la chaîne et analysis.filtre_echeances() élague ensuite ; IB oblige à élaguer
-    AVANT de demander, chaque contrat coûtant une des cent lignes disponibles.
-    `plage` et `dte_max` cessent donc d'être des réglages d'affichage pour devenir
-    le périmètre d'acquisition.
+    C'est la seule chose pour laquelle reqSecDefOptParams est fiable : il rend
+    l'union des échéances du sous-jacent, et cette union est exacte. Son union de
+    strikes, elle, ne l'est pas — voir perimetre().
 
-    Le périmètre demandé n'est pas le périmètre obtenu, et ce n'est pas une
-    anomalie : le CME ne liste que vingt-cinq strikes de part et d'autre du
-    règlement sur les échéances hebdomadaires, soit environ ±2,5 %. Ce qui n'est
-    pas listé n'apparaît simplement pas dans `strikes`, et une trame vide est une
-    réponse, pas une panne.
-
-    L'ordre du résultat est celui dans lequel les lots partiront. Il est donc
-    trié, et deux appels sur les mêmes entrées rendent la même liste : sans ça,
-    chaque recyclage de lignes re-souscrirait les mêmes contrats dans le désordre.
+    Le résultat donne le nombre d'appels à reqContractDetails, un par échéance.
+    Un doublon serait une requête payée pour rien, et l'ordre doit être
+    reproductible pour que deux balayages successifs se ressemblent.
 
     `dte_max=None` garde toutes les échéances (le 'all' de main.py).
     """
     quote_date = _quote_date(quote_date)
-
-    ks = pd.to_numeric(pd.Series(list(strikes), dtype="object"), errors="coerce").dropna()
-    bas, haut = float(prix) * (1 - plage), float(prix) * (1 + plage)
-    # Les bornes sont calculées en flottant, donc fausses de quelques femtomètres :
-    # 25 000 x 1,025 vaut 25 624,999999999996, ce qui EXCLUT le strike 25 625
-    # pourtant demandé. Sans marge, on perdrait le strike le plus éloigné — celui
-    # qui borne le profil de gamma — et de façon imprévisible, puisque l'erreur
-    # dépend du prix du future et change donc d'une séance à l'autre.
-    marge = abs(float(prix)) * 1e-9
-    ks = sorted({float(k) for k in ks if bas - marge <= k <= haut + marge})
-
     dates = pd.to_datetime(pd.Series(list(echeances), dtype="object"),
                            errors="coerce").dropna()
+
     gardees = []
     for d in sorted({pd.Timestamp(x).normalize() for x in dates}):
         jours = (d - quote_date).days
@@ -96,13 +84,48 @@ def perimetre(strikes, echeances, prix, plage=0.2, dte_max=30, dte_min=0,
         if dte_max is not None and jours > dte_max:
             continue
         gardees.append(d)
+    return gardees
 
-    lignes = [{"ExpirationDate": d, "StrikePrice": k, "right": r}
-              for d in gardees for k in ks for r in ("C", "P")]
-    df = pd.DataFrame(lignes, columns=CONTRAT)
-    df["ExpirationDate"] = pd.to_datetime(df["ExpirationDate"])
+
+def perimetre(contrats, prix, plage=0.2):
+    """Parmi les contrats RÉELLEMENT cotés, ceux à demander.
+
+    Cette fonction filtre, elle ne fabrique pas. La distinction est le fond du
+    problème : reqSecDefOptParams rend l'union des strikes et l'union des
+    échéances du sous-jacent, jamais les couples existants. Leur produit
+    cartésien est un majorant — sur NQ à ±20 %, vingt-quatre mille contrats dont
+    la vaste majorité n'a jamais été cotée, parce que le CME ne liste que
+    vingt-cinq strikes autour du règlement sur les échéances hebdomadaires.
+    Souscrire à ces fantômes coûterait des minutes pour récolter une erreur 200
+    par contrat.
+
+    On énumère donc les contrats existants d'abord — un reqContractDetails par
+    échéance, le strike laissé indéfini, ce qui rend tous les contrats de cette
+    échéance avec leurs conId — et cette fonction n'élague que ce qui est hors
+    plage.
+
+    `contrats` doit porter au moins StrikePrice ; conId, ExpirationDate et right
+    sont conservés tels quels, le conId étant la seule chose que la couche réseau
+    ne pourrait pas reconstruire.
+
+    L'ordre du résultat est celui dans lequel les lots partiront : trié, donc
+    reproductible d'un balayage à l'autre.
+    """
+    df = contrats.copy()
     df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors="coerce")
-    return df
+    df = df.dropna(subset=["StrikePrice"])
+
+    bas, haut = float(prix) * (1 - plage), float(prix) * (1 + plage)
+    # Les bornes se calculent en flottant, donc fausses de quelques femtomètres :
+    # 25 000 x 1,025 vaut 25 624,999999999996, ce qui EXCLUT le strike 25 625
+    # pourtant demandé. Sans marge on perdrait le strike le plus éloigné — celui
+    # qui borne le profil de gamma — et de façon imprévisible, l'erreur dépendant
+    # du prix du future et changeant donc d'une séance à l'autre.
+    marge = abs(float(prix)) * 1e-9
+    df = df[(df.StrikePrice >= bas - marge) & (df.StrikePrice <= haut + marge)]
+
+    tri = [c for c in ("ExpirationDate", "StrikePrice", "right") if c in df.columns]
+    return df.sort_values(tri).reset_index(drop=True)
 
 
 def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
@@ -281,25 +304,30 @@ def fusionner(socle, ticks_vif, spot):
 
 
 if __name__ == "__main__":
-    # Sans réseau : ce qu'un périmètre coûterait en contrats, donc en temps de
-    # balayage. À lire avec la mise en garde ci-dessous — le produit cartésien
-    # n'existe pas sur le marché.
+    # Sans réseau : ce que coûte un périmètre, en requêtes puis en lots.
     import sys
 
     prix = float(sys.argv[1]) if len(sys.argv) > 1 else 25_000.0
-    plage = float(sys.argv[2]) if len(sys.argv) > 2 else 0.2
-    strikes = np.arange(prix * 0.7, prix * 1.3, 25.0)
-    echeances = pd.date_range(pd.Timestamp.today().normalize(), periods=30, freq="D")
+    plage = float(sys.argv[2]) if len(sys.argv) > 2 else 0.025
 
-    p = perimetre(strikes, echeances, prix, plage=plage)
+    # Grille telle que le CME la liste : vingt-cinq strikes de part et d'autre du
+    # règlement sur les hebdomadaires, au pas de vingt-cinq points.
+    ech = pd.date_range(pd.Timestamp.today().normalize(), periods=45, freq="D")
+    interrogees = echeances_utiles(ech, dte_max=30)
+    cotes = pd.DataFrame([
+        {"conId": i, "ExpirationDate": d, "right": r,
+         "StrikePrice": prix + n * 25.0}
+        for i, (d, n, r) in enumerate(
+            (d, n, r) for d in interrogees for n in range(-25, 26) for r in ("C", "P"))
+    ])
+
+    p = perimetre(cotes, prix, plage=plage)
     lots = -(-len(p) // 90)
-    print(f"NQ à {prix:,.0f}, plage ±{plage:.1%} | {p.StrikePrice.nunique()} strikes "
-          f"x {p.ExpirationDate.nunique()} échéances x 2 = {len(p):,} contrats")
-    print(f"{lots} lots de 90 — compter deux à quatre secondes par lot, "
-          f"soit {lots * 3 / 60:.0f} min")
+    print(f"NQ à {prix:,.0f}, plage ±{plage:.1%}")
+    print(f"  {len(interrogees)} requêtes reqContractDetails, une par échéance")
+    print(f"  {len(cotes):,} contrats cotés -> {len(p):,} dans la plage")
+    print(f"  {lots} lots de 90, soit environ {max(1, lots * 3 // 60)} min de balayage")
     print()
-    print("ATTENTION : c'est un MAJORANT, pas une prévision. reqSecDefOptParams")
-    print("rend l'union des strikes et l'union des échéances, pas les couples")
-    print("réellement cotés — et le CME ne liste que 25 strikes de part et")
-    print("d'autre du règlement sur les échéances hebdomadaires, soit ±2,5 %.")
-    print("La plupart des couples comptés ici n'existent donc pas.")
+    print("Les contrats sont enumeres avant d'etre filtres, jamais l'inverse :")
+    print("le produit cartesien des strikes et des echeances rendus par")
+    print("reqSecDefOptParams compterait des milliers de contrats jamais cotes.")
