@@ -264,11 +264,33 @@ le premier est réputé capricieux sur les options sur futures. Si les deux
 socle est perdu avant d'avoir été écrit. D'où l'écriture du socle sur disque
 avant toute chose.
 
-**4. NQ ne porte qu'une fraction du gamma du Nasdaq.** La profondeur d'open
-interest et la structure d'échéances de QQQ n'existent pas côté futures. La
-mesure reste valide — des services établis la publient — mais elle est plus
-étroite qu'elle n'en a l'air, et ne doit pas être lue comme « le gamma du
-Nasdaq ». À écrire dans le README au moment de documenter la source.
+## Ce que la mesure dit, et ce qu'elle ne dit pas
+
+Le GEX calculé ici porte sur les seules options du future NQ. Ce n'est pas une
+limite subie mais la méthodologie du domaine : FlashAlpha et MenthorQ calculent
+leurs niveaux gamma NQ à partir des seules options sur futures, valorisées en
+Black-76, en mettant le gamma dollar à l'échelle du multiplicateur ×20 du CME
+plutôt que du ×100 des options actions. Aucune des deux ne mélange les sources ;
+convertir un niveau QQQ ou NDX vers le NQ est chez elles un outil séparé. C'est
+mot pour mot ce que `black76_gamma()` et `CONTRACT_SIZES["NQ"]` font déjà.
+
+Reste à savoir ce que ce périmètre laisse dehors. L'open interest d'options est
+massivement plus gros sur QQQ et NDX que sur les options NQ — non parce que le
+future serait un marché secondaire, il mène le prix et cote presque en continu,
+mais parce que QQQ vit dans OPRA et qu'un compte-titres ordinaire y accède, là où
+les options sur futures demandent un compte futures. C'est une barrière d'accès,
+pas une hiérarchie entre marchés.
+
+Or la couverture, elle, est fongible. Un dealer qui doit acheter du delta contre
+des calls QQQ vendus achète du NQ plutôt que des parts de QQQ : plus liquide,
+moins cher en capital, ouvert la nuit, sans emprunt de titres — un contrat NQ
+valant environ huit cents parts de QQQ. Le gamma naît donc sur QQQ et NDX, mais
+une part de sa couverture atterrit sur le carnet du NQ. Ce qu'on mesure ici en
+porte l'écho sans en porter le stock.
+
+La seule précaution qui en découle est de lecture, et elle doit figurer au
+README : le chiffre produit est le gamma des options NQ, pas tout le gamma qui
+pèse sur le Nasdaq.
 
 ## Hors périmètre
 
