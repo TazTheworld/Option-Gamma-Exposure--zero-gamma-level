@@ -219,3 +219,56 @@ def test_build_chain_alimente_analyser_sans_retouche():
                           ticker="NQ", contract_size=20, dte_max=None)
     assert np.isfinite(a.total_gex)
     assert a.total_gex != 0.0
+
+
+# ---=== selection_vif ===---
+
+def test_selection_vif_respecte_le_budget_de_lignes():
+    """Cent lignes chez IB, quatre-vingt-dix pour le vif : saturer le quota fait
+    échouer les souscriptions suivantes en silence."""
+    chaine, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    assert len(ib_data.selection_vif(chaine, budget_lignes=90)) <= 90
+    assert len(ib_data.selection_vif(chaine, budget_lignes=10)) == 10
+
+
+def test_selection_vif_prend_les_contrats_qui_portent_le_gamma():
+    """Le socle vient de mesurer où le gamma est : un critère géométrique
+    gaspillerait des lignes sur des strikes sans open interest."""
+    defs, ticks = _trames_ib(oi=1.0)
+    # un seul strike porte tout l'open interest, et il est loin de la monnaie
+    loin = defs[(defs.StrikePrice == 24_600.0) & (defs.right == "C")].conId.iloc[0]
+    ticks = ticks.copy()
+    ticks.loc[ticks.conId == loin, "OpenInt"] = 1_000_000.0
+    chaine, _, _ = ib_data.build_chain(defs, ticks, futures_price=PRIX,
+                                       quote_date=QUOTE)
+
+    choisis = ib_data.selection_vif(chaine, budget_lignes=3)
+    premier = choisis.iloc[0]
+    assert premier.StrikePrice == pytest.approx(24_600.0)
+    assert premier.right == "C"
+
+
+def test_selection_vif_ecarte_les_contrats_sans_poids():
+    """Un strike sans open interest ne mérite pas une ligne."""
+    defs, ticks = _trames_ib(oi=0.0)
+    chaine, _, _ = ib_data.build_chain(defs, ticks, futures_price=PRIX,
+                                       quote_date=QUOTE)
+    assert ib_data.selection_vif(chaine).empty
+
+
+def test_selection_vif_rend_la_meme_forme_que_perimetre():
+    """La couche réseau ne doit connaître qu'une seule forme de contrat."""
+    chaine, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    assert list(ib_data.selection_vif(chaine).columns) == ib_data.CONTRAT
+
+
+def test_selection_vif_est_deterministe_a_egalite():
+    """À poids égaux, deux appels doivent rendre la même liste : sinon le
+    recyclage des lignes brasserait des souscriptions pour rien."""
+    chaine, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
+                                       quote_date=QUOTE)
+    un = ib_data.selection_vif(chaine, budget_lignes=20)
+    deux = ib_data.selection_vif(chaine, budget_lignes=20)
+    assert un.equals(deux)

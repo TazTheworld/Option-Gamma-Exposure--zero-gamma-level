@@ -191,6 +191,47 @@ def build_chain(defs, ticks, futures_price=None, quote_date=None, rate=0.0):
     return _clean(chain), futures_price, quote_date
 
 
+def selection_vif(chaine, budget_lignes=90):
+    """Les contrats à garder souscrits en permanence, |gamma × OI| décroissant.
+
+    Un critère géométrique — plus ou moins N strikes autour du spot — serait plus
+    simple, mais dilapiderait des lignes sur des strikes sans open interest alors
+    que le socle vient précisément de mesurer où le gamma se trouve.
+
+    Le budget tombe mieux qu'on ne l'avait prévu : quatre-vingt-dix lignes font
+    quarante-cinq strikes, soit environ ±2,5 %, exactement la grille que le CME
+    liste sur une échéance hebdomadaire. Le vif ne couvre donc pas un morceau
+    autour du spot, il couvre toute la chaîne listée de l'échéance proche, et le
+    tri sert moins à choisir qu'à ordonner le recyclage quand le spot glisse.
+
+    Quatre-vingt-dix et non cent : le future consomme une ligne, le recyclage en
+    réclame quelques-unes le temps que les annulations soient prises en compte, et
+    saturer le quota fait échouer les souscriptions suivantes en silence. Le
+    budget est un paramètre, pas une constante — un compte avec des Quote Boosters
+    en a davantage, et doit pouvoir s'en servir.
+
+    Rend la même forme que perimetre() : la couche réseau ne connaît qu'un seul
+    genre de contrat.
+    """
+    blocs = []
+    for side, right in (("Call", "C"), ("Put", "P")):
+        bloc = chaine[["ExpirationDate", "StrikePrice"]].copy()
+        bloc["right"] = right
+        gamma = pd.to_numeric(chaine.get(f"{side}Gamma"), errors="coerce").fillna(0.0)
+        oi = pd.to_numeric(chaine.get(f"{side}OpenInt"), errors="coerce").fillna(0.0)
+        bloc["poids"] = (gamma * oi).abs()
+        blocs.append(bloc)
+
+    tous = pd.concat(blocs, ignore_index=True)
+    tous = tous[tous.poids > 0]
+    # Le tri secondaire n'est pas cosmétique : à poids égaux, sans lui, deux
+    # appels rendraient deux listes différentes et le recyclage annulerait puis
+    # re-souscrirait les mêmes contrats pour rien.
+    tous = tous.sort_values(["poids", "ExpirationDate", "StrikePrice", "right"],
+                            ascending=[False, True, True, True])
+    return tous.head(int(budget_lignes))[CONTRAT].reset_index(drop=True)
+
+
 if __name__ == "__main__":
     # Sans réseau : ce qu'un périmètre coûterait en contrats, donc en temps de
     # balayage. À lire avec la mise en garde ci-dessous — le produit cartésien
