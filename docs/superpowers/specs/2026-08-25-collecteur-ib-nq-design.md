@@ -296,12 +296,19 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Cadence de requêtes | lignes ÷ 2 par seconde, soit 50/s par défaut |
 | Grecs | tick 13 en temps réel, tick 83 en différé |
 | Open interest | tick 27/28 via generic 101 (par contrat, vérifié) ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
-| Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
+| Contrat visé | **NQ, le E-mini**, ×20 — vérifié auprès d'IB, `cme_data.CONTRACT_SIZES` le portait déjà |
+| À ne pas confondre | MNQ (Micro) vaut ×2 ; le contrat *full size* ND, à ×100, n'existe plus |
 | Mode snapshot | **incompatible avec les generic ticks** — donc inutilisable pour l'open interest |
 | Niveau du NQ (25 août 2026) | **29 207**, servi par IB dans `modelGreeks.undPrice` |
 | Pas de strike, mesuré | **5 points** sur les 0DTE, 25 à 50 sur les hebdomadaires, 100 au large |
 | Échéances cotées sur 24 jours | **14**, une par classe de cotation |
 | Contrats sur ce périmètre | **6 696** — la somme des grilles, pas leur produit |
+
+« E-mini » est un nom d'époque, pas une mise en garde : NQ était le petit frère du
+ND à ×100 quand il a été créé, et le ND a depuis disparu. Le E-mini est
+aujourd'hui *le* contrat Nasdaq de référence. Se tromper de multiplicateur ne
+produirait aucune erreur visible — un GEX dix fois trop petit reste un nombre
+plausible — d'où la vérification, et cette ligne.
 | Prix du sous-jacent | **servi gratuitement** par `undPrice`, dans chaque tick d'option |
 | Champs servis par souscription | bid, ask, bidSize, askSize, close, high, low, last, volume, open interest, IV, delta, gamma, vega, theta — **sans generic tick supplémentaire** |
 | Redémarrage de TWS / Gateway | forcé une fois par jour ; sans intervention avec *Auto restart* (v974+) |
