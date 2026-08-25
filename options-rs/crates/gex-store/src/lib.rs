@@ -12,6 +12,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod historique;
+
 use std::fs::File;
 use std::path::Path;
 

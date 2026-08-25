@@ -11,14 +11,13 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Taz" }]
 
-# Le strict necessaire pour lire un releve et en tirer un GEX. Le collecteur IB
-# est un extra : `python main.py NQ` ouvre un fichier deja ecrit et ne doit pas
-# payer une dependance de courtier pour ca.
+# Le strict necessaire pour COLLECTER. Le calcul, l'affichage et les graphiques
+# sont passes en Rust (voir options-rs/), et matplotlib est parti avec eux : ce
+# qui reste ici acquiert la donnee et l'archive, rien de plus.
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",
     "scipy>=1.11",
-    "matplotlib>=3.8",
     "requests>=2.31",
 ]
 
@@ -36,8 +35,8 @@ Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-lev
 
 [tool.setuptools]
 py-modules = [
-    "main", "chain", "greeks", "black76", "analysis", "plots", "snapshots",
-    "ib_data", "ib_collector", "price_data", "history", "validate",
+    "chain", "black76", "snapshots", "ib_data", "ib_collector",
+    "price_data", "history", "validate",
 ]
 
 [tool.pytest.ini_options]

@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import ib_data
+import snapshots
 from chain import COLUMNS
 
 QUOTE = pd.Timestamp("2026-08-25")
@@ -238,16 +239,24 @@ def test_build_chain_deduit_le_prix_du_future_par_parite():
     assert prix == pytest.approx(PRIX, rel=1e-4)
 
 
-def test_build_chain_alimente_analyser_sans_retouche():
-    """Le contrat de bout en bout : la sortie entre telle quelle dans analysis."""
-    import analysis
+def test_build_chain_survit_a_l_archivage(tmp_path):
+    """Le contrat de bout en bout, depuis que le calcul est en Rust : la sortie
+    doit traverser le FICHIER sans perte, puisque c'est par là que le moteur la
+    lit. Ce test tenait auparavant sur analysis.analyser() ; le joint a changé de
+    place, pas de nature."""
     chaine, prix, date_val = ib_data.build_chain(*_trames_ib(),
                                                  futures_price=PRIX,
                                                  quote_date=QUOTE)
-    a = analysis.analyser(chaine, spot=prix, quote_date=date_val,
-                          ticker="NQ", contract_size=20, dte_max=None)
-    assert np.isfinite(a.total_gex)
-    assert a.total_gex != 0.0
+    chemin = snapshots.sauver(chaine, "NQ", prix, date_val, str(tmp_path))
+    relu, spot, quote_date, _ = snapshots.charger(chemin)
+
+    assert spot == pytest.approx(prix)
+    assert pd.Timestamp(quote_date) == pd.Timestamp(date_val)
+    assert len(relu) == len(chaine)
+    for colonne in ("StrikePrice", "CallIV", "PutIV", "CallGamma", "PutGamma",
+                    "CallOpenInt", "PutOpenInt"):
+        assert relu[colonne].tolist() == pytest.approx(chaine[colonne].tolist())
+    assert (relu.CallOpenInt + relu.PutOpenInt).sum() > 0
 
 
 # ---=== selection_vif ===---
@@ -369,13 +378,16 @@ def test_fusionner_sans_vif_rend_le_socle_intact():
         assert spot == pytest.approx(PRIX)
 
 
-def test_fusionner_alimente_analyser_sans_retouche():
-    """Le but de toute la fonction : (df, spot) est l'entrée d'analyser()."""
-    import analysis
+def test_fusionner_rend_une_chaine_exploitable():
+    """Le but de toute la fonction : (df, spot) est ce que le collecteur archive,
+    donc ce que le moteur lira. Ni NaN ni colonne manquante n'y sont admis — un
+    NaN contaminerait la somme et rendrait le GEX total « nan »."""
     df, spot = ib_data.fusionner(_socle(), _vif(IV=0.42), spot=25_100.0)
-    a = analysis.analyser(df, spot=spot, quote_date=QUOTE, ticker="NQ",
-                          contract_size=20, dte_max=None)
-    assert np.isfinite(a.total_gex)
+    assert spot == pytest.approx(25_100.0)
+    for colonne in COLUMNS:
+        assert colonne in df.columns, f"{colonne} manque au format pivot"
+    for colonne in ("StrikePrice", "CallIV", "PutIV", "CallOpenInt", "PutOpenInt"):
+        assert np.isfinite(df[colonne]).all(), f"{colonne} porte un NaN"
 
 
 def test_fusionner_ignore_un_contrat_absent_du_socle():
@@ -386,43 +398,6 @@ def test_fusionner_ignore_un_contrat_absent_du_socle():
     fusionnee, _ = ib_data.fusionner(socle, vif, spot=PRIX)
     assert len(fusionnee) == len(socle)
     assert 99_999.0 not in set(fusionnee.StrikePrice)
-
-
-# ---=== branchement du lecteur ===---
-
-def test_suivre_resout_le_chemin_du_courant(tmp_path):
-    """--suivre NQ évite de taper snapshots/NQ/courant.parquet à la main."""
-    import main
-    import snapshots
-    args = main.construire_parser().parse_args(["NQ", "--suivre", "--dir", str(tmp_path)])
-    assert main.source_relecture(args) == snapshots.courant("NQ", str(tmp_path))
-
-
-def test_sans_drapeau_la_source_reste_le_courant():
-    """Il n'y a plus de téléchargement à faire : le collecteur écrit, le lecteur
-    lit. Sans --replay, il ne reste que le courant, et l'exiger par un drapeau
-    ferait un drapeau obligatoire donc inutile."""
-    import main
-    import snapshots
-    args = main.construire_parser().parse_args(["NQ"])
-    assert main.source_relecture(args) == snapshots.courant("NQ", snapshots.DOSSIER)
-
-
-def test_watch_et_replay_restent_exclusifs_sur_une_archive(tmp_path):
-    """Une archive horodatée ne bouge plus : la suivre n'a aucun sens."""
-    import main
-    args = main.construire_parser().parse_args(
-        ["NQ", "--watch", "60", "--replay", str(tmp_path / "2026-08-25_1436.parquet")])
-    with pytest.raises(ValueError, match="archive"):
-        main.verifier_exclusions(args)
-
-
-def test_watch_est_permis_sur_le_courant(tmp_path):
-    """Le courant bouge : le suivre est exactement l'usage visé."""
-    import main
-    args = main.construire_parser().parse_args(
-        ["NQ", "--watch", "60", "--suivre", "--dir", str(tmp_path)])
-    main.verifier_exclusions(args)          # ne doit rien lever
 
 
 # ---=== les champs que la souscription rend gratuitement ===---
@@ -486,18 +461,36 @@ def test_le_carnet_traverse_un_aller_retour_snapshot(tmp_path):
     assert relu.CallVol.iloc[0] == pytest.approx(313.0)
 
 
-def test_le_carnet_ne_derange_pas_analyser():
-    """Des colonnes en plus ne doivent rien changer aux chiffres produits."""
-    import analysis
-    avec, prix, date_val = ib_data.build_chain(*_trames_carnet(),
-                                               futures_price=PRIX, quote_date=QUOTE)
+def test_le_carnet_ne_derange_pas_le_format_pivot():
+    """Des colonnes en plus ne doivent rien changer à ce que le moteur lit.
+
+    Le moteur ne prend que COLUMNS : si ces colonnes-là sont identiques, les
+    chiffres le seront aussi. Ce test comparait auparavant deux appels à
+    analysis.analyser() ; depuis que le calcul est en Rust, il compare l'entrée
+    plutôt que la sortie — c'est la même garantie, un cran plus tôt."""
+    avec, _, _ = ib_data.build_chain(*_trames_carnet(),
+                                     futures_price=PRIX, quote_date=QUOTE)
     sans, _, _ = ib_data.build_chain(*_trames_ib(), futures_price=PRIX,
                                      quote_date=QUOTE)
-    a = analysis.analyser(avec, spot=prix, quote_date=date_val, ticker="NQ",
-                          contract_size=20, dte_max=None)
-    b = analysis.analyser(sans, spot=prix, quote_date=date_val, ticker="NQ",
-                          contract_size=20, dte_max=None)
-    assert a.total_gex == pytest.approx(b.total_gex, rel=1e-12)
+    assert len(avec) == len(sans)
+    # Les seules colonnes dont le moteur tire un chiffre. CallLastSale, CallBid et
+    # les autres sont dans COLUMNS pour l'affichage et l'archive, mais aucune
+    # exposition n'en dépend : les comparer ferait échouer le test sur une
+    # différence qui ne change aucun résultat.
+    for colonne in ("ExpirationDate", "StrikePrice", "CallIV", "PutIV",
+                    "CallGamma", "PutGamma", "CallDelta", "PutDelta",
+                    "CallOpenInt", "PutOpenInt"):
+        gauche, droite = avec[colonne], sans[colonne]
+        if gauche.dtype.kind == "f":
+            assert gauche.tolist() == pytest.approx(droite.tolist()), colonne
+        else:
+            assert gauche.tolist() == droite.tolist(), colonne
+    # Les colonnes de carnet existent dans les deux — build_chain les crée
+    # toujours — mais seul le jeu qui les sert les remplit. C'est la distinction
+    # qui compte : le schéma est stable, les valeurs sont facultatives.
+    assert "CallBidSize" in avec.columns and "CallBidSize" in sans.columns
+    assert avec.CallBidSize.notna().any()
+    assert not sans.CallBidSize.notna().any()
 
 
 # ---=== lots ===---

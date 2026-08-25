@@ -1,9 +1,8 @@
-# Le necessaire pour lire un releve et en tirer un GEX, sans collecteur.
-# Le reste est un extra : voir pyproject.toml.
+# Le necessaire pour COLLECTER. Le calcul et l'affichage sont en Rust : voir
+# options-rs/. Le reste est un extra, voir pyproject.toml.
 #   pip install -e ".[ib]"          collecteur Interactive Brokers (ib_async)
 #   pip install -e ".[snapshots]"   archivage en parquet plutot qu'en csv.gz
 #   pip install -e ".[dev]"         tests
-matplotlib==3.11.1
 numpy==2.5.1
 pandas==3.0.5
 requests==2.34.2

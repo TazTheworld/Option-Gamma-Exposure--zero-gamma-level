@@ -7,13 +7,15 @@
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, ValueEnum};
 use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser};
 use gex_core::contrat::multiplicateur;
-use gex_core::temps::Convention;
+use gex_core::temps::{Convention, InstantReleve};
+use gex_store::historique::{LigneHistorique, enregistrer};
 use gex_store::{chemin_courant, lire_releve};
 
 #[derive(Parser, Debug)]
@@ -65,6 +67,38 @@ struct Arguments {
     /// Ce que devient la volatilité quand le spot bouge, dans le profil.
     #[arg(long, value_enum, default_value_t = RegimeCli::StickyStrike)]
     vol_regime: RegimeCli,
+
+    /// Relire le relevé en boucle : 30s, 5m, 1h. Interdit avec --replay.
+    #[arg(long, value_name = "INTERVALLE")]
+    watch: Option<String>,
+
+    /// Durée totale du suivi.
+    #[arg(long, value_name = "DUREE", default_value = "6h")]
+    watch_duration: String,
+
+    /// Fichier d'historique.
+    #[arg(long, default_value = "history.csv")]
+    history: PathBuf,
+
+    /// Ne pas enregistrer ce relevé dans l'historique.
+    #[arg(long)]
+    no_history: bool,
+}
+
+/// « 6h », « 90m », « 3600 » -> secondes.
+fn duree(texte: &str) -> Result<u64, String> {
+    let brut = texte.trim().to_ascii_lowercase();
+    let (nombre, facteur) = match brut.chars().last() {
+        Some('h') => (&brut[..brut.len() - 1], 3600.0),
+        Some('m') => (&brut[..brut.len() - 1], 60.0),
+        Some('s') => (&brut[..brut.len() - 1], 1.0),
+        _ => (brut.as_str(), 1.0),
+    };
+    nombre
+        .trim()
+        .parse::<f64>()
+        .map(|v| (v * facteur) as u64)
+        .map_err(|_| format!("durée invalide : {texte}"))
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -249,8 +283,152 @@ fn avertir(a: &Analyse, dec: usize) {
     }
 }
 
+/// La ligne d'historique d'une analyse.
+fn ligne_historique(a: &Analyse, args: &Arguments, dte_max: Option<i64>) -> LigneHistorique {
+    LigneHistorique {
+        instant: a.releve.0,
+        ticker: args.produit.to_uppercase(),
+        dte_max,
+        source_gamma: match args.gamma_source {
+            SourceCli::Iv => "iv",
+            SourceCli::Published => "published",
+        }
+        .to_string(),
+        convention: match args.time_convention {
+            ConventionCli::Heures => "heures",
+            ConventionCli::Bourse => "bourse",
+        }
+        .to_string(),
+        spot: a.spot,
+        gex: a.gex,
+        zero_gamma: a.zero_gamma,
+        call_wall: a.murs.call,
+        put_wall: a.murs.put,
+        call_wall_oi: a.murs.call_oi,
+        put_wall_oi: a.murs.put_oi,
+        charm: a.charm,
+        vanna: a.vanna,
+        strikes: a.par_strike.len(),
+        echeances: a
+            .lignes
+            .iter()
+            .map(|l| l.ligne.echeance)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+    }
+}
+
+/// Ce qui a bougé depuis le passage précédent.
+///
+/// Le zero gamma se déplace peu en séance — l'open interest ne bouge qu'une fois
+/// par jour. Ce qui bouge, c'est la DISTANCE du prix à ce niveau, et c'est elle
+/// qui décide du régime dans lequel on se trouve.
+fn ecart_depuis(precedent: &Analyse, actuel: &Analyse, dec: usize) {
+    let distance = |a: &Analyse| a.zero_gamma.map(|z| (a.spot - z) / z * 100.0);
+    let mut morceaux = vec![format!(
+        "spot {}",
+        groupe_signe(actuel.spot - precedent.spot, dec)
+    )];
+    if let (Some(av), Some(ap)) = (precedent.zero_gamma, actuel.zero_gamma) {
+        morceaux.push(format!("zero gamma {}", groupe_signe(ap - av, dec)));
+    }
+    if let (Some(av), Some(ap)) = (distance(precedent), distance(actuel)) {
+        morceaux.push(format!(
+            "distance au zero gamma {}%",
+            groupe_signe(ap - av, 2)
+        ));
+    }
+    println!("  depuis le relevé précédent : {}", morceaux.join(", "));
+}
+
+/// Un passage : lire, analyser, afficher.
+fn un_passage(
+    source: &Path,
+    params: &Parametres,
+    args: &Arguments,
+    dte_max: Option<i64>,
+) -> Result<Analyse, String> {
+    let chaine = lire_releve(source).map_err(|e| e.to_string())?;
+    let analyse = analyser(&chaine, params).map_err(|e| e.to_string())?;
+    afficher(&analyse, &args.produit.to_uppercase(), args, dte_max);
+    Ok(analyse)
+}
+
+/// Échantillonne la séance en boucle, un relevé par passage.
+///
+/// Un passage n'écrit dans l'historique que si le relevé a réellement avancé : le
+/// collecteur réécrit le courant toutes les quinze secondes, donc un --watch plus
+/// pressé que lui relit le même fichier, et le réenregistrer n'ajouterait qu'une
+/// ligne identique.
+fn suivre(
+    source: &Path,
+    params: &Parametres,
+    args: &Arguments,
+    dte_max: Option<i64>,
+) -> Result<(), String> {
+    let intervalle = Duration::from_secs(duree(args.watch.as_deref().unwrap_or("30"))?);
+    let total = Duration::from_secs(duree(&args.watch_duration)?);
+    let fin = Instant::now() + total;
+    println!(
+        "Suivi de {} toutes les {}s pendant {:.1}h — Ctrl+C pour arrêter.
+",
+        args.produit.to_uppercase(),
+        intervalle.as_secs(),
+        total.as_secs_f64() / 3600.0
+    );
+
+    let mut precedent: Option<Analyse> = None;
+    let mut vu: Option<InstantReleve> = None;
+    let (mut passages, mut enregistres) = (0u32, 0u32);
+
+    loop {
+        passages += 1;
+        match un_passage(source, params, args, dte_max) {
+            Ok(a) => {
+                if let Some(avant) = &precedent {
+                    ecart_depuis(avant, &a, if a.spot < 10.0 { 4 } else { 2 });
+                }
+                let avance = vu != Some(a.releve);
+                if avance && !args.no_history {
+                    enregistrer(&args.history, &ligne_historique(&a, args, dte_max))
+                        .map_err(|e| format!("historique : {e}"))?;
+                    enregistres += 1;
+                } else if !avance {
+                    println!("  (relevé inchangé depuis le passage précédent — rien à enregistrer)");
+                }
+                vu = Some(a.releve);
+                precedent = Some(a);
+            }
+            // Un relevé manqué n'arrête pas le suivi : le collecteur peut être en
+            // train de réécrire le fichier, et la séance continue sans nous.
+            Err(e) => println!("  relevé manqué ({e}) — on continue"),
+        }
+        println!();
+
+        let reste = fin.saturating_duration_since(Instant::now());
+        if reste.is_zero() {
+            break;
+        }
+        std::thread::sleep(intervalle.min(reste));
+    }
+
+    println!(
+        "{passages} relevés, {enregistres} enregistrés dans {} (les autres étaient inchangés).",
+        args.history.display()
+    );
+    Ok(())
+}
+
 fn executer() -> Result<(), String> {
     let args = Arguments::parse();
+
+    // --watch relit sa source à intervalle régulier. Sur une archive horodatée
+    // c'est absurde : elle ne bougera plus. Sur le relevé courant c'est l'usage
+    // même, puisque le collecteur le réécrit toutes les quinze secondes.
+    if args.watch.is_some() && args.replay.is_some() {
+        return Err("--watch et --replay s'excluent : une archive ne bouge plus.                     Pour suivre un relevé vivant, omets --replay."
+            .to_string());
+    }
 
     let source = args
         .replay
@@ -266,7 +444,6 @@ fn executer() -> Result<(), String> {
         ));
     }
 
-    let chaine = lire_releve(&source).map_err(|e| e.to_string())?;
     let taille = match args.contract_size {
         Some(t) => t,
         // Le multiplicateur ne se devine pas : un produit inconnu est refusé,
@@ -295,8 +472,14 @@ fn executer() -> Result<(), String> {
         ..Default::default()
     };
 
-    let analyse = analyser(&chaine, &params).map_err(|e| e.to_string())?;
-    afficher(&analyse, &args.produit.to_uppercase(), &args, dte_max);
+    if args.watch.is_some() {
+        return suivre(&source, &params, &args, dte_max);
+    }
+    let analyse = un_passage(&source, &params, &args, dte_max)?;
+    if !args.no_history {
+        enregistrer(&args.history, &ligne_historique(&analyse, &args, dte_max))
+            .map_err(|e| format!("historique : {e}"))?;
+    }
     Ok(())
 }
 
@@ -338,6 +521,25 @@ mod tests {
         assert_eq!(groupe_signe(3.18, 2), "+3.18");
         assert_eq!(groupe_signe(-15.93, 2), "-15.93");
         assert_eq!(groupe_signe(0.0, 2), "+0.00");
+    }
+
+    #[test]
+    fn les_durees_se_lisent_avec_ou_sans_unite() {
+        assert_eq!(duree("6h").unwrap(), 21_600);
+        assert_eq!(duree("90m").unwrap(), 5_400);
+        assert_eq!(duree("30s").unwrap(), 30);
+        assert_eq!(duree("300").unwrap(), 300);
+        assert_eq!(duree("1.5h").unwrap(), 5_400);
+        assert_eq!(duree(" 5M ").unwrap(), 300);
+    }
+
+    /// Une durée illisible doit se dire, pas se transformer en zéro : un
+    /// intervalle nul ferait tourner la boucle a plein régime sur le disque.
+    #[test]
+    fn une_duree_illisible_est_refusee() {
+        assert!(duree("bientot").is_err());
+        assert!(duree("").is_err());
+        assert!(duree("h").is_err());
     }
 
     #[test]

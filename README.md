@@ -8,9 +8,15 @@
 
 > Gamma exposure et zero gamma level sur les options du Nasdaq-100 (NQ, CME), rafraîchis
 > pendant la séance. Un collecteur Interactive Brokers entretient un relevé sur disque, un
-> lecteur le calcule et le trace — les deux tournent séparément, pour que le lecteur survive
-> au redémarrage quotidien d'IB. Le calcul s'appuie sur le script de
+> lecteur le calcule — les deux tournent séparément, pour que le lecteur survive au
+> redémarrage quotidien d'IB. Le calcul s'appuie sur le script de
 > https://perfiliev.com/author/perfiliev/.
+
+**Le projet est en deux moitiés, et elles ne parlent que par un fichier.** Le collecteur
+est en Python (`ib_collector.py`), parce qu'`ib_async` n'a pas d'équivalent Rust établi.
+Le moteur de calcul est en **Rust** (`options-rs/`), où la discipline du dépôt devient
+structurelle : la crate qui produit les chiffres ne déclare aucune dépendance capable
+d'ouvrir un fichier, un socket, ni même de lire l'horloge.
 
 ### 🏠 [Homepage](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level)
 
@@ -23,10 +29,9 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` ne contient que le nécessaire pour **lire** un relevé et en tirer
-un GEX : numpy, pandas, scipy, matplotlib, requests. Collecter en demande davantage,
-et c'est un extra — le lecteur ne doit pas payer une dépendance de courtier pour
-ouvrir un fichier déjà écrit :
+`requirements.txt` ne contient que le nécessaire pour **collecter** : numpy, pandas,
+scipy, requests. Le calcul et l'affichage sont passés en Rust, et matplotlib est parti
+avec eux.
 
 ```sh
 pip install -e ".[ib]"           # collecteur Interactive Brokers (ib_async)
@@ -41,52 +46,60 @@ activée. Le mode différé suffit et ne demande aucun abonnement.
 
 | Module | Rôle |
 |---|---|
-| `main.py` | interface en ligne de commande, rien d'autre |
-| `chain.py` | le format pivot des chaînes : les colonnes, et leur nettoyage |
-| `greeks.py` | gamma, charm, vanna Black-Scholes, vectorisés — le seul endroit où une formule est écrite |
-| `black76.py` | Black-76 pour les options sur futures, et le multiplicateur de chaque contrat |
-| `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
-| `plots.py` | les quatre graphiques |
-| `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
-| `history.py` | historique des relevés |
-| `validate.py` | le modèle tient-il ? |
+**Acquisition — Python**
+
+| Module | Rôle |
+|---|---|
 | `ib_data.py` | source Interactive Brokers : connexion, énumération des contrats, souscription par lots |
 | `ib_collector.py` | la boucle qui alimente le relevé courant : socle quotidien, vif entretenu |
+| `chain.py` | le format pivot des chaînes : les colonnes, et leur nettoyage |
+| `black76.py` | Black-76, pour le gamma que la source ne publie pas |
+| `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
+| `history.py`, `validate.py` | l'historique des relevés, et la mesure de si le modèle tient |
 | `price_data.py` | historique de prix du sous-jacent (API à clé gratuite) |
 
-Tout ce qui produit un chiffre est dans `analysis.py`, `greeks.py` et `black76.py`,
-donc appelable sans réseau et couvert par les tests. C'était auparavant enfermé dans
-`main()`.
+**Calcul — Rust** (`options-rs/`, voir son README)
 
-`chain.py` et `black76.py` ne sont la source de personne : ils portent le format et
-la formule que toute source doit servir. Ils vivaient dans `cboe_data.py` et
-`cme_data.py` ; les y laisser aurait fait qu'en retirant une source on emportait le
-format avec elle.
+| Crate | Rôle |
+|---|---|
+| `gex-core` | Black-76, greeks, expositions, murs, profil, zero gamma — **aucune E/S possible** |
+| `gex-store` | lecture des relevés parquet, écriture de l'historique |
+| `gex-cli` | le binaire `gex` : rapport de séance, `--watch` |
+
+Le partage suit une ligne simple : **ce qui parle à IB reste en Python, ce qui produit
+un chiffre est en Rust.** Le joint est le fichier parquet, et il n'a pas changé de
+format — les relevés archivés avant le portage se rejouent tels quels.
+
+La règle « tout ce qui produit un chiffre est testable sans réseau » était une
+convention qu'une distraction suffisait à enfreindre. En Rust elle est structurelle :
+`gex-core` n'a aucune dépendance capable d'ouvrir un fichier ou un socket, et `chrono`
+y est déclaré sans sa feature `clock`, si bien qu'`Utc::now()` **n'existe pas**. Un
+calcul qui dépendrait de l'heure courante ne compile pas.
 
 ## Utilisation
 
 Deux programmes, dans deux terminaux. Le collecteur écrit, le lecteur lit :
 
 ```sh
-python ib_collector.py NQ                 # le collecteur : il tourne et entretient le relevé
-python main.py NQ                         # le lecteur : un passage sur le relevé courant
-python main.py NQ --watch 30              # relu toutes les 30 s
-python main.py NQ --range 0.35 --no-show
+python ib_collector.py NQ                 # le collecteur (Python) : entretient le relevé
+cargo build --release --manifest-path options-rs/Cargo.toml
+
+gex NQ                                    # le lecteur (Rust) : un passage sur le courant
+gex NQ --watch 30s                        # relu toutes les 30 s
+gex NQ --range 0.35
 ```
 
-`main.py` ne va jamais chercher de données. C'est cette séparation qui lui permet de
+Le lecteur ne va jamais chercher de données. C'est cette séparation qui lui permet de
 tourner pendant que le collecteur encaisse le redémarrage quotidien d'IB, et qui fait
 qu'une séance passée se rejoue avec exactement le même code qu'une séance vivante.
 
 Le script affiche le Total GEX, le **Zero Gamma Level**, le Call Wall et le Put Wall,
-puis enregistre quatre graphiques dans `charts/` :
 
-| Fichier | Contenu |
-|---|---|
-| `<TICKER>_1_gamma_par_strike.png` | GEX net par strike |
-| `<TICKER>_2_calls_vs_puts.png` | Décomposition gamma calls / puts |
-| `<TICKER>_3_profil_zero_gamma.png` | Profil de gamma et zero gamma level |
-| `<TICKER>_4_charm_vanna.png` | Charm et vanna par strike |
+> **Les graphiques ont été retirés.** `plots.py` traçait quatre PNG ; le portage en
+> Rust ne les a pas repris, et le choix est assumé plutôt que subi — les chiffres et
+> leurs avertissements portent l'essentiel, et `plotters` aurait coûté plus cher que
+> ce qu'il rapportait. Le profil complet reste disponible dans la sortie de
+> `gex-core`, pour qui voudrait le tracer autrement.
 
 ### D'où vient le gamma (`--gamma-source`)
 
@@ -99,11 +112,11 @@ juste en dessous — recalculait depuis l'IV. Deux estimateurs pour deux chiffre
 présentés comme cohérents.
 
 Une seule source alimente désormais tout le pipeline, rappelée dans l'en-tête comme
-dans le titre des graphiques :
+dans l'en-tête :
 
 ```sh
-python main.py NQ                             # --gamma-source iv (défaut)
-python main.py NQ --gamma-source published    # le gamma tel que publié par IB
+gex NQ                             # --gamma-source iv (défaut)
+gex NQ --gamma-source published    # le gamma tel que publié par IB
 ```
 
 Le défaut est `iv` parce que c'est le seul choix cohérent de bout en bout : à un
@@ -166,13 +179,13 @@ donnait **−1,1 Md$**, soit le régime inverse.
 `--dte-max` ne retient donc que les échéances proches, **défaut 30 jours calendaires** :
 
 ```sh
-python main.py NQ                    # 30 jours (défaut)
-python main.py NQ --dte-max 7        # semaine en cours
-python main.py NQ --dte-max all      # toute la chaîne collectée
+gex NQ                    # 30 jours (défaut)
+gex NQ --dte-max 7        # semaine en cours
+gex NQ --toutes-echeances      # toute la chaîne collectée
 ```
 
 Le filtre s'applique avant tout calcul : murs, profil de gamma et zero gamma portent
-toujours sur le même périmètre, rappelé dans l'en-tête et dans le titre des graphiques.
+toujours sur le même périmètre, rappelé dans l'en-tête.
 Les échéances déjà passées sont écartées dans la foulée.
 
 `--wall-range` (défaut ±15 %) borne la recherche des murs autour du spot. Le Call Wall
@@ -204,7 +217,7 @@ alors que la bascule de régime se joue juste au-dessus.
 
 C'est maintenant le croisement **le plus proche du spot** qui est retenu — celui qui
 délimite le régime dans lequel le marché se trouve effectivement. Les autres sont
-signalés dans la sortie et tracés en pointillés sur le troisième graphique :
+signalés dans la sortie :
 
 ```
 Attention : le profil croise zéro 2 fois (également en 7,412.30). Le niveau retenu est
@@ -217,8 +230,8 @@ Le profil de gamma évalue l'exposition à des niveaux de spot hypothétiques. R
 à décider ce que devient l'IV en chemin, et les deux réponses encadrent la réalité :
 
 ```sh
-python main.py NQ                                  # sticky-strike (défaut)
-python main.py NQ --vol-regime sticky-moneyness
+gex NQ                                  # sticky-strike (défaut)
+gex NQ --vol-regime sticky-moneyness
 ```
 
 - **sticky-strike** : chaque contrat garde son IV. Le prix glisse le long du skew
@@ -244,7 +257,7 @@ Total GEX, mesuré au spot, n'en dépend pas du tout.
 ### Suivre une séance (`--watch`)
 
 ```sh
-python main.py NQ --watch 30s --watch-duration 6h --no-charts
+gex NQ --watch 30s --watch-duration 6h
 ```
 
 L'open interest ne bouge qu'une fois par jour : en séance, seuls le spot et l'IV
@@ -260,15 +273,17 @@ collecteur réécrit le courant toutes les quinze secondes, donc un `--watch` pl
 pressé que lui relit le même fichier, et le réenregistrer n'ajouterait qu'une ligne
 identique.
 
-### Suivre un relevé vivant (`--suivre`)
+### Le relevé courant, et les archives
 
 ```sh
-python main.py NQ --suivre                 # lit snapshots/NQ/courant.parquet
-python main.py NQ --suivre --watch 30      # et le relit toutes les 30 s
+gex NQ                          # lit snapshots/NQ/courant.parquet
+gex NQ --watch 30s              # et le relit toutes les 30 s
 ```
 
-`--replay` ouvre une archive horodatée, qui ne bougera plus. `--suivre` ouvre le
-**relevé courant**, à chemin fixe, que le collecteur réécrit au fil de la séance.
+`--replay` ouvre une archive horodatée, qui ne bougera plus. Sans lui, `gex` ouvre le
+**relevé courant**, à chemin fixe, que le collecteur réécrit au fil de la séance. Il
+n'y a qu'une source, donc exiger un drapeau pour la nommer ferait un drapeau
+obligatoire, donc inutile.
 D'où deux différences : `--watch` est permis sur le courant alors qu'il reste
 interdit sur une archive, et `snapshots.lister()` exclut le courant — un fichier
 qui change sous les pieds n'a rien à faire dans un historique de validation.
@@ -291,9 +306,8 @@ l'historique se reconstitue.
 python snapshots.py                # les relevés archivés
 python snapshots.py SPX
 
-python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --dte-max 7
-python main.py SPX --replay snapshots/SPX/2026-08-12_1508.parquet --gamma-source published
-python main.py NQ --no-snapshot  # ne pas archiver
+gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --dte-max 7
+gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --gamma-source published
 ```
 
 Un rejeu ne réarchive pas et ne consomme aucune requête réseau. Le format est parquet
@@ -323,7 +337,6 @@ exprimé en années **de bourse** (jours ouvrés / 262), le charm est ramené au
 bourse par ce même diviseur. Formules vérifiées par différence finie, et l'agrégat par
 recalcul du delta dollar du book complet à un jour d'intervalle (écart 3 %, d'ordre deux).
 
-Le quatrième graphique, `<TICKER>_4_charm_vanna.png`, les trace strike par strike.
 
 ### Historique
 
@@ -334,7 +347,7 @@ instantané et les séries n'existent nulle part.
 python history.py              # dernier relevé de chaque ticker
 python history.py NQ         # la trajectoire d'un sous-jacent
 python history.py NQ --last 5
-python main.py NQ --no-history      # ne pas enregistrer
+gex NQ --no-history      # ne pas enregistrer
 ```
 
 ```
@@ -478,24 +491,31 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q        # 222 tests, aucun accès réseau
+python -m pytest tests -q                                   # 121 tests : l'acquisition
+cargo test --manifest-path options-rs/Cargo.toml            # 78 tests : le calcul
+cargo clippy --manifest-path options-rs/Cargo.toml --all-targets -- -D warnings
 ```
 
-Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de la
-même formule que le code et ne prouveraient rien. Charm et vanna sont recoupés par
-**différences finies** sur le delta, le gamma Black-Scholes contre Black-76, et les parsers
-contre des jeux construits depuis des paramètres connus (on vérifie qu'on retrouve le prix
-du future, l'IV et le gamma injectés).
+**Aucun test ne touche au réseau**, des deux côtés. C'est la contrainte qui structure
+tout le reste, et le portage l'a rendue vérifiable par le compilateur plutôt que par
+la discipline.
 
-`tests/test_analysis.py` couvre le pipeline lui-même — filtre d'échéance, murs, profil,
-zero gamma, source de gamma, convention de temps, archivage, graphiques. Cette logique
-vivait dans `main()` : les tests précédents validaient les formules et les parsers, et
-pas un seul des chiffres réellement affichés. Les chaînes d'essai y sont construites
-depuis des paramètres connus, avec un open interest volontairement asymétrique entre
-calls et puts — à OI égal, GEX net, charm et vanna sont identiquement nuls et la suite
-passerait sur du vide.
+Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de
+la même formule que le code et ne prouveraient rien. Charm, vanna et gamma sont recoupés
+par **différences finies** sur le delta et sur la prime. Les deux formules du gamma,
+celle du call et celle du put, sont mathématiquement égales et doivent coïncider : leur
+désaccord est le seul signal qu'une faute de frappe dans l'une produirait.
 
-La CI (`.github/workflows/tests.yml`) lance la suite sur Python 3.11 et 3.13 à chaque
+Les jeux d'essai sont **construits depuis des paramètres connus**, jamais figés depuis
+une sortie observée — un tel test passe encore quand le calcul devient faux. Le test du
+skew, par exemple, doit retrouver exactement le −0,15 qu'on a injecté.
+
+Et `options-rs/fixtures/` garde un **relevé IB réel**, collecté depuis TWS, avec les
+nombres que le moteur Python en tirait. C'est l'oracle du portage : sans lui, les deux
+moteurs auraient pu se tromper identiquement sans que rien ne le révèle. Le dépôt a
+déjà payé cette leçon une fois, avec le multiplicateur du contrat.
+
+La CI (`.github/workflows/tests.yml`) lance la suite Python sur 3.11 et 3.13 à chaque
 push et chaque pull request.
 
 ### Source de données

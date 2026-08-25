@@ -13,13 +13,16 @@ pip install -r requirements.txt
 pip install -e ".[dev]"               # pytest, pyarrow
 pip install -e ".[ib]"                # ib_async, pour le collecteur seulement
 python -m pytest tests -q             # doit passer sans réseau
+
+cargo test --manifest-path options-rs/Cargo.toml
+cargo clippy --manifest-path options-rs/Cargo.toml --all-targets -- -D warnings
 ```
 
 **Ne jamais régénérer `requirements.txt` avec `pip freeze`.** Il ne liste que le
-cœur — numpy, pandas, scipy, matplotlib, requests — pour que `python main.py NQ`,
-qui ne fait qu'ouvrir un fichier déjà écrit, n'impose pas une dépendance de
-courtier. Tout le reste est un extra déclaré dans `pyproject.toml` :
-`.[snapshots]`, `.[ib]`, `.[dev]`.
+cœur de l'acquisition — numpy, pandas, scipy, requests. Tout le reste est un extra
+déclaré dans `pyproject.toml` : `.[snapshots]`, `.[ib]`, `.[dev]`. matplotlib est
+parti avec les graphiques, et rien ne doit l'y ramener : plus aucun module Python
+ne trace quoi que ce soit.
 
 Un nouveau module qui a besoin d'une dépendance lourde déclare un extra et
 l'importe **dans la fonction qui s'en sert**, jamais en tête de fichier.
@@ -54,15 +57,21 @@ Un commentaire qui paraphrase la ligne suivante n'a pas sa place.
 **Tout ce qui produit un chiffre est testable sans réseau.** C'est la contrainte
 qui structure le reste.
 
-| Module | Rôle |
+**Le dépôt est en deux moitiés, et elles ne parlent que par un fichier parquet.**
+Ce qui parle à IB est en Python ; ce qui produit un chiffre est en Rust, dans
+`options-rs/` (voir son README et ses propres conventions).
+
+| Module Python | Rôle |
 |---|---|
-| `greeks.py` | **le seul endroit** où une formule Black-Scholes est écrite |
-| `black76.py` | **le seul endroit** où Black-76 est écrit, et le multiplicateur de chaque contrat |
-| `chain.py` | le format pivot : les colonnes, et leur nettoyage |
-| `analysis.py` | filtre d'échéance, expositions, murs, profil, zero gamma |
 | `ib_data.py` | la seule source : Interactive Brokers, options sur futures |
 | `ib_collector.py` | la boucle qui entretient le relevé courant |
-| `main.py` | interface en ligne de commande, rien d'autre |
+| `chain.py` | le format pivot : les colonnes, et leur nettoyage |
+| `black76.py` | Black-76, pour le gamma que la source ne publie pas |
+| `snapshots.py` | l'archivage — le joint avec le moteur Rust |
+
+Le calcul, l'affichage et l'historique ont été portés en Rust. `main.py`,
+`analysis.py`, `greeks.py` et `plots.py` n'existent plus ; le binaire `gex` les
+remplace. Les graphiques ont été abandonnés au passage, volontairement.
 
 Une formule ne s'écrit pas deux fois. Si un module en a besoin, il l'importe.
 
