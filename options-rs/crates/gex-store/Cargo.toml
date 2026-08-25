@@ -1,0 +1,15 @@
+[package]
+name = "gex-store"
+description = "Lecture des releves archives : le format parquet que le collecteur ecrit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gex-core = { path = "../gex-core" }
+chrono = { workspace = true }
+# Les implementations Apache officielles. C'est ici, et seulement ici, que le
+# projet touche a un fichier : gex-core ne peut pas, par construction.
+parquet = "59"
+arrow-array = "59"
+arrow-schema = "59"

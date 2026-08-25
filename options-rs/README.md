@@ -13,12 +13,22 @@ concerne.
 options-rs/
   crates/
     gex-core/       le calcul pur : Black-76, greeks, expositions   ← AUCUNE E/S
-    gex-store/      parquet : relevé courant, archives, historique   (à venir)
+    gex-store/      lecture parquet des relevés
+    gex-cli/        le lecteur, binaire `gex`
     gex-ib/         la source : protocole TWS                        (à venir)
     gex-collector/  le démon : socle quotidien, vif entretenu        (à venir)
-    gex-cli/        le lecteur                                       (à venir)
   fixtures/         l'oracle : un relevé IB réel et ses résultats Python
 ```
+
+## Parité, mesurée
+
+```sh
+cargo run -p gex-cli -- NQ --replay fixtures/nq-2026-08-25.parquet
+```
+
+Sur le relevé IB réel, les deux moteurs rendent les mêmes chiffres — GEX, zero
+gamma, les quatre murs, charm, vanna — et sur quatre jeux d'options, dont
+`--gamma-source published` qui emprunte un tout autre chemin de calcul.
 
 Le dépôt Python posait la règle « **tout ce qui produit un chiffre est testable
 sans réseau** » comme une convention, qu'une distraction suffisait à enfreindre.
@@ -69,10 +79,12 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | temps restant, fuseaux, conventions | `analysis.py` | ✅ `temps.rs` |
 | format pivot | `chain.py` | ✅ `chaine.rs` |
 | filtres, murs, profil, zero gamma | `analysis.py` | ✅ `analyse.rs` |
-| parquet | `snapshots.py` | ⬜ `gex-store` |
+| lecture parquet | `snapshots.py` | ✅ `gex-store` |
+| lecteur, rapport de séance | `main.py` | ✅ `gex-cli` |
+| suivi `--watch`, historique | `main.py`, `history.py` | ⬜ |
+| graphiques | `plots.py` | ⬜ |
 | source IB | `ib_data.py` | ⬜ `gex-ib` |
 | démon | `ib_collector.py` | ⬜ `gex-collector` |
-| lecteur | `main.py` | ⬜ `gex-cli` |
 
 ### Ce que le portage a déjà rendu impossible à écrire
 

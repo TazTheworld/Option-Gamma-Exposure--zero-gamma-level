@@ -1,0 +1,15 @@
+[package]
+name = "gex-cli"
+description = "Le lecteur : ouvre un releve et en tire le GEX, le zero gamma et les murs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gex"
+path = "src/main.rs"
+
+[dependencies]
+gex-core = { path = "../gex-core" }
+gex-store = { path = "../gex-store" }
+clap = { version = "4", features = ["derive"] }
