@@ -31,6 +31,7 @@ pip install -e ".[databento]"    # chaînes CME par API
 pip install -e ".[cme]"          # exports CME au format Excel
 pip install -e ".[barchart]"     # scraping Barchart (selenium)
 pip install -e ".[snapshots]"    # archivage en parquet plutôt qu'en csv.gz
+pip install -e ".[ib]"           # collecteur Interactive Brokers (à venir)
 pip install -e ".[dev]"          # tests
 ```
 
@@ -46,6 +47,7 @@ pip install -e ".[dev]"          # tests
 | `history.py` | historique des relevés |
 | `validate.py` | le modèle tient-il ? |
 | `cboe_data.py`, `cme_data.py`, `databento_data.py`, `barchart_data.py` | sources d'options |
+| `ib_data.py` | collecteur Interactive Brokers — fonctions pures écrites, couche réseau à venir |
 | `price_data.py` | historique de prix du sous-jacent (API à clé gratuite) |
 | `flow_tracker.py` | suivi du flux et signe réel de la position dealer |
 
@@ -235,6 +237,22 @@ prix à ce niveau, elle, se referme ou s'ouvre — et c'est elle qui décide du 
 Un passage n'écrit dans l'historique que si le flux a réellement avancé : les données
 CBOE étant différées d'un quart d'heure, deux passages rapprochés renvoient le même
 relevé, et le réenregistrer n'ajouterait qu'une ligne identique.
+
+### Suivre un relevé vivant (`--suivre`)
+
+```sh
+python main.py NQ --suivre                 # lit snapshots/NQ/courant.parquet
+python main.py NQ --suivre --watch 30      # et le relit toutes les 30 s
+```
+
+`--replay` ouvre une archive horodatée, qui ne bougera plus. `--suivre` ouvre le
+**relevé courant**, à chemin fixe, que le collecteur réécrit au fil de la séance.
+D'où deux différences : `--watch` est permis sur le courant alors qu'il reste
+interdit sur une archive, et `snapshots.lister()` exclut le courant — un fichier
+qui change sous les pieds n'a rien à faire dans un historique de validation.
+
+Rien ne l'écrit encore : le collecteur Interactive Brokers est en cours
+d'écriture. L'option est en place, sa source viendra.
 
 ### Rejouer une séance (`--replay`)
 
