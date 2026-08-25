@@ -212,7 +212,7 @@ un ETF : annoncé à l'écran, jamais fait en silence.
 | Lignes de données simultanées | 100 par défaut ; +100 par Quote Booster, 10 maximum |
 | Cadence de requêtes | lignes ÷ 2 par seconde, soit 50/s par défaut |
 | Grecs | tick 13 en temps réel, tick 83 en différé |
-| Open interest | tick 27/28 via generic 101 ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
+| Open interest | tick 27/28 via generic 101 (par contrat, vérifié) ; tick 86 via generic 588 pour les futures ; tick 22 déprécié |
 | Taille du contrat NQ | ×20, déjà dans `cme_data.CONTRACT_SIZES` |
 | Redémarrage de Gateway | forcé une fois par jour |
 
@@ -222,17 +222,35 @@ spot sur une échéance, au pas de vingt-cinq points du NQ.
 
 ## Risques, du plus grave au moins grave
 
-**1. L'open interest par contrat n'est peut-être pas atteignable.** La doc IB
-donne les ticks 27 et 28 comme *Option Call/Put Open Interest*, ce qui décrit un
-agrégat du sous-jacent, pas la valeur d'un strike ; le tick 22 générique est
-déprécié ; le tick 86 est libellé *Futures* Open Interest. Sans open interest par
-contrat, `expositions()` n'a pas son entrée principale et **il n'y a pas de GEX
-du tout**.
+**1. L'open interest sur les options SUR FUTURES.** Le risque a été réduit par
+vérification le 25 août 2026, et ce qu'il en reste est étroit.
 
-*À lever en premier*, par un probe minimal sur un seul contrat NQ dès que
-Gateway est branché — avant d'écrire la moindre ligne de la couche réseau.
+*Ce qui est établi.* Le tick générique 101 rend bien l'open interest du contrat
+souscrit, et non un agrégat du sous-jacent. La docstring de `reqMktData` dans
+`ib_async` l'annonce — « 101 : `putOpenInterest`, `callOpenInterest` (for
+options) » — et `thetagang`, un robot de vente d'options en production sur IBKR,
+le confirme par l'usage : il branche sur le `right` du contrat pour filtrer
+strike par strike sur un open interest minimum. Ce branchement n'aurait aucun
+sens sur une valeur agrégée, et le filtre ne filtrerait rien. Le mapping
+lui-même est lisible dans `ib_async/wrapper.py` : `SIZE_TICK_MAP` associe 27 à
+`callOpenInterest`, 28 à `putOpenInterest`, 86 à `futuresOpenInterest`, et il est
+indexé par `reqId`, donc par contrat souscrit.
 
-*Repli si le probe échoue* : le socle prend son open interest du fichier
+*Ce qui reste ouvert.* Aucune documentation ne dit si une option sur future est
+traitée comme une option — tick 101 — ou comme un instrument à terme — tick 588.
+Aucun exemple public demandant le tick 101 sur un FOP n'a été trouvé ; les projets
+qui souscrivent à des FOP demandent 100, le volume, jamais 101.
+
+*La parade, gratuite.* Demander `genericTickList="101,588"` et lire les trois
+champs. Les ticks génériques ne consomment aucune ligne supplémentaire : c'est la
+même souscription. Quel que soit le tick qu'IB retient pour les FOP, on l'a.
+
+*Le test qui tranche, sans écrire une ligne.* L'API n'est qu'un canal de
+livraison : ce que TWS n'affiche pas, le socket ne le dépêche pas. Il suffit donc
+d'ouvrir la chaîne d'options NQ dans TWS et d'ajouter la colonne Open Interest.
+Si elle se remplit, l'API peut la servir. Sinon, aucune API ne le fera.
+
+*Repli si le test échoue* : le socle prend son open interest du fichier
 End-of-Day gratuit du CME, que `cme_data.load_settlement()` lit déjà, et IB ne
 garde que le vif. Le reste de l'architecture est inchangé — c'est la raison pour
 laquelle `fusionner()` sépare l'origine de l'OI de celle de l'IV.
@@ -271,8 +289,10 @@ dépôt et de sa CI : « aucun test ne touche au réseau, la suite doit passer t
 quelle ».
 
 Ce qui ne se teste pas hors ligne — connexion, énumération, souscription — est
-vérifié à la main contre Gateway, dans cet ordre : probe d'open interest, puis
-énumération, puis un socle complet, puis le vif sur une séance.
+vérifié à la main contre Gateway, dans cet ordre : la colonne Open Interest d'une
+chaîne NQ **dans TWS**, avant tout code ; puis un probe API sur un seul contrat
+avec `"101,588"` ; puis l'énumération ; puis un socle complet ; puis le vif sur
+une séance.
 
 ## Dépendances
 
