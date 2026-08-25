@@ -8,7 +8,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/gex-core", "crates/gex-store", "crates/gex-cli"]
+members = ["crates/gex-core", "crates/gex-store", "crates/gex-cli", "crates/gex-ib"]
 
 [workspace.package]
 version = "0.1.0"

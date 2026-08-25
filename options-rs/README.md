@@ -83,7 +83,8 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | lecteur, rapport de séance | `main.py` | ✅ `gex-cli` |
 | suivi `--watch`, historique | `main.py`, `history.py` | ⬜ |
 | graphiques | `plots.py` | ⬜ |
-| source IB | `ib_data.py` | ⬜ `gex-ib` |
+| décisions de collecte | `ib_data.py` | ✅ `gex-ib::decisions` |
+| couche réseau TWS | `ib_data.py` | ⬜ `gex-ib::client` |
 | démon | `ib_collector.py` | ⬜ `gex-collector` |
 
 ### Ce que le portage a déjà rendu impossible à écrire
@@ -101,12 +102,18 @@ déjà réglé. Le compilateur le refuse maintenant.
 `Position` regroupe les six flottants d'un contrat évalué. En liste d'arguments,
 intervertir `vol` et `t` compilait sans un mot et rendait un chiffre plausible.
 
-**Le risque connu est la couche IB.** `ib_async` n'a pas d'équivalent Rust dont la
-maturité soit établie ; l'alternative est d'implémenter le sous-ensemble du
-protocole TWS dont le collecteur a besoin — connexion, `reqContractDetails`,
-`reqSecDefOptParams`, `reqMktData` / `cancelMktData`, `reqMarketDataType`. Six
-messages sur environ cent cinquante. C'est le seul poste dont le calendrier n'est
-pas prévisible, et il est traité en dernier pour cette raison.
+**Le risque annoncé sur la couche IB est levé.** Il n'y a pas à réimplémenter le
+protocole TWS : la crate `ibapi` (MIT, maintenue) le porte, et les six messages
+dont le collecteur a besoin y sont tous — `connect`, `contract_details`,
+`option_chain`, `market_data` avec `generic_ticks(["101","588"])`, et
+`switch_market_data_type`. Ce dernier point était le plus incertain : sans les
+ticks génériques, **pas d'open interest**, et donc pas de GEX.
+
+Ce qui reste à écrire est le câblage, pas le protocole.
+
+**Rien dans `gex-ib` ne passe d'ordre.** Le collecteur consulte : il énumère des
+contrats et souscrit à des cotations. La crate expose bien un constructeur
+d'ordres — il n'est appelé nulle part.
 
 ## Tests
 
