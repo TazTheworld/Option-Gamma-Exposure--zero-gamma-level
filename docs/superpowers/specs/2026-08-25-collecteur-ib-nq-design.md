@@ -30,6 +30,14 @@ choix est un balayage de deux à trois minutes au réveil et le risque n° 1
 ci-dessous. Le repli est décrit avec ce risque, et il ne coûte rien à préparer
 puisque `cme_data.load_settlement()` existe déjà.
 
+Ce que ce choix ne coûte pas, en revanche, c'est de la fraîcheur — et c'est ce
+qui le rend tenable. L'open interest n'est pas une donnée de temps réel : la
+chambre de compensation le calcule après la clôture et ne le publie qu'une fois
+par jour. IB ne le fabrique pas, il relaie la publication du CME. Les deux
+chemins servent donc le même chiffre, à la même heure, et le vif reste identique
+dans les deux cas. Ce qui se joue entre eux, ce n'est pas le temps réel mais le
+périmètre couvert, le délai de démarrage et le nombre de sources à tenir.
+
 **Collecteur persistant, séparé du lecteur.** NQ se traite près de vingt-quatre
 heures sur vingt-quatre, et IB Gateway se redémarre de force une fois par jour.
 Un unique processus qui ferait acquisition et calcul perdrait son socle à chaque
