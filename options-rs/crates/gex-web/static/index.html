@@ -18,8 +18,6 @@
   <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
   <div class="mesure"><span class="etiquette">call wall</span><span class="valeur" id="cw">—</span></div>
   <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
-  <div class="mesure"><span class="etiquette">charm / jour</span><span class="valeur" id="charm">—</span></div>
-  <div class="mesure"><span class="etiquette">vanna / pt vol</span><span class="valeur" id="vanna">—</span></div>
   <div class="fraicheur" id="fraicheur">—</div>
 </header>
 
@@ -32,13 +30,18 @@
     <div id="strikes"></div>
     <span class="axe-zero"></span>
   </section>
-  <section class="panneau" id="totaux"><span class="titre">GEX · charm · vanna</span></section>
+  <section class="panneau" id="totaux">
+    <div class="piste" id="p-gex" style="top:6%"></div>
+    <div class="piste" id="p-charm" style="top:38%"></div>
+    <div class="piste" id="p-vanna" style="top:70%"></div>
+  </section>
 </main>
 
 <footer>
   <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
   <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
   <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
+  <span class="legende"><i class="pastille" style="background:#1d7268"></i><i class="pastille" style="background:#a13c39"></i> murs par open interest</span>
   <span class="legende"><i class="pastille" style="background:#6b8cae"></i> charm</span>
   <span class="legende"><i class="pastille" style="background:#9a7fb8"></i> vanna</span>
   <span>trois unités différentes, trois bandes séparées : elles ne se comparent pas entre elles</span>
@@ -94,6 +97,12 @@ const horsEchelle = {
 };
 const ligneCw = gPrix.addLineSeries({ color: "#26a69a", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+// Les murs vus par l'open interest seul : « ou y a-t-il le plus de contrats »
+// plutot que « ou la couverture est-elle la plus sensible ». Traces en pointille
+// fin, plus discret : c'est leur ACCORD avec les murs gamma qui compte, et il se
+// voit d'un coup d'oeil quand les deux lignes se superposent.
+const ligneCwOi = gPrix.addLineSeries({ color: "#1d7268", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+const lignePwOi = gPrix.addLineSeries({ color: "#a13c39", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
 const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"), {
   ...commun,
@@ -137,6 +146,31 @@ function bande(id, couleur, titre, haut, bas) {
 const sGex = bande("gex", "#e0a458", "GEX", 0.06, 0.70);
 const sCharm = bande("charm", "#6b8cae", "charm", 0.38, 0.38);
 const sVanna = bande("vanna", "#9a7fb8", "vanna", 0.70, 0.06);
+
+const PISTES = [
+  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458" },
+  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae" },
+  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8" },
+];
+
+// La valeur courante ET la plage de ce qui est trace : sans la plage, une ligne
+// qui monte ne dit pas de combien, et l'echelle d'une bande n'est pas celle des
+// deux autres.
+function etiqueterPistes(niveaux) {
+  for (const piste of PISTES) {
+    const noeud = document.getElementById(piste.id);
+    const v = niveaux.map((n) => n[piste.champ]).filter((x) => x != null);
+    if (!v.length) { noeud.innerHTML = ""; continue; }
+    const bas = Math.min.apply(null, v);
+    const haut = Math.max.apply(null, v);
+    const dernier = v[v.length - 1];
+    noeud.innerHTML =
+      '<b style="color:' + piste.couleur + '">' + piste.nom + "</b>"
+      + '<span class="v ' + (dernier < 0 ? "negatif" : "positif") + '">' + millions(dernier) + "</span>"
+      + '<span class="u">' + piste.unite + "</span>"
+      + '<span class="p">' + millions(bas) + " → " + millions(haut) + "</span>";
+  }
+}
 
 // Les deux graphiques partagent le même axe : les séries sont à la minute des
 // deux côtés, c'est tout l'intérêt de les avoir écrites ainsi. Le drapeau
@@ -340,6 +374,8 @@ async function rafraichir() {
     poser("zg", ligneZg, serie("zero_gamma"));
     poser("cw", ligneCw, serie("call_wall"));
     poser("pw", lignePw, serie("put_wall"));
+    poser("cwoi", ligneCwOi, serie("call_wall_oi"));
+    poser("pwoi", lignePwOi, serie("put_wall_oi"));
     poser("gex", sGex, serie("gex"));
     poser("charm", sCharm, serie("charm"));
     poser("vanna", sVanna, serie("vanna"));
@@ -354,12 +390,11 @@ async function rafraichir() {
     ecrire("zg", prix(dernier?.zero_gamma));
     ecrire("cw", prix(dernier?.call_wall));
     ecrire("pw", prix(dernier?.put_wall));
-    ecrire("charm", millions(dernier?.charm), dernier?.charm);
-    ecrire("vanna", millions(dernier?.vanna), dernier?.vanna);
 
     profilCourant = profil.strikes;
     spotCourant = spot;
     derniereEmpreinte = "";   // forcer le redessin sur les nouvelles valeurs
+    etiqueterPistes(niveaux);
     fraicheur(profil.etat);
     avertir(profil.etat.avertissement);
   } catch (err) {

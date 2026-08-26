@@ -71,6 +71,14 @@ struct Niveau {
     vanna: f64,
     call_wall: Option<f64>,
     put_wall: Option<f64>,
+    /// Les murs vus par l'open interest seul, sans pondération par le gamma.
+    ///
+    /// Ils répondent à une autre question que les murs gamma : « où y a-t-il le
+    /// plus de contrats », et non « où la couverture est-elle la plus sensible ».
+    /// Ils divergent souvent, et c'est leur accord qui rend un niveau crédible —
+    /// le lecteur en ligne de commande les montre côte à côte pour cette raison.
+    call_wall_oi: Option<f64>,
+    put_wall_oi: Option<f64>,
 }
 
 /// Le GEX d'un strike, à l'instant présent.
@@ -139,6 +147,8 @@ async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse
             vanna: p.vanna,
             call_wall: p.call_wall,
             put_wall: p.put_wall,
+            call_wall_oi: p.call_wall_oi,
+            put_wall_oi: p.put_wall_oi,
         })
         .collect();
     Ok(axum::Json(sortie))

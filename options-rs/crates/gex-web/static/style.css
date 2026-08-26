@@ -166,6 +166,25 @@ main {
 .barre span.pos { background: var(--call); }
 .barre span.neg { background: var(--put); }
 
+/* Une etiquette par bande des totaux : nom, valeur, unite, et la plage de ce
+   qui est trace. Les echelles « overlay » de la bibliotheque ne dessinent aucun
+   axe, et chaque bande ayant son unite, un axe commun n'aurait rien voulu dire. */
+.piste {
+  position: absolute;
+  left: 0.75rem;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  pointer-events: none;
+  transform: translateY(-1.15em);
+}
+.piste b { font-weight: 700; letter-spacing: 0.03em; }
+.piste .v { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.78rem; }
+.piste .u { color: var(--texte-faible); }
+.piste .p { color: #4d5666; font-variant-numeric: tabular-nums; }
+
 footer {
   padding: 0.35rem 1rem;
   border-top: 1px solid var(--bordure);
