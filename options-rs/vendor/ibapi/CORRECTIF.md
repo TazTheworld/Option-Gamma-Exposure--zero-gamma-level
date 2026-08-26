@@ -12,7 +12,9 @@ d'être écrite, parce que le symptôme ne ressemblait pas du tout à sa cause.
 +pub const DATA_ADVISORY_CODES: [i32; 4] = [10089, 10090, 10091, 10167];
 ```
 
-Les tests et exemples de la crate ont été retirés pour alléger — c'est tout.
+Tout ce qui ne sert pas à compiler a été retiré : tests, exemples, et la
+documentation interne du projet — dont un `CLAUDE.md` qui porte les conventions
+d'`ibapi` et se serait ajouté à celles de ce dépôt.
 
 ## Ce que ça corrige
 
