@@ -190,6 +190,80 @@ def test_une_trame_vide_reste_utilisable():
     assert df.empty and "symbole" in df.columns
 
 
+# ---=== La pagination ===---
+
+class _ServiceFactice:
+    """Imite le service : cent lignes au maximum par appel, quoi qu'on demande.
+
+    C'est le comportement qui rendait l'historique invisible — demander mille
+    rapports en rendait cent, toujours les mêmes.
+    """
+
+    def __init__(self, total):
+        self.total = total
+        self.appels = []
+
+    def post(self, url, **kw):
+        donnees = kw["data"]
+        debut, taille = int(donnees["start"]), int(donnees["length"])
+        self.appels.append((debut, taille))
+        combien = max(0, min(taille, S.PAGE, self.total - debut))
+        lignes = [
+            ["Jane", f"Doe{debut + i}", "Senator",
+             f'<a href="/search/view/ptr/id-{debut + i}/">Rapport</a>', "03/15/2026"]
+            for i in range(combien)
+        ]
+        return _Reponse({"data": lignes, "recordsTotal": self.total})
+
+
+class _Reponse:
+    status_code = 200
+
+    def __init__(self, charge):
+        self._charge = charge
+
+    def json(self):
+        return self._charge
+
+    def raise_for_status(self):
+        pass
+
+
+def test_la_pagination_va_chercher_au_dela_de_la_premiere_page():
+    """Le service plafonne à cent lignes : sans pagination, on ne voit que les
+    cent derniers rapports sur les deux mille quatre cents de l'archive."""
+    service = _ServiceFactice(total=2417)
+    rapports = S.chercher_rapports(service, "jeton", limite=250, pause=0)
+    assert len(rapports) == 250
+    # Trois appels : 100, 100, puis 50 — et jamais deux fois le même début.
+    assert [d for d, _ in service.appels] == [0, 100, 200]
+    assert len({r["url"] for r in rapports}) == 250
+
+
+def test_la_pagination_s_arrete_au_total_annonce():
+    """Continuer au-delà ferait des appels qui ne rendent rien."""
+    service = _ServiceFactice(total=120)
+    rapports = S.chercher_rapports(service, "jeton", limite=500, pause=0)
+    assert len(rapports) == 120
+    assert len(service.appels) == 2
+
+
+def test_une_page_vide_arrete_la_course():
+    """Le service ne dit pas toujours qu'il a fini : une page vide est le seul
+    signal fiable."""
+    service = _ServiceFactice(total=0)
+    service.total = 0
+    assert S.chercher_rapports(service, "jeton", limite=300, pause=0) == []
+    assert len(service.appels) == 1
+
+
+def test_la_limite_est_respectee_a_la_ligne_pres():
+    """Rendre plus que demandé ferait payer des téléchargements inutiles."""
+    service = _ServiceFactice(total=2417)
+    assert len(S.chercher_rapports(service, "jeton", limite=42, pause=0)) == 42
+    assert service.appels == [(0, 42)]
+
+
 # ---=== L'accès ===---
 
 def test_les_entetes_sont_complets(monkeypatch):

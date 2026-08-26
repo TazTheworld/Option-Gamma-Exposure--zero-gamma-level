@@ -392,19 +392,54 @@ def en_trame(operations):
 
 # ---=== Accès au service ===---
 
-def chercher_rapports(session, jeton, depuis="01/01/2026", limite=50):
-    """Les rapports de transactions déposés depuis une date."""
+# Le service rend cent lignes au maximum par appel, quelle que soit la longueur
+# demandée. Sans pagination on ne voit donc que les cent derniers rapports sur
+# les deux mille quatre cents que porte l'archive — et toujours les mêmes, quelle
+# que soit la date de départ.
+PAGE = 100
+
+
+def _page(session, jeton, depuis, debut, taille):
+    """Une page de résultats, et le total annoncé par le service."""
     reponse = _verifier(session.post(
         RECHERCHE, timeout=45,
         data={
-            "start": "0", "length": str(limite),
+            "start": str(debut), "length": str(taille),
             "report_types": f"[{TYPE_TRANSACTIONS}]", "filer_types": "[]",
             "submitted_start_date": f"{depuis} 00:00:00", "submitted_end_date": "",
             "candidate_state": "", "senator_state": "", "office_id": "",
             "first_name": "", "last_name": "",
             "csrfmiddlewaretoken": jeton,
         }))
-    return parser_recherche(reponse.json())
+    charge = reponse.json()
+    return parser_recherche(charge), charge.get("recordsTotal")
+
+
+def chercher_rapports(session, jeton, depuis="01/01/2026", limite=50, pause=0.3):
+    """Les rapports de transactions déposés depuis une date.
+
+    Pagine tant qu'il en reste et que la limite n'est pas atteinte. Le service
+    plafonne chaque réponse à cent lignes : demander mille n'en rend pas mille,
+    il en rend cent — les mêmes que la première page, ce qui donnait l'illusion
+    d'un historique complet.
+    """
+    import time
+
+    rapports = []
+    debut = 0
+    while len(rapports) < limite:
+        page, total = _page(session, jeton, depuis, debut,
+                            min(PAGE, limite - len(rapports)))
+        if not page:
+            # Le service ne dit pas toujours qu'il a fini : une page vide est le
+            # seul signal fiable de fin de course.
+            break
+        rapports.extend(page)
+        debut += len(page)
+        if total is not None and debut >= int(total):
+            break
+        time.sleep(pause)
+    return rapports[:limite]
 
 
 def fetch_senat(depuis="01/01/2026", nombre=25, pause=0.3):
@@ -416,6 +451,8 @@ def fetch_senat(depuis="01/01/2026", nombre=25, pause=0.3):
     import time
 
     session, jeton = accepter_les_conditions()
+    # On demande large : les dépôts papier n'ont pas de tableau, et sans marge on
+    # rendrait moins de rapports que demandé sans dire pourquoi.
     rapports = chercher_rapports(session, jeton, depuis, limite=max(nombre * 2, 50))
 
     operations, papier, illisibles = [], 0, 0
