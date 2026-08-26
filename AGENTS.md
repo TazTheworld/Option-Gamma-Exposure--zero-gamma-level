@@ -60,7 +60,7 @@ compilateur qui l'impose.
 |---|---|
 | `gex-core` | **aucune E/S possible** : Black-76, greeks, expositions, murs, profil, zero gamma |
 | `gex-ib` | la source : décisions de collecte, et la couche réseau TWS |
-| `gex-store` | relevés parquet, historique, validation du modèle |
+| `gex-store` | relevés parquet, séries de barres et de niveaux, historique, validation |
 | `gex-collector` | le démon : socle quotidien, vif entretenu |
 | `gex-cli` | le lecteur, binaire `gex` |
 
@@ -113,10 +113,19 @@ rejeu doit encore pouvoir ouvrir.
 
 Le format est le joint entre le collecteur et le lecteur, et le seul endroit où
 les deux se parlent. `snapshots/<PRODUIT>/courant.parquet` est réécrit **en
-place** toutes les quinze secondes ; l'horodater créerait près de mille cinq
-cents fichiers par jour, et le lecteur ne saurait lequel est le dernier sans
-lister le dossier. Les archives horodatées sont désactivées par défaut : elles
-servent à la recherche, pas au suivi de séance.
+place** toutes les quinze secondes ; l'horodater créerait près de mille cinq cents
+fichiers par jour, et le lecteur ne saurait lequel est le dernier sans lister le
+dossier. Les archives horodatées sont désactivées par défaut : elles servent à la
+recherche, pas au suivi de séance.
+
+À côté vivent deux séries, `barres.parquet` et `niveaux.parquet`, un point par
+minute chacune — la même granularité, donc le même axe de temps. Elles sont
+**bornées à trente jours glissants** et élaguées à l'écriture : une série qui
+grossit sans fin est un piège différé, et les archives viennent de le démontrer.
+
+Toute écriture passe par un fichier temporaire puis un renommage. Un lecteur qui
+ouvre pendant l'écriture verrait un parquet incomplet, et un parquet incomplet se
+lit comme une séance qui s'arrête — pas comme une erreur.
 
 ## Tests
 
@@ -161,6 +170,11 @@ Et échouer bruyamment vaut mieux que rendre du vide : une chaîne vide donnerai
 GEX de zéro, qui est un chiffre et non une erreur. Un processus figé est pire
 encore — il passe pour un processus qui travaille.
 
+Le corollaire vaut pour les séries : quand le marché ne cote pas, la série des
+niveaux **n'écrit rien** plutôt qu'un point à zéro. Une ligne plate se lirait comme
+« le gamma est nul » là où la donnée dit « je ne cote pas ». Les barres, elles,
+continuent : le future se traite la nuit.
+
 ## Lecture seule
 
 Le collecteur énumère des contrats et souscrit à des cotations. **Aucun ordre
@@ -195,10 +209,14 @@ toujours, les noms de fichiers non.
 
 ## Ce qui reste à faire
 
-- **Une vraie séance.** Le collecteur n'a jamais tourné plus de quelques minutes
-  d'affilée. La reconnexion est vérifiée en coupant TWS, pas sur vingt-quatre
-  heures.
+- **Une séance quand le marché cote.** Les barres sont vérifiées contre TWS, la
+  série des niveaux ne l'est qu'à vide — la nuit américaine ne sert ni open
+  interest ni IV. Il faut la voir se remplir pour de vrai.
+- **L'interface**, qui lira les trois fichiers et ne touchera ni à IB ni au calcul.
+  Elle aura son propre document de conception : mélanger le stockage et le rendu
+  reviendrait à façonner l'un d'après l'autre.
 - **`sec_data.py` dans son propre dossier**, avec ses tests.
 - **Le contexte de séance** — OHLCV, iv30, le ratio GEX/volume — a disparu avec le
-  CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers
-  déjà écrits restent lisibles ; IB pourrait les servir.
+  CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
+  écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà
+  une partie.

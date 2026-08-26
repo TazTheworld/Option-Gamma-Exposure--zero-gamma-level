@@ -26,31 +26,28 @@ la SEC et n'a jamais eu de rapport avec les options.
 
 ```sh
 git clone https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level.git
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-```sh
 cargo build --release --manifest-path options-rs/Cargo.toml
 ```
 
-Les deux binaires atterrissent dans `options-rs/target/release/` : `gex-collector` et
-`gex`. `requirements.txt` ne sert plus qu'à `sec_data.py` — pandas et requests.
+Les deux binaires atterrissent dans `options-rs/target/release/` : **`gex-collector`**
+qui acquiert, et **`gex`** qui lit. Aucune autre dépendance.
+
+Le collecteur exige **TWS ou IB Gateway** en fonctionnement, avec l'API activée. Le
+mode différé suffit et ne demande aucun abonnement — il décale simplement les
+données d'un quart d'heure, ce qui est écrit à l'écran plutôt que subi.
+
+`sec_data.py`, la lecture des déclarations d'initiés SEC, est le seul Python restant
+et n'a rien à voir avec les options :
 
 ```sh
-pip install -e ".[ib]"           # collecteur Interactive Brokers (ib_async)
-pip install -e ".[snapshots]"    # archivage en parquet plutôt qu'en csv.gz
-pip install -e ".[dev]"          # tests
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt   # pandas, requests
+python -m pytest tests -q
 ```
-
-Le collecteur exige en plus **TWS ou IB Gateway** en fonctionnement, avec l'API
-activée. Le mode différé suffit et ne demande aucun abonnement.
 
 ## Organisation
 
-| Module | Rôle |
-|---|---|
 | Crate | Rôle |
 |---|---|
 | `gex-core` | Black-76, greeks, expositions, murs, profil, zero gamma — **aucune E/S possible** |
@@ -265,25 +262,48 @@ collecteur réécrit le courant toutes les quinze secondes, donc un `--watch` pl
 pressé que lui relit le même fichier, et le réenregistrer n'ajouterait qu'une ligne
 identique.
 
-### Le relevé courant, et les archives
+### Ce que le collecteur écrit
+
+```
+snapshots/NQ/
+  courant.parquet    le relevé vivant, réécrit toutes les 15 s
+  barres.parquet     les chandeliers d'une minute
+  niveaux.parquet    zero gamma, murs, GEX, charm, vanna — un point par minute
+```
 
 ```sh
-gex NQ                          # lit snapshots/NQ/courant.parquet
+gex NQ                          # lit le relevé courant
 gex NQ --watch 30s              # et le relit toutes les 30 s
 ```
 
-`--replay` ouvre une archive horodatée, qui ne bougera plus. Sans lui, `gex` ouvre le
-**relevé courant**, à chemin fixe, que le collecteur réécrit au fil de la séance. Il
-n'y a qu'une source, donc exiger un drapeau pour la nommer ferait un drapeau
-obligatoire, donc inutile.
-D'où deux différences : `--watch` est permis sur le courant alors qu'il reste
-interdit sur une archive, et `snapshots.lister()` exclut le courant — un fichier
-qui change sous les pieds n'a rien à faire dans un historique de validation.
+Sans `--replay`, `gex` ouvre le **relevé courant**, à chemin fixe. Il n'y a qu'une
+source, donc exiger un drapeau pour la nommer ferait un drapeau obligatoire, donc
+inutile. Le chemin est fixe parce que l'horodater créerait près de mille cinq cents
+fichiers par jour, et que le lecteur ne saurait lequel est le dernier sans lister
+le dossier.
 
-Ce qui l'écrit : `gex-collector NQ`, qui exige TWS ou Gateway avec l'API activée. Il balaie la chaîne entière une fois par journée de compensation — l'open
-interest n'est publié qu'une fois par jour, le relire en séance coûterait treize
-minutes pour le même chiffre — puis entretient en continu les contrats qui portent
-le gamma, et réécrit le courant toutes les quinze secondes.
+Ce qui l'écrit : `gex-collector NQ`. Il balaie la chaîne entière **une fois par
+journée de compensation** — l'open interest n'est publié qu'une fois par jour, le
+relire en séance coûterait treize minutes pour le même chiffre — puis entretient en
+continu les quatre-vingt-dix contrats qui portent le gamma.
+
+#### Les deux séries
+
+`barres.parquet` et `niveaux.parquet` existent pour une raison : le calcul rend un
+zero gamma, on l'affiche, on le jette. Or **c'est la dérive qui porte
+l'information** — un zero gamma à 29 400 ne dit rien seul, le voir monter de 29 200
+pendant que le prix s'en approche, si.
+
+Un point par minute, la même granularité que les barres, de sorte que les deux
+séries partagent le même axe de temps. Bornées à trente jours glissants et élaguées
+à chaque écriture : une série qui grossit sans fin est un piège différé.
+`--retention 0` n'écrit rien.
+
+> **Une série de niveaux vide n'est pas une panne.** Quand le marché ne cote pas —
+> la nuit américaine, typiquement — il n'y a pas d'open interest, donc pas de GEX.
+> Écrire un point à zéro tracerait une ligne plate qui se lirait comme une mesure.
+> La série attend ; les barres, elles, continuent, puisque le future se traite la
+> nuit.
 
 ### Rejouer une séance (`--replay`)
 
