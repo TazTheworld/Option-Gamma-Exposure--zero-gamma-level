@@ -32,11 +32,11 @@ const PLANCHER_SECONDES: f64 = 60.0;
 /// Type distinct de [`InstantReleve`] à dessein : les confondre ferait passer le
 /// décalage de fuseau pour du temps restant, ce qui est exactement le défaut que
 /// ce module a corrigé.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EcheanceNy(pub NaiveDateTime);
 
 /// L'instant d'un relevé, en UTC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstantReleve(pub NaiveDateTime);
 
 impl EcheanceNy {

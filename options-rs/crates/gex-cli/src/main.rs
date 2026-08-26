@@ -16,6 +16,10 @@ use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser};
 use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
 use gex_store::historique::{LigneHistorique, enregistrer};
+use gex_store::validation::{
+    Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, lire_historique, observer,
+    taux_de_franchissement,
+};
 use gex_store::{chemin_courant, lire_releve};
 
 #[derive(Parser, Debug)]
@@ -83,6 +87,109 @@ struct Arguments {
     /// Ne pas enregistrer ce relevé dans l'historique.
     #[arg(long)]
     no_history: bool,
+
+    /// Mesurer si le modèle tient sur l'historique accumulé, au lieu de lire un
+    /// relevé.
+    #[arg(long)]
+    valider: bool,
+}
+
+/// Confronte le modèle aux relevés accumulés.
+///
+/// Trois affirmations vérifiables : les mouvements sont plus amples en gamma
+/// négatif, la position vis-à-vis du zero gamma décide du régime, et le prix bute
+/// sur les murs. **Ce n'est pas un backtest de stratégie** — on mesure si la
+/// description du terrain est exacte, pas si on peut en tirer de l'argent.
+fn valider(chemin: &Path) -> Result<(), String> {
+    let releves = lire_historique(chemin).map_err(|e| e.to_string())?;
+    let obs = observer(&releves, INTERVALLE_MINIMAL);
+    println!(
+        "{} relevés, {} observations exploitables dans {}
+",
+        releves.len(),
+        obs.len(),
+        chemin.display()
+    );
+    if obs.is_empty() {
+        // Rendre des pourcentages sur rien serait pire que de ne rien rendre :
+        // ils auraient l'air d'une mesure.
+        println!(
+            "Aucune paire de relevés séparés d'au moins {INTERVALLE_MINIMAL} jour.              Laisse l'historique s'accumuler — un relevé par séance suffit."
+        );
+        return Ok(());
+    }
+
+    let mouvements = |garde: &dyn Fn(&gex_store::validation::Observation) -> bool| -> Vec<f64> {
+        obs.iter()
+            .filter(|o| garde(o))
+            .map(|o| o.mouvement_par_jour)
+            .collect()
+    };
+
+    let dire = |titre: &str, gauche: &str, droite: &str, c: Comparaison| {
+        println!("{titre}");
+        println!("   {gauche} : {:>3} relevés, mouvement médian {:.2}% / jour",
+                 c.n_a, c.mediane_a * 100.0);
+        println!("   {droite} : {:>3} relevés, mouvement médian {:.2}% / jour",
+                 c.n_b, c.mediane_b * 100.0);
+        match c.ecart {
+            None => println!("   -> pas assez de relevés de part et d'autre pour comparer"),
+            Some(e) => {
+                println!(
+                    "   -> mouvements {:.0}% plus {} du premier côté",
+                    e.abs() * 100.0,
+                    if e > 0.0 { "amples" } else { "faibles" }
+                );
+                let verdict = if e > 0.0 { "conforme au modèle" } else { "CONTRAIRE au modèle" };
+                if c.concluant {
+                    println!("      {verdict}");
+                } else {
+                    println!("      {verdict}, mais l'échantillon est trop court pour conclure");
+                }
+            }
+        }
+    };
+
+    dire(
+        "1. AMPLITUDE SELON LE RÉGIME",
+        "gamma négatif",
+        "gamma positif",
+        comparer(&mouvements(&|o| o.gex < 0.0), &mouvements(&|o| o.gex > 0.0)),
+    );
+    println!();
+    dire(
+        "2. POSITION VIS-À-VIS DU ZERO GAMMA",
+        "sous le zero gamma",
+        "au-dessus         ",
+        comparer(
+            &mouvements(&|o| o.sous_zero_gamma == Some(true)),
+            &mouvements(&|o| o.sous_zero_gamma == Some(false)),
+        ),
+    );
+
+    println!("
+3. LES MURS TIENNENT-ILS ?");
+    for (nom, cas) in [
+        ("call wall franchi", obs.iter().filter_map(|o| o.call_wall_franchi).collect::<Vec<_>>()),
+        ("put wall franchi ", obs.iter().filter_map(|o| o.put_wall_franchi).collect::<Vec<_>>()),
+    ] {
+        match taux_de_franchissement(&cas) {
+            None => println!("   {nom} : aucun mur relevé"),
+            Some(taux) => println!(
+                "   {nom} : {:.0}% des {} cas",
+                taux * 100.0,
+                cas.len()
+            ),
+        }
+    }
+    if obs.len() < N_MINIMAL {
+        println!(
+            "
+({} observations : sous {N_MINIMAL}, l'écart tient autant au hasard              qu'au modèle.)",
+            obs.len()
+        );
+    }
+    Ok(())
 }
 
 /// « 6h », « 90m », « 3600 » -> secondes.
@@ -421,6 +528,10 @@ fn suivre(
 
 fn executer() -> Result<(), String> {
     let args = Arguments::parse();
+
+    if args.valider {
+        return valider(&args.history);
+    }
 
     // --watch relit sa source à intervalle régulier. Sur une archive horodatée
     // c'est absurde : elle ne bougera plus. Sur le relevé courant c'est l'usage

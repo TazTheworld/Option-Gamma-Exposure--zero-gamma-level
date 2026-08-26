@@ -20,5 +20,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod assemblage;
 pub mod client;
 pub mod decisions;

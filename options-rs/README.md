@@ -15,8 +15,8 @@ options-rs/
     gex-core/       le calcul pur : Black-76, greeks, expositions   ← AUCUNE E/S
     gex-store/      lecture parquet des relevés
     gex-cli/        le lecteur, binaire `gex`
-    gex-ib/         la source : protocole TWS                        (à venir)
-    gex-collector/  le démon : socle quotidien, vif entretenu        (à venir)
+    gex-ib/         la source : décisions de collecte + réseau TWS
+    gex-collector/  le démon : binaire `gex-collector`
   fixtures/         l'oracle : un relevé IB réel et ses résultats Python
 ```
 
@@ -81,11 +81,17 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | filtres, murs, profil, zero gamma | `analysis.py` | ✅ `analyse.rs` |
 | lecture parquet | `snapshots.py` | ✅ `gex-store` |
 | lecteur, rapport de séance | `main.py` | ✅ `gex-cli` |
-| suivi `--watch`, historique | `main.py`, `history.py` | ⬜ |
-| graphiques | `plots.py` | ⬜ |
+| suivi `--watch`, historique | `main.py`, `history.py` | ✅ `gex-cli` |
+| écriture parquet | `snapshots.py` | ✅ `gex-store::ecriture` |
 | décisions de collecte | `ib_data.py` | ✅ `gex-ib::decisions` |
 | couche réseau TWS | `ib_data.py` | ✅ `gex-ib::client` |
-| démon | `ib_collector.py` | ⬜ `gex-collector` |
+| assemblage, fusion socle/vif | `ib_data.py` | ✅ `gex-ib::assemblage` |
+| démon | `ib_collector.py` | ✅ `gex-collector` |
+| validation du modèle | `validate.py` | ✅ `gex-store::validation` |
+| graphiques | `plots.py` | ❌ abandonnés, volontairement |
+
+**Le portage est terminé.** Les modules Python de la colonne du milieu n'existent
+plus ; ce tableau garde leur nom parce qu'il dit d'où vient chaque crate.
 
 ### Ce que le portage a déjà rendu impossible à écrire
 

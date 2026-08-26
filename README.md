@@ -12,11 +12,13 @@
 > redémarrage quotidien d'IB. Le calcul s'appuie sur le script de
 > https://perfiliev.com/author/perfiliev/.
 
-**Le projet est en deux moitiés, et elles ne parlent que par un fichier.** Le collecteur
-est en Python (`ib_collector.py`), parce qu'`ib_async` n'a pas d'équivalent Rust établi.
-Le moteur de calcul est en **Rust** (`options-rs/`), où la discipline du dépôt devient
-structurelle : la crate qui produit les chiffres ne déclare aucune dépendance capable
-d'ouvrir un fichier, un socket, ni même de lire l'horloge.
+**Tout est en Rust** (`options-rs/`), collecteur compris. La discipline du dépôt y est
+devenue structurelle plutôt que conventionnelle : la crate qui produit les chiffres ne
+déclare aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire
+l'horloge — un calcul qui dépendrait de l'heure courante ne compile pas.
+
+Le seul Python restant est `sec_data.py`, qui lit les déclarations d'initiés auprès de
+la SEC et n'a jamais eu de rapport avec les options.
 
 ### 🏠 [Homepage](https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level)
 
@@ -29,9 +31,12 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` ne contient que le nécessaire pour **collecter** : numpy, pandas,
-scipy, requests. Le calcul et l'affichage sont passés en Rust, et matplotlib est parti
-avec eux.
+```sh
+cargo build --release --manifest-path options-rs/Cargo.toml
+```
+
+Les deux binaires atterrissent dans `options-rs/target/release/` : `gex-collector` et
+`gex`. `requirements.txt` ne sert plus qu'à `sec_data.py` — pandas et requests.
 
 ```sh
 pip install -e ".[ib]"           # collecteur Interactive Brokers (ib_async)
@@ -46,45 +51,32 @@ activée. Le mode différé suffit et ne demande aucun abonnement.
 
 | Module | Rôle |
 |---|---|
-**Acquisition — Python**
-
-| Module | Rôle |
-|---|---|
-| `ib_data.py` | source Interactive Brokers : connexion, énumération des contrats, souscription par lots |
-| `ib_collector.py` | la boucle qui alimente le relevé courant : socle quotidien, vif entretenu |
-| `chain.py` | le format pivot des chaînes : les colonnes, et leur nettoyage |
-| `black76.py` | Black-76, pour le gamma que la source ne publie pas |
-| `snapshots.py` | archivage des chaînes brutes, pour rejouer une séance |
-| `history.py`, `validate.py` | l'historique des relevés, et la mesure de si le modèle tient |
-| `price_data.py` | historique de prix du sous-jacent (API à clé gratuite) |
-
-**Calcul — Rust** (`options-rs/`, voir son README)
-
 | Crate | Rôle |
 |---|---|
 | `gex-core` | Black-76, greeks, expositions, murs, profil, zero gamma — **aucune E/S possible** |
-| `gex-store` | lecture des relevés parquet, écriture de l'historique |
-| `gex-cli` | le binaire `gex` : rapport de séance, `--watch` |
+| `gex-ib` | la source : décisions de collecte, et la couche réseau TWS |
+| `gex-store` | relevés parquet, historique, validation du modèle |
+| `gex-collector` | le démon : socle quotidien, vif entretenu |
+| `gex-cli` | le binaire `gex` : rapport de séance, `--watch`, `--valider` |
 
-Le partage suit une ligne simple : **ce qui parle à IB reste en Python, ce qui produit
-un chiffre est en Rust.** Le joint est le fichier parquet, et il n'a pas changé de
-format — les relevés archivés avant le portage se rejouent tels quels.
+Le détail de chaque crate est dans `options-rs/README.md`.
+
+Le format parquet n'a pas changé pendant le portage : les relevés archivés du temps de
+Python se rejouent tels quels.
 
 La règle « tout ce qui produit un chiffre est testable sans réseau » était une
 convention qu'une distraction suffisait à enfreindre. En Rust elle est structurelle :
 `gex-core` n'a aucune dépendance capable d'ouvrir un fichier ou un socket, et `chrono`
-y est déclaré sans sa feature `clock`, si bien qu'`Utc::now()` **n'existe pas**. Un
-calcul qui dépendrait de l'heure courante ne compile pas.
+y est déclaré sans sa feature `clock`, si bien qu'`Utc::now()` **n'existe pas**. Seul
+le collecteur lit l'horloge.
 
 ## Utilisation
 
 Deux programmes, dans deux terminaux. Le collecteur écrit, le lecteur lit :
 
 ```sh
-python ib_collector.py NQ                 # le collecteur (Python) : entretient le relevé
-cargo build --release --manifest-path options-rs/Cargo.toml
-
-gex NQ                                    # le lecteur (Rust) : un passage sur le courant
+gex-collector NQ                          # le collecteur : entretient le relevé
+gex NQ                                    # le lecteur : un passage sur le courant
 gex NQ --watch 30s                        # relu toutes les 30 s
 gex NQ --range 0.35
 ```
@@ -288,8 +280,7 @@ D'où deux différences : `--watch` est permis sur le courant alors qu'il reste
 interdit sur une archive, et `snapshots.lister()` exclut le courant — un fichier
 qui change sous les pieds n'a rien à faire dans un historique de validation.
 
-Ce qui l'écrit : `python ib_collector.py NQ`, qui exige TWS ou Gateway et l'extra
-`.[ib]`. Il balaie la chaîne entière une fois par journée de compensation — l'open
+Ce qui l'écrit : `gex-collector NQ`, qui exige TWS ou Gateway avec l'API activée. Il balaie la chaîne entière une fois par journée de compensation — l'open
 interest n'est publié qu'une fois par jour, le relire en séance coûterait treize
 minutes pour le même chiffre — puis entretient en continu les contrats qui portent
 le gamma, et réécrit le courant toutes les quinze secondes.
@@ -303,9 +294,6 @@ autre horizon, ni de corriger une erreur de méthode autrement qu'en attendant q
 l'historique se reconstitue.
 
 ```sh
-python snapshots.py                # les relevés archivés
-python snapshots.py SPX
-
 gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --dte-max 7
 gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --gamma-source published
 ```
@@ -344,9 +332,7 @@ Chaque exécution ajoute une ligne à `history.csv` — sans quoi chaque analyse
 instantané et les séries n'existent nulle part.
 
 ```sh
-python history.py              # dernier relevé de chaque ticker
-python history.py NQ         # la trajectoire d'un sous-jacent
-python history.py NQ --last 5
+cat history.csv                # l'historique brut, une ligne par relevé
 gex NQ --no-history      # ne pas enregistrer
 ```
 
@@ -371,11 +357,11 @@ de colonnes.
 ### Validation : le modèle tient-il ?
 
 ```sh
-python validate.py            # tous les tickers
-python validate.py NQ
+gex --valider                 # sur history.csv
+gex --valider --history autre.csv
 ```
 
-Le modèle avance trois affirmations vérifiables, et `validate.py` les mesure sur
+Le modèle avance trois affirmations vérifiables, et `gex --valider` les mesure sur
 l'historique :
 
 1. **les mouvements sont plus amples en gamma négatif** — amplitude médiane par jour,
@@ -415,8 +401,8 @@ clôture :
 
 ```sh
 export ALPHAVANTAGE_API_KEY=...        # ou TWELVEDATA_API_KEY, TIINGO_API_KEY
-python validate.py NQ --prix
-python validate.py NQ --prix --fournisseur tiingo
+gex --valider NQ --prix
+gex --valider NQ --prix --fournisseur tiingo
 ```
 
 Trois fournisseurs, tous avec une API documentée et une clé gratuite ; celui dont
@@ -491,14 +477,16 @@ Attention : les échéances à 0-1 jour portent 18% du GEX, 73% du charm.
 ### Tests
 
 ```sh
-python -m pytest tests -q                                   # 121 tests : l'acquisition
-cargo test --manifest-path options-rs/Cargo.toml            # 78 tests : le calcul
-cargo clippy --manifest-path options-rs/Cargo.toml --all-targets -- -D warnings
+cd options-rs
+cargo test --workspace                                  # 135 tests : tout le moteur
+cargo clippy --workspace --all-targets -- -D warnings
+
+cd .. && python -m pytest tests -q                      # 12 tests : sec_data
 ```
 
-**Aucun test ne touche au réseau**, des deux côtés. C'est la contrainte qui structure
-tout le reste, et le portage l'a rendue vérifiable par le compilateur plutôt que par
-la discipline.
+**Aucun test ne touche au réseau, ni à TWS.** C'est la contrainte qui structure tout le
+reste, et le portage l'a rendue vérifiable par le compilateur plutôt que par la
+discipline : `gex-core` ne déclare aucune dépendance capable d'ouvrir quoi que ce soit.
 
 Les greeks ne sont pas comparés à des valeurs codées en dur — celles-ci viendraient de
 la même formule que le code et ne prouveraient rien. Charm, vanna et gamma sont recoupés
@@ -510,13 +498,16 @@ Les jeux d'essai sont **construits depuis des paramètres connus**, jamais figé
 une sortie observée — un tel test passe encore quand le calcul devient faux. Le test du
 skew, par exemple, doit retrouver exactement le −0,15 qu'on a injecté.
 
-Et `options-rs/fixtures/` garde un **relevé IB réel**, collecté depuis TWS, avec les
-nombres que le moteur Python en tirait. C'est l'oracle du portage : sans lui, les deux
-moteurs auraient pu se tromper identiquement sans que rien ne le révèle. Le dépôt a
-déjà payé cette leçon une fois, avec le multiplicateur du contrat.
+Et `options-rs/fixtures/` garde un **relevé IB réel** avec les nombres que le moteur
+Python en tirait. C'est l'oracle du portage : sans lui, les deux moteurs auraient pu se
+tromper identiquement sans que rien ne le révèle. Le dépôt a déjà payé cette leçon une
+fois, avec le multiplicateur du contrat.
 
-La CI (`.github/workflows/tests.yml`) lance la suite Python sur 3.11 et 3.13 à chaque
-push et chaque pull request.
+Ce qui ne se teste pas hors ligne vit dans `options-rs/crates/gex-ib/examples/sonde.rs` :
+une sonde manuelle qui confronte le client à un TWS vivant. Trois défauts n'ont été
+trouvés que par elle — voir le README de `options-rs`.
+
+La CI lance les deux suites, plus clippy, à chaque push et chaque pull request.
 
 ### Source de données
 

@@ -11,33 +11,22 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Taz" }]
 
-# Le strict necessaire pour COLLECTER. Le calcul, l'affichage et les graphiques
-# sont passes en Rust (voir options-rs/), et matplotlib est parti avec eux : ce
-# qui reste ici acquiert la donnee et l'archive, rien de plus.
+# Tout le moteur d'options est passe en Rust : voir options-rs/. Ce qui reste
+# ici est sec_data.py, la lecture des declarations d'inities aupres de la SEC,
+# qui n'a jamais dependu du reste et attend son propre dossier.
 dependencies = [
-    "numpy>=1.26",
     "pandas>=2.1",
-    "scipy>=1.11",
     "requests>=2.31",
 ]
 
 [project.optional-dependencies]
-# Archivage des chaines brutes en parquet. Sans, snapshots.py bascule sur csv.gz.
-snapshots = ["pyarrow>=14"]
-# Collecteur Interactive Brokers. ib_async est le fork maintenu d'ib_insync, dont
-# l'auteur est mort en 2024. Seul ib_collector.py l'importe, et seulement dans la
-# couche reseau : les fonctions pures d'ib_data.py se testent sans lui.
-ib = ["ib_async>=1.0"]
-dev = ["pytest>=8.0", "pyarrow>=14"]
+dev = ["pytest>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level"
 
 [tool.setuptools]
-py-modules = [
-    "chain", "black76", "snapshots", "ib_data", "ib_collector",
-    "price_data", "history", "validate",
-]
+py-modules = ["sec_data"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

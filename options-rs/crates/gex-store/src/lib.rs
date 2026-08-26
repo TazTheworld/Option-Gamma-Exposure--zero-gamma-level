@@ -12,7 +12,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod ecriture;
 pub mod historique;
+pub mod validation;
 
 use std::fs::File;
 use std::path::Path;

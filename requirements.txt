@@ -1,9 +1,5 @@
-# Le necessaire pour COLLECTER. Le calcul et l'affichage sont en Rust : voir
-# options-rs/. Le reste est un extra, voir pyproject.toml.
-#   pip install -e ".[ib]"          collecteur Interactive Brokers (ib_async)
-#   pip install -e ".[snapshots]"   archivage en parquet plutot qu'en csv.gz
+# Le moteur d'options est en Rust : voir options-rs/ et son README.
+# Ce qui reste en Python est sec_data.py, les declarations d'inities SEC.
 #   pip install -e ".[dev]"         tests
-numpy==2.5.1
 pandas==3.0.5
 requests==2.34.2
-scipy==1.18.0

@@ -18,11 +18,9 @@ cargo test --manifest-path options-rs/Cargo.toml
 cargo clippy --manifest-path options-rs/Cargo.toml --all-targets -- -D warnings
 ```
 
-**Ne jamais régénérer `requirements.txt` avec `pip freeze`.** Il ne liste que le
-cœur de l'acquisition — numpy, pandas, scipy, requests. Tout le reste est un extra
-déclaré dans `pyproject.toml` : `.[snapshots]`, `.[ib]`, `.[dev]`. matplotlib est
-parti avec les graphiques, et rien ne doit l'y ramener : plus aucun module Python
-ne trace quoi que ce soit.
+**Ne jamais régénérer `requirements.txt` avec `pip freeze`.** Il ne sert plus qu'à
+`sec_data.py` : pandas et requests, rien d'autre. Le moteur d'options n'a plus
+aucune dépendance Python.
 
 Un nouveau module qui a besoin d'une dépendance lourde déclare un extra et
 l'importe **dans la fonction qui s'en sert**, jamais en tête de fichier.
@@ -57,29 +55,29 @@ Un commentaire qui paraphrase la ligne suivante n'a pas sa place.
 **Tout ce qui produit un chiffre est testable sans réseau.** C'est la contrainte
 qui structure le reste.
 
-**Le dépôt est en deux moitiés, et elles ne parlent que par un fichier parquet.**
-Ce qui parle à IB est en Python ; ce qui produit un chiffre est en Rust, dans
-`options-rs/` (voir son README et ses propres conventions).
+**Le dépôt est en Rust**, dans `options-rs/` — voir son README, qui porte les
+conventions du moteur. Le seul Python restant est `sec_data.py`, la lecture des
+déclarations d'initiés SEC, qui n'a jamais eu de rapport avec les options et
+attend son propre dossier.
 
-| Module Python | Rôle |
+| Crate | Rôle |
 |---|---|
-| `ib_data.py` | la seule source : Interactive Brokers, options sur futures |
-| `ib_collector.py` | la boucle qui entretient le relevé courant |
-| `chain.py` | le format pivot : les colonnes, et leur nettoyage |
-| `black76.py` | Black-76, pour le gamma que la source ne publie pas |
-| `snapshots.py` | l'archivage — le joint avec le moteur Rust |
+| `gex-core` | **aucune E/S possible** : Black-76, greeks, expositions, murs, profil |
+| `gex-ib` | la source : décisions de collecte, et la couche réseau TWS |
+| `gex-store` | relevés parquet, historique, validation |
+| `gex-collector` | le démon |
+| `gex-cli` | le lecteur |
 
-Le calcul, l'affichage et l'historique ont été portés en Rust. `main.py`,
-`analysis.py`, `greeks.py` et `plots.py` n'existent plus ; le binaire `gex` les
-remplace. Les graphiques ont été abandonnés au passage, volontairement.
+Les graphiques ont été abandonnés au passage, volontairement : `plotters` aurait
+coûté plus cher que ce qu'il rapportait.
 
 Une formule ne s'écrit pas deux fois. Si un module en a besoin, il l'importe.
 
 ### Le patron des sources de données
 
 Il n'y a plus qu'une source — le CBOE, le CME, Databento et Barchart ont été
-retirés — mais toute source qu'on rajouterait suit cette forme, et `ib_data.py`
-la documente :
+retirés — mais toute source qu'on rajouterait suit cette forme, et `gex-ib` la
+documente en la découpant en deux modules :
 
 - une **fonction pure d'assemblage** (`build_chain`) qui prend des données déjà
   téléchargées et rend `(df, spot, quote_date)` ;
@@ -91,13 +89,13 @@ par exemple — donneraient deux GEX différents pour la même chaîne.
 
 ### Le format pivot
 
-Toute chaîne produite respecte `chain.COLUMNS` + `COLONNES_GRECS`, et sort de
-`chain._clean()`. En aval, `analysis.analyser(df, spot, quote_date, …)` ne sait
-pas d'où vient la chaîne, et ne doit pas avoir à le savoir.
+Toute chaîne produite est une `gex_core::chaine::Chaine`. En aval, `analyser()` ne
+sait pas d'où elle vient, et ne doit pas avoir à le savoir.
 
-Ce format et Black-76 vivent dans des modules qui ne sont la source de personne.
-Ils étaient logés chez `cboe_data.py` et `cme_data.py` : en retirant ces sources,
-on emportait le format et la formule avec elles.
+Les colonnes du fichier parquet gardent leurs noms hérités du CBOE — `CallOpenInt`,
+`PutIV`, `StrikePrice`. Ils ne sont plus la vérité du calcul, mais restent celle du
+fichier : les renommer rendrait illisibles des relevés que le rejeu doit encore
+pouvoir ouvrir.
 
 ## Tests
 

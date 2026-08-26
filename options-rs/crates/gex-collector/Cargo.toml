@@ -1,0 +1,20 @@
+[package]
+name = "gex-collector"
+description = "Le demon : socle quotidien, vif entretenu, releve courant reecrit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gex-collector"
+path = "src/main.rs"
+
+[dependencies]
+gex-core = { path = "../gex-core" }
+gex-ib = { path = "../gex-ib" }
+gex-store = { path = "../gex-store" }
+# Le collecteur est le SEUL a lire l'horloge : la feature clock est ici, et
+# nulle part ailleurs. C'est ce qui garde tout le calcul reproductible.
+chrono = { version = "0.4", features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+ibapi = { version = "3.3", default-features = false, features = ["sync"] }
