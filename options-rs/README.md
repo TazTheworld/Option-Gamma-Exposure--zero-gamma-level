@@ -90,6 +90,31 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | validation du modèle | `validate.py` | ✅ `gex-store::validation` |
 | graphiques | `plots.py` | ❌ abandonnés, volontairement |
 
+### La coupure quotidienne
+
+TWS et Gateway se redémarrent **de force une fois par jour** — c'est ainsi qu'IB
+recharge les définitions de contrats — et l'authentification expire le dimanche à
+1 h heure de New York. Le collecteur traite les deux comme des événements
+normaux : il annonce la perte, attend, se rattache, et **reprend son socle sans le
+rebalayer**. L'open interest qu'il porte ne bougera pas avant la publication du
+soir ; le relire coûterait trois à cinq minutes pour les mêmes chiffres.
+
+L'attente double à chaque tentative jusqu'à cinq minutes, puis se remet à zéro dès
+qu'une session tient deux minutes : un délai fixe servirait mal l'un des deux cas —
+trop long pour un redémarrage de quelques secondes, trop court pour une attente
+humaine du dimanche.
+
+Un défaut mesuré en coupant TWS pendant que le collecteur tournait : **une
+souscription lancée sur une connexion morte ne rend pas d'erreur, elle bloque.** Le
+processus restait vivant, muet, et n'écrivait plus rien — pire qu'un plantage,
+puisqu'un processus figé passe pour un processus qui travaille. D'où la
+vérification de la passerelle avant chaque cycle.
+
+Ctrl+C lève un drapeau que la boucle lit au tour suivant, et la connexion se ferme
+proprement. Un arrêt brutal laisserait des souscriptions ouvertes côté IB, qui
+consomment le quota de cent lignes jusqu'à ce que TWS les recycle. Un second Ctrl+C
+n'attend pas la fin du cycle.
+
 **Le portage est terminé.** Les modules Python de la colonne du milieu n'existent
 plus ; ce tableau garde leur nom parce qu'il dit d'où vient chaque crate.
 

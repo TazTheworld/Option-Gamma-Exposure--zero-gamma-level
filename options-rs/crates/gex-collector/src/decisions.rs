@@ -3,6 +3,8 @@
 //! Ce sont les seules qui portent un raisonnement. Le reste de la boucle est de
 //! l'orchestration : demander, attendre, écrire.
 
+use std::time::Duration as Attente;
+
 use chrono::{Duration, NaiveDateTime};
 
 /// Heure UTC à laquelle bascule la journée de compensation.
@@ -59,6 +61,35 @@ pub fn faut_il_reselectionner(spot: f64, bande: Option<(f64, f64)>, marge: f64) 
     }
     let garde = largeur * marge;
     !(bas + garde <= spot && spot <= haut - garde)
+}
+
+/// Combien attendre avant de retenter une connexion, à la n-ième tentative.
+///
+/// Le redémarrage quotidien de TWS dure une poignée de secondes ; la coupure
+/// hebdomadaire du dimanche, elle, attend qu'un humain se reconnecte et peut
+/// durer des heures. Un délai fixe servirait mal l'un des deux : trop long pour
+/// le redémarrage, trop court pour l'attente humaine, où il ferait des milliers
+/// de tentatives inutiles.
+///
+/// D'où le doublement, plafonné : on retente vite d'abord, puis on patiente.
+pub fn attente_avant_reprise(tentative: u32) -> Attente {
+    const PREMIERE: u64 = 5;
+    const PLAFOND: u64 = 300;
+    let secondes = PREMIERE.saturating_mul(1u64 << tentative.min(6));
+    Attente::from_secs(secondes.min(PLAFOND))
+}
+
+/// Le socle survit-il à une reconnexion ?
+///
+/// C'est tout l'intérêt de traiter la coupure comme un événement normal : le
+/// socle est en mémoire ET sur disque, et l'open interest qu'il porte ne bougera
+/// pas avant la publication du soir. Le rebalayer coûterait trois à cinq minutes
+/// pour relire exactement les mêmes chiffres.
+pub fn socle_reutilisable(
+    date_socle: Option<NaiveDateTime>,
+    maintenant: NaiveDateTime,
+) -> bool {
+    !faut_il_rebalayer(date_socle, maintenant)
 }
 
 #[cfg(test)]
@@ -124,6 +155,29 @@ mod tests {
         // 29 100 est DANS la bande, mais à moins de 150 du bord
         assert!(faut_il_reselectionner(29_100.0, bande, MARGE_BANDE));
         assert!(faut_il_reselectionner(30_500.0, bande, MARGE_BANDE));
+    }
+
+    /// Le redémarrage quotidien dure quelques secondes ; la coupure du dimanche
+    /// attend un humain. Un délai fixe servirait mal l'un des deux.
+    #[test]
+    fn l_attente_double_puis_plafonne() {
+        assert_eq!(attente_avant_reprise(0), Attente::from_secs(5));
+        assert_eq!(attente_avant_reprise(1), Attente::from_secs(10));
+        assert_eq!(attente_avant_reprise(3), Attente::from_secs(40));
+        // Plafonnée : sinon l'attente du dimanche deviendrait des heures.
+        assert_eq!(attente_avant_reprise(6), Attente::from_secs(300));
+        assert_eq!(attente_avant_reprise(50), Attente::from_secs(300));
+    }
+
+    /// Tout l'intérêt de traiter la coupure comme un événement normal : le socle
+    /// est déjà là, et l'open interest qu'il porte ne bougera pas avant le soir.
+    #[test]
+    fn le_socle_du_jour_survit_a_une_reconnexion() {
+        let socle = instant("2026-08-26 05:00:00");
+        assert!(socle_reutilisable(Some(socle), instant("2026-08-26 14:00:00")));
+        // Passé la publication du CME, il est périmé et doit être rebalayé.
+        assert!(!socle_reutilisable(Some(socle), instant("2026-08-27 06:00:00")));
+        assert!(!socle_reutilisable(None, instant("2026-08-26 14:00:00")));
     }
 
     #[test]

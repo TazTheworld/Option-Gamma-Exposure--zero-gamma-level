@@ -18,3 +18,4 @@ gex-store = { path = "../gex-store" }
 chrono = { version = "0.4", features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 ibapi = { version = "3.3", default-features = false, features = ["sync"] }
+ctrlc = "3.5.2"

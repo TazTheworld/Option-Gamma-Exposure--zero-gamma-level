@@ -116,6 +116,17 @@ impl Passerelle {
         Ok(Passerelle { client, differe })
     }
 
+    /// La passerelle répond-elle encore ?
+    ///
+    /// À vérifier AVANT chaque cycle, et pas seulement en cas d'erreur. Une
+    /// souscription lancée sur une connexion morte ne rend pas d'erreur : elle
+    /// **bloque**, indéfiniment, et le collecteur reste vivant sans rien écrire
+    /// ni rien dire. C'est pire qu'un plantage — un processus figé passe pour un
+    /// processus qui travaille.
+    pub fn vivante(&self) -> bool {
+        self.client.is_connected()
+    }
+
     /// Le future de première échéance : celui que les options suivent.
     pub fn front_month(&self, produit: &str, place: &str) -> Result<Contract, ErreurIb> {
         let gabarit = Contract {
