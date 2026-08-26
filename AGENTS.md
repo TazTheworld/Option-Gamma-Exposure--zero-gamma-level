@@ -160,6 +160,36 @@ erreur : un GEX cinq fois trop grand reste un nombre plausible. `gex_core::contr
 refuse donc de deviner, et un produit inconnu est rejeté plutôt que doté d'un
 défaut silencieux.
 
+## Les mesures qui justifient les défauts
+
+Les valeurs par défaut du lecteur ne sont pas des conventions : chacune a été mesurée,
+et le chiffre est ce qui empêche de la changer par distraction.
+
+**`--dte-max 30`.** Sur le SPX du 10 août 2026, la chaîne entière donnait +70,8 Md de
+GEX quand le 0–7 DTE donnait −1,1 Md : deux régimes opposés pour la même séance. Les
+échéances lointaines — strikes ronds à très gros open interest — dominent les murs sans
+produire aucun flux de couverture à court terme.
+
+**`--time-convention heures`.** La convention Perfiliev compte en jours ouvrés / 262
+avec un plancher à un jour pour les 0DTE. Le gamma variant en 1/racine(T), ce plancher
+fait une erreur massive. Mesuré sur le SPX, le rapport gamma recalculé / gamma publié
+passe d'une médiane de 1,134 (77 % des contrats à plus de 10 % d'écart) à 1,000 (38 %).
+
+**`--gamma-source iv`.** Seul choix cohérent de bout en bout : à un niveau de spot
+hypothétique, aucun gamma publié n'existe, donc le profil ne peut être que recalculé.
+Avec `published`, le total et le zero gamma viennent d'estimateurs différents — le
+lecteur le dit alors, avec l'écart mesuré. Les deux se rejoignent à 1,7 % sur le 7 DTE
+et divergent de 12,5 % sur toute la chaîne, là où `r = q = 0` cesse d'être neutre.
+
+**Le seuil d'alerte à 5 %** sur l'écart entre sources, et **20 %** sur le poids des
+0-1 DTE. En dessous, l'écart est du bruit ; au-dessus, il change la lecture.
+
+**`--valider` refuse de conclure sous vingt observations.** Deux garde-fous sans
+lesquels la mesure se mesurerait elle-même : un périmètre à la fois — les enchaîner
+classerait le régime d'après un GEX qui change de signe rien qu'en changeant
+d'horizon — et une séance = une observation, parce que normalisé en racine du temps, un
+mouvement réel de 0,2 % sur vingt minutes ressort à 1,7 % par jour.
+
 ## Ne jamais faire en silence
 
 **Annoncé à l'écran, jamais fait en silence.** S'applique à toute substitution,
@@ -174,6 +204,18 @@ Le corollaire vaut pour les séries : quand le marché ne cote pas, la série de
 niveaux **n'écrit rien** plutôt qu'un point à zéro. Une ligne plate se lirait comme
 « le gamma est nul » là où la donnée dit « je ne cote pas ». Les barres, elles,
 continuent : le future se traite la nuit.
+
+## Le partage entre les deux .md
+
+`README.md` **présente** : ce que le projet mesure, comment le lancer, ce qu'il ne fait
+pas. Il s'adresse à quelqu'un qui découvre.
+
+`AGENTS.md` — celui-ci — porte **la technique** : architecture, conventions, tests,
+pièges rencontrés, et les mesures qui justifient les défauts. Il s'adresse à qui va
+modifier le code.
+
+Un détail d'implémentation qui remonte dans le README est un signe qu'il manque une
+section ici.
 
 ## Lecture seule
 
