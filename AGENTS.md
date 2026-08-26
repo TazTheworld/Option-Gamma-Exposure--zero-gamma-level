@@ -99,8 +99,10 @@ pouvoir ouvrir.
 
 ## Tests
 
-**Aucun test ne touche au réseau.** La CI l'exige : « la suite doit passer telle
-quelle ». Un test qui aurait besoin d'un appel réseau teste la mauvaise chose.
+**Aucun test ne touche au réseau.** Ni à TWS. La suite doit passer sur une machine
+qui n'a ni passerelle ni connexion — un test qui aurait besoin d'un appel réseau
+teste la mauvaise chose. Il n'y a pas d'intégration continue pour le rappeler :
+c'est à la main, avant de pousser.
 
 Les jeux d'essai sont **construits depuis des paramètres connus** — spot, IV,
 open interest placés à des strikes choisis — pour vérifier qu'on retrouve la

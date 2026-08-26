@@ -287,19 +287,20 @@ le gamma, et réécrit le courant toutes les quinze secondes.
 
 ### Rejouer une séance (`--replay`)
 
-Chaque exécution archive la chaîne **brute** dans `snapshots/<TICKER>/<date>.parquet`
-(quelques centaines de Ko pour un SPX complet), avant tout filtre. `history.csv` ne
-garde que les agrégats : sans l'archive, impossible de rejouer une séance passée à un
-autre horizon, ni de corriger une erreur de méthode autrement qu'en attendant que
-l'historique se reconstitue.
-
 ```sh
-gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --dte-max 7
-gex NQ --replay snapshots/NQ/2026-08-25_2030.parquet --gamma-source published
+gex NQ --replay snapshots/NQ/2026-08-26_0659.parquet --dte-max 7
 ```
 
-Un rejeu ne réarchive pas et ne consomme aucune requête réseau. Le format est parquet
-si `pyarrow` est installé, sinon `csv.gz`.
+`--replay` ouvre n'importe quel relevé au lieu du courant, et permet de recalculer
+une séance passée sous un autre horizon. `history.csv` ne garde que les agrégats :
+sans l'archive de la chaîne **brute**, on ne peut ni changer d'horizon après coup,
+ni corriger une erreur de méthode autrement qu'en attendant que l'historique se
+reconstitue.
+
+> **L'archivage est désactivé par défaut.** Il sert à la recherche, pas au suivi
+> de séance, et les fichiers s'accumulent sans que rien ne les efface. Pour
+> l'activer : `gex-collector NQ --archiver 900` (une archive tous les quarts
+> d'heure).
 
 ### Charm et vanna
 
@@ -507,7 +508,8 @@ Ce qui ne se teste pas hors ligne vit dans `options-rs/crates/gex-ib/examples/so
 une sonde manuelle qui confronte le client à un TWS vivant. Trois défauts n'ont été
 trouvés que par elle — voir le README de `options-rs`.
 
-La CI lance les deux suites, plus clippy, à chaque push et chaque pull request.
+Il n'y a pas d'intégration continue : les deux suites se lancent à la main, avant
+de pousser.
 
 ### Source de données
 

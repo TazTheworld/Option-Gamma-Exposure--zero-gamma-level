@@ -87,8 +87,13 @@ struct Arguments {
     #[arg(long, default_value = "15")]
     rafraichir: u64,
 
-    /// Secondes entre deux archives horodatées.
-    #[arg(long, default_value = "900")]
+    /// Secondes entre deux archives horodatées. 0 pour ne rien archiver.
+    ///
+    /// Désactivé par défaut. Les archives servent à rejouer une séance passée
+    /// sous un autre horizon — utile pour la recherche, inutile pour un suivi de
+    /// séance, et elles s'accumulent : quelques centaines de kilo-octets toutes
+    /// les quinze minutes, sans que rien ne les efface.
+    #[arg(long, default_value = "0")]
     archiver: u64,
 
     /// Exiger le temps réel. Par défaut le différé, qui suffit et ne demande
@@ -174,7 +179,9 @@ struct Etat {
 fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result<(), String> {
     let attente = Duration::from_secs(args.attente);
     let rafraichir = Duration::from_secs(args.rafraichir);
-    let pas_archive = Duration::from_secs(args.archiver);
+    // Zéro veut dire « jamais » : le comparer à une durée écoulée le rendrait
+    // vrai à chaque tour, donc archiverait toutes les quinze secondes.
+    let pas_archive = (args.archiver > 0).then(|| Duration::from_secs(args.archiver));
 
     let ib = Passerelle::connecter(&args.adresse, args.client_id, !args.temps_reel)
         .map_err(|e| e.to_string())?;
@@ -324,9 +331,10 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             use std::io::Write;
             let _ = std::io::stdout().flush();
 
-            let temps_d_archiver = etat
-                .derniere_archive
-                .is_none_or(|avant| avant.elapsed() >= pas_archive);
+            let temps_d_archiver = pas_archive.is_some_and(|pas| {
+                etat.derniere_archive
+                    .is_none_or(|avant| avant.elapsed() >= pas)
+            });
             if temps_d_archiver {
                 let chemin = archiver(&fondue, &args.dir, &args.produit)
                     .map_err(|e| e.to_string())?;
