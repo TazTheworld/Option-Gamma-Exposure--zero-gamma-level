@@ -163,16 +163,36 @@ fn balayer(
     );
 
     let mut valeurs: HashMap<i32, Valeurs> = HashMap::new();
+    let mut diagnostic: Option<String> = None;
+    let mut regime: Option<ibapi::market_data::MarketDataType> = None;
     for (i, paquet) in paquets.iter().enumerate() {
         print!("\r  lot {}/{}…", i + 1, paquets.len());
         use std::io::Write;
         let _ = std::io::stdout().flush();
-        valeurs.extend(
-            ib.collecter_lot(paquet.as_slice(), attente)
-                .map_err(|e| e.to_string())?,
-        );
+        let recolte = ib
+            .collecter_lot(paquet.as_slice(), attente)
+            .map_err(|e| e.to_string())?;
+        // Le diagnostic une seule fois, pas une par lot : soixante-quinze lots
+        // qui répètent le même refus noieraient le reste du journal.
+        if diagnostic.is_none()
+            && let Some(dit) = recolte.diagnostic()
+        {
+            diagnostic = Some(dit);
+        }
+        regime = recolte.regime.or(regime);
+        valeurs.extend(recolte.valeurs);
     }
     println!();
+
+    // Ce qu'IB a dit pendant le balayage. Sans ça, un lot entièrement muet ne se
+    // distingue pas d'un marché sans open interest — et le 10090, « il vous
+    // manque l'abonnement », disparaissait avec l'erreur qui le portait.
+    if let Some(dit) = &diagnostic {
+        eprintln!("  IB signale : {dit}");
+    }
+    if let Some(r) = regime {
+        println!("  données servies : {r:?}");
+    }
 
     let cles: Vec<ContratOption> = contrats.iter().map(|(c, _)| *c).collect();
     let socle = match build_chain(&cles, &valeurs, InstantReleve(maintenant()), None) {
@@ -221,6 +241,8 @@ struct Etat {
     vif_absent_signale: bool,
     /// Idem pour un marché qui ne cote pas.
     rien_ne_cote_signale: bool,
+    /// Et pour un refus d'IB sur le vif.
+    refus_signale: bool,
 }
 
 /// Une session : connexion, puis la boucle, jusqu'à la coupure.
@@ -395,9 +417,19 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
         }
 
         // --- rafraîchir, fusionner, écrire ---
-        let valeurs_vif = ib
+        let recolte_vif = ib
             .collecter_lot(etat.vif.as_slice(), rafraichir)
             .map_err(|e| e.to_string())?;
+        // Le vif tourne en boucle : ne dire un refus qu'une fois, sinon le
+        // journal se remplit du même message toutes les quinze secondes.
+        if let Some(dit) = recolte_vif.diagnostic()
+            && !etat.refus_signale
+        {
+            eprintln!("
+  IB signale sur le vif : {dit}");
+            etat.refus_signale = true;
+        }
+        let valeurs_vif = recolte_vif.valeurs;
 
         let cles_vif: Vec<ContratOption> = etat.vif.iter().map(|(c, _)| *c).collect();
         let chaine_vif = build_chain(

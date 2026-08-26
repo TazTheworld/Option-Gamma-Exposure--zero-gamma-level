@@ -46,7 +46,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut valeurs = std::collections::HashMap::new();
     for (i, paquet) in paquets.iter().enumerate() {
         println!("  lot {}/{} ...", i + 1, paquets.len());
-        valeurs.extend(ib.collecter_lot(paquet.as_slice(), ATTENTE_LOT)?);
+        let recolte = ib.collecter_lot(paquet.as_slice(), ATTENTE_LOT)?;
+        if let Some(dit) = recolte.diagnostic() { println!("    IB signale : {dit}"); }
+        if let Some(r) = recolte.regime { println!("    donnees servies : {r:?}"); }
+        valeurs.extend(recolte.valeurs);
     }
 
     let avec_oi = valeurs.values().filter(|v| v.open_interest.is_some()).count();

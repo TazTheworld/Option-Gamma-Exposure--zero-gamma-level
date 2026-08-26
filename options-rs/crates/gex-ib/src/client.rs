@@ -22,6 +22,7 @@ use ibapi::contracts::tick_types::TickType;
 use ibapi::contracts::{Contract, SecurityType};
 use ibapi::market_data::MarketDataType;
 use ibapi::market_data::realtime::TickTypes;
+use ibapi::subscriptions::SubscriptionItem;
 
 use crate::decisions::{
     CleContrat, ContratOption, echeances_utiles, instant_echeance, separer_echeance,
@@ -89,6 +90,66 @@ impl std::error::Error for ErreurIb {}
 impl From<crate::decisions::ErreurEcheance> for ErreurIb {
     fn from(e: crate::decisions::ErreurEcheance) -> Self {
         ErreurIb::Echeance(e)
+    }
+}
+
+/// Ce qu'un lot a rendu, et ce qu'IB a dit en chemin.
+///
+/// Les valeurs seules ne suffisent pas à diagnostiquer un lot muet : un contrat
+/// sans réponse et un contrat refusé se ressemblent, et rien ne les distingue une
+/// fois l'erreur jetée. Ce type garde les deux ensemble.
+#[derive(Debug, Default)]
+pub struct Recolte {
+    /// Ce que chaque contrat a servi.
+    pub valeurs: HashMap<i32, Valeurs>,
+    /// Les avis non fatals d'IB, comptés par code.
+    pub avis: HashMap<i32, (usize, String)>,
+    /// Les erreurs, comptées par message.
+    pub erreurs: HashMap<String, usize>,
+    /// Le régime de données qu'IB annonce servir.
+    ///
+    /// Le demander ne garantit pas qu'il soit appliqué : cette valeur dit ce qui
+    /// arrive réellement, et c'est elle qui trahit un différé qui n'a pas pris.
+    pub regime: Option<MarketDataType>,
+}
+
+impl Recolte {
+    fn noter_avis(&mut self, code: i32, message: String) {
+        let entree = self.avis.entry(code).or_insert((0, message));
+        entree.0 += 1;
+    }
+
+    fn noter_erreur(&mut self, message: String) {
+        *self.erreurs.entry(message).or_insert(0) += 1;
+    }
+
+    /// Combien de contrats ont servi au moins une valeur exploitable.
+    pub fn contrats_servis(&self) -> usize {
+        self.valeurs
+            .values()
+            .filter(|v| v.iv.is_some() || v.open_interest.is_some() || v.gamma.is_some())
+            .count()
+    }
+
+    /// Le diagnostic en une ligne, ou rien s'il n'y a rien à dire.
+    ///
+    /// Rendu plutôt qu'affiché : c'est à l'appelant de décider quand le montrer,
+    /// et un lot sur soixante-quinze ne mérite pas soixante-quinze lignes.
+    pub fn diagnostic(&self) -> Option<String> {
+        if self.avis.is_empty() && self.erreurs.is_empty() {
+            return None;
+        }
+        let mut morceaux: Vec<String> = self
+            .avis
+            .iter()
+            .map(|(code, (n, message))| {
+                format!("[{code}] x{n} {}", message.chars().take(90).collect::<String>())
+            })
+            .collect();
+        morceaux.extend(self.erreurs.iter().map(|(message, n)| {
+            format!("x{n} {}", message.chars().take(90).collect::<String>())
+        }));
+        Some(morceaux.join(" | "))
     }
 }
 
@@ -307,8 +368,8 @@ impl Passerelle {
         &self,
         lot: &[(ContratOption, Contract)],
         attente: Duration,
-    ) -> Result<HashMap<i32, Valeurs>, ErreurIb> {
-        let mut recu: HashMap<i32, Valeurs> = HashMap::new();
+    ) -> Result<Recolte, ErreurIb> {
+        let mut recolte = Recolte::default();
         let mut abonnements = Vec::new();
 
         for (c, contrat) in lot {
@@ -328,13 +389,41 @@ impl Passerelle {
             for (con_id, abonnement) in &abonnements {
                 while let Some(item) = abonnement.try_next() {
                     recu_ce_tour = true;
-                    // Un avis ou une erreur sur UN contrat n'arrete pas le lot :
-                    // un contrat illiquide qui ne repond jamais est le cas normal,
-                    // et abandonner le lot entier pour lui couterait les
+                    // Un avis ou une erreur sur UN contrat n'arrête pas le lot :
+                    // un contrat illiquide qui ne répond jamais est le cas normal,
+                    // et abandonner le lot entier pour lui coûterait les
                     // quatre-vingt-neuf autres.
-                    let Ok(item) = item else { continue };
-                    let Some(tick) = item.into_data() else { continue };
-                    recu.entry(*con_id).or_default().absorber(&tick);
+                    //
+                    // Mais les jeter SANS LES COMPTER laissait un lot muet
+                    // impossible à distinguer d'un marché sans open interest. Le
+                    // 10090 d'IB — « il vous manque l'abonnement » — disparaissait
+                    // ainsi, et avec lui la seule explication du silence.
+                    let item = match item {
+                        Ok(item) => item,
+                        Err(e) => {
+                            recolte.noter_erreur(e.to_string());
+                            continue;
+                        }
+                    };
+                    let tick = match item {
+                        SubscriptionItem::Data(tick) => tick,
+                        SubscriptionItem::Notice(avis) => {
+                            recolte.noter_avis(avis.code, avis.message);
+                            continue;
+                        }
+                    };
+                    // Le type de données réellement servi. IB l'annonce sur chaque
+                    // souscription, et c'est la seule façon de savoir si le
+                    // basculement en différé a bien été appliqué — le demander ne
+                    // garantit pas qu'il le soit.
+                    if let TickTypes::MarketDataType(regime) = &tick {
+                        recolte.regime = Some(*regime);
+                    }
+                    recolte
+                        .valeurs
+                        .entry(*con_id)
+                        .or_default()
+                        .absorber(&tick);
                 }
             }
             if !recu_ce_tour {
@@ -348,7 +437,7 @@ impl Passerelle {
         for (_, abonnement) in abonnements {
             abonnement.cancel();
         }
-        Ok(recu)
+        Ok(recolte)
     }
 }
 
