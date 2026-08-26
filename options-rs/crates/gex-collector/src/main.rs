@@ -34,8 +34,8 @@ use gex_ib::decisions::{ContratOption, avec_conid, lots, perimetre, selection_vi
 use gex_store::ecriture::{archiver, ecrire_courant};
 use gex_store::series::{
     Barre, PointNiveaux, RETENTION_JOURS, borne_de_retention, chemin_barres, chemin_niveaux,
-    ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux, faut_il_ecrire_un_point,
-    lire_barres, lire_niveaux, recoller,
+    a_la_minute, ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux,
+    faut_il_ecrire_un_point, lire_barres, lire_niveaux, recoller,
 };
 
 use decisions::{
@@ -139,9 +139,18 @@ fn maintenant() -> chrono::NaiveDateTime {
 }
 
 /// Balaie tout le périmètre par lots, et en fait le socle.
+/// Le dernier prix connu des barres.
+///
+/// La clôture de la dernière barre, pas son ouverture : c'est le prix le plus
+/// récent que la série porte.
+fn prix_des_barres(barres: &[Barre]) -> Option<f64> {
+    barres.last().map(|b| b.close).filter(|p| *p > 0.0)
+}
+
 fn balayer(
     ib: &Passerelle,
     contrats: &[(ContratOption, ibapi::contracts::Contract)],
+    barres: &[Barre],
     budget: usize,
     attente: Duration,
 ) -> Result<(Chaine, HashMap<i32, Valeurs>), String> {
@@ -166,8 +175,24 @@ fn balayer(
     println!();
 
     let cles: Vec<ContratOption> = contrats.iter().map(|(c, _)| *c).collect();
-    let socle = build_chain(&cles, &valeurs, InstantReleve(maintenant()), None)
-        .map_err(|e| e.to_string())?;
+    let socle = match build_chain(&cles, &valeurs, InstantReleve(maintenant()), None) {
+        Ok(chaine) => chaine,
+        // IB sert le prix du sous-jacent dans chaque tick d'option — sauf quand
+        // aucun contrat ne répond, ce qui arrive sur un périmètre trop serré ou
+        // trop loin de la monnaie. La dernière barre le porte aussi : s'en servir
+        // vaut mieux qu'abandonner un balayage qu'on vient de payer. Annoncé,
+        // jamais fait en silence.
+        Err(_) => {
+            let secours = prix_des_barres(barres)
+                .ok_or("Prix du sous-jacent introuvable : ni undPrice, ni barre.")?;
+            eprintln!(
+                "
+  Aucun undPrice servi — prix repris de la dernière barre ({secours:.2})."
+            );
+            build_chain(&cles, &valeurs, InstantReleve(maintenant()), Some(secours))
+                .map_err(|e| e.to_string())?
+        }
+    };
     Ok((socle, valeurs))
 }
 
@@ -191,6 +216,11 @@ struct Etat {
     niveaux: Vec<PointNiveaux>,
     /// La minute du dernier point écrit.
     derniere_minute: Option<chrono::NaiveDateTime>,
+    /// L'absence de vif a-t-elle déjà été dite ? Sans ce drapeau, le message
+    /// reviendrait à chaque tour et noierait le reste du journal.
+    vif_absent_signale: bool,
+    /// Idem pour un marché qui ne cote pas.
+    rien_ne_cote_signale: bool,
 }
 
 /// Une session : connexion, puis la boucle, jusqu'à la coupure.
@@ -302,19 +332,26 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             if let Some(plage) = args.range {
                 // Le repère est le spot connu, ou la médiane des strikes au tout
                 // premier balayage — aucun tick n'existe encore à ce moment-là.
+                // Le spot connu, sinon la dernière barre. La médiane des strikes
+                // servait de repère avant que les barres existent : elle centrait
+                // le périmètre au milieu de la GRILLE et non du marché, si bien
+                // qu'une plage serrée ne retenait que des contrats illiquides —
+                // muets, donc sans undPrice, donc sans prix du tout.
                 let repere = if etat.spot > 0.0 {
                     etat.spot
                 } else {
-                    let mut ks: Vec<f64> = tous.iter().map(|(c, _)| c.cle.strike).collect();
-                    ks.sort_by(|a, b| a.partial_cmp(b).expect("strike fini"));
-                    ks.get(ks.len() / 2).copied().unwrap_or(0.0)
+                    prix_des_barres(&etat.barres).unwrap_or_else(|| {
+                        let mut ks: Vec<f64> = tous.iter().map(|(c, _)| c.cle.strike).collect();
+                        ks.sort_by(|a, b| a.partial_cmp(b).expect("strike fini"));
+                        ks.get(ks.len() / 2).copied().unwrap_or(0.0)
+                    })
                 };
                 let cles: Vec<ContratOption> = tous.iter().map(|(c, _)| *c).collect();
                 let retenus = perimetre(&cles, repere, plage);
                 tous.retain(|(c, _)| retenus.iter().any(|r| r.con_id == c.con_id));
             }
 
-            let (neuf, valeurs) = balayer(&ib, &tous, args.budget, attente)?;
+            let (neuf, valeurs) = balayer(&ib, &tous, &etat.barres, args.budget, attente)?;
             let muets = tous.len() - valeurs.len();
             println!(
                 "  socle : {} strikes, future {:.2} ({muets} contrats sans réponse)",
@@ -369,7 +406,25 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             InstantReleve(maintenant()),
             Some(etat.spot),
         );
-        if let Ok(frais) = &chaine_vif {
+        // Le vif peut être vide — un périmètre où presque rien ne cote la nuit,
+        // ou un socle sans gamma exploitable. Le socle, lui, PORTE de la donnée :
+        // n'écrire que quand la fusion réussit laissait le collecteur tourner en
+        // silence sans jamais produire de relevé, ce qui est le pire des deux
+        // mondes puisque le lecteur croit simplement que rien n'a démarré.
+        let sans_vif = chaine_vif.is_err();
+        if sans_vif && !etat.vif_absent_signale {
+            eprintln!(
+                "
+  Vif vide ou muet — le relevé courant reprend le socle seul.                  L'IV n'est plus rafraîchie."
+            );
+            etat.vif_absent_signale = true;
+        }
+        if !sans_vif {
+            etat.vif_absent_signale = false;
+        }
+
+        {
+            let frais = chaine_vif.as_ref().unwrap_or(socle_courant);
             // Le prix du future vient du vif : c'est la seule chose qui bouge
             // vraiment en séance, avec l'IV.
             let vus: Vec<f64> = valeurs_vif
@@ -396,7 +451,35 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             use std::io::Write;
             let _ = std::io::stdout().flush();
 
+            // Un relevé sans le moindre open interest n'a pas de GEX : il en a
+            // l'absence. Écrire un point à zéro dessinerait une ligne plate qui se
+            // lirait comme une mesure — « le gamma est nul » — alors qu'elle dit
+            // « le marché ne cote pas ». C'est exactement ce que la règle du dépôt
+            // interdit : un GEX de zéro est un chiffre, pas une erreur.
+            let cote = fondue
+                .lignes()
+                .iter()
+                .any(|l| l.call.open_interest + l.put.open_interest > 0.0);
+            if !cote && !etat.rien_ne_cote_signale {
+                eprintln!(
+                    "
+  Aucun open interest servi — le marché ne cote pas.                      Le relevé s'écrit, la série des niveaux attend."
+                );
+                etat.rien_ne_cote_signale = true;
+            }
+            if cote {
+                etat.rien_ne_cote_signale = false;
+            }
+
             if args.retention > 0 && faut_il_ecrire_un_point(etat.derniere_minute, instant) {
+                // Les barres se rafraîchissent TOUJOURS : le future se traite la
+                // nuit, quand les options ne cotent pas. Les conditionner à la
+                // cotation des options ferait un trou dans le graphique de prix là
+                // où le marché bouge encore.
+                if let Ok(fraiches) = ib.barres(&futur, 1) {
+                    etat.barres = recoller(&etat.barres, &fraiches);
+                }
+
                 let analyse = analyser(
                     &fondue,
                     &Parametres {
@@ -406,9 +489,10 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                         ..Default::default()
                     },
                 );
-                if let Ok(a) = analyse {
+                // Le point de niveaux, lui, n'existe que si quelque chose cote.
+                if let (true, Ok(a)) = (cote, analyse) {
                     etat.niveaux.push(PointNiveaux {
-                        instant,
+                        instant: a_la_minute(instant),
                         spot: a.spot,
                         zero_gamma: a.zero_gamma,
                         gex: a.gex,
@@ -420,12 +504,6 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                         put_wall_oi: a.murs.put_oi,
                     });
                 }
-                // Les barres se rafraîchissent à la minute elles aussi : plus
-                // souvent ne servirait à rien, la granularité étant la minute.
-                if let Ok(fraiches) = ib.barres(&futur, 1) {
-                    etat.barres = recoller(&etat.barres, &fraiches);
-                }
-
                 // L'élagage suit la même horloge que le socle : une borne
                 // glissante, appliquée quand on écrit, sans mécanisme de plus.
                 let borne = borne_de_retention(instant, args.retention);
@@ -436,7 +514,7 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                     .map_err(|e| e.to_string())?;
                 ecrire_niveaux(&etat.niveaux, &chemin_niveaux(&args.dir, &args.produit))
                     .map_err(|e| e.to_string())?;
-                etat.derniere_minute = Some(instant);
+                etat.derniere_minute = Some(a_la_minute(instant));
             }
 
             let temps_d_archiver = pas_archive.is_some_and(|pas| {

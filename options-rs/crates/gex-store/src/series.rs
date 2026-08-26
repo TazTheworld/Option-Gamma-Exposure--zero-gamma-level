@@ -93,6 +93,19 @@ pub fn faut_il_ecrire_un_point(dernier: Option<NaiveDateTime>, maintenant: Naive
     }
 }
 
+/// L'instant ramené au début de sa minute.
+///
+/// Les deux séries doivent partager le même axe de temps, et les barres d'IB
+/// tombent sur la minute pile. Un point de niveaux à 07:45:46,160 ne se
+/// superposerait à aucune d'elles : l'écran aurait deux échelles à aligner, ou
+/// tracerait des points entre les chandeliers.
+pub fn a_la_minute(instant: NaiveDateTime) -> NaiveDateTime {
+    instant
+        .with_second(0)
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap_or(instant)
+}
+
 /// L'instant à partir duquel on garde, en jours glissants.
 pub fn borne_de_retention(maintenant: NaiveDateTime, jours: i64) -> NaiveDateTime {
     maintenant - Duration::days(jours.max(0))
@@ -388,6 +401,21 @@ mod tests {
             Some(instant("2026-08-26 09:15:58")),
             instant("2026-08-26 09:16:00")
         ));
+    }
+
+    /// Les barres d'IB tombent sur la minute pile : un point à 07:45:46,160 ne se
+    /// superposerait à aucune d'elles.
+    #[test]
+    fn un_instant_est_ramene_au_debut_de_sa_minute() {
+        assert_eq!(
+            a_la_minute(instant("2026-08-26 07:45:46")),
+            instant("2026-08-26 07:45:00")
+        );
+        // Déjà sur la minute : rien ne change.
+        assert_eq!(
+            a_la_minute(instant("2026-08-26 07:45:00")),
+            instant("2026-08-26 07:45:00")
+        );
     }
 
     #[test]

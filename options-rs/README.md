@@ -117,6 +117,27 @@ L'écriture passe par un fichier temporaire puis un renommage. Sans cela, un
 lecteur qui ouvre pendant l'écriture verrait un parquet incomplet — et un parquet
 incomplet se lit comme une séance qui s'arrête, pas comme une erreur.
 
+### Ce que la nuit américaine a appris
+
+Vérifié en faisant tourner le collecteur à 4 h du matin heure de New York, quand
+les options NQ ne cotent pas. Trois défauts s'y sont révélés, qu'aucun test hors
+ligne n'aurait montrés :
+
+**Le prix du sous-jacent manquait.** IB le sert dans chaque tick d'option — sauf
+quand aucun contrat ne répond. Le socle échouait alors entièrement. La dernière
+barre le porte aussi : s'en servir vaut mieux qu'abandonner un balayage qu'on
+vient de payer. C'est aussi ce qui ancre le périmètre au premier balayage, là où
+la médiane des strikes centrait sur le milieu de la *grille* et non du marché.
+
+**Un vif vide bloquait toute écriture.** Le collecteur tournait en silence sans
+jamais produire de relevé — le pire des deux mondes, puisque le lecteur croit
+simplement que rien n'a démarré. Le socle porte de la donnée : il s'écrit seul.
+
+**Un GEX de zéro se lirait comme une mesure.** Sans open interest, la série des
+niveaux tracerait une ligne plate qui dit « le gamma est nul » là où le marché dit
+« je ne cote pas ». Elle attend donc, pendant que les barres continuent — le
+future se traite la nuit, lui.
+
 Conception : `docs/superpowers/specs/2026-08-26-barres-et-niveaux-design.md`.
 
 ### La coupure quotidienne
