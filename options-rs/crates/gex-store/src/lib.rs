@@ -14,6 +14,7 @@
 
 pub mod ecriture;
 pub mod historique;
+pub mod series;
 pub mod validation;
 
 use std::fs::File;

@@ -7,8 +7,16 @@ license.workspace = true
 
 [dependencies]
 gex-core = { path = "../gex-core" }
+# Le type Barre vit dans gex-store, avec la serie qui le stocke : le definir ici
+# obligerait gex-store a dependre de gex-ib pour l'ecrire, donc a tirer ibapi
+# pour lire un fichier.
+gex-store = { path = "../gex-store" }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 # Client TWS synchrone. Le collecteur est une boucle qui balaie par lots et
 # attend : l'asynchrone n'y apporterait rien qu'une machine a etats de plus.
 ibapi = { version = "3.3", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+# ibapi horodate avec `time` ; les tests en ont besoin pour fabriquer un instant.
+time = "0.3"

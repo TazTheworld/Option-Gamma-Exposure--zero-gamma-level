@@ -90,6 +90,35 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | validation du modèle | `validate.py` | ✅ `gex-store::validation` |
 | graphiques | `plots.py` | ❌ abandonnés, volontairement |
 
+### Ce que le collecteur écrit
+
+```
+snapshots/NQ/
+  courant.parquet      le relevé vivant, réécrit toutes les 15 s
+  barres.parquet       les chandeliers d'une minute
+  niveaux.parquet      la trace des niveaux, un point par minute
+```
+
+Les deux séries existent pour une raison : le calcul rend un zero gamma, on
+l'affiche, on le jette. Or **c'est la dérive qui porte l'information** — un zero
+gamma à 29 400 ne dit rien seul, le voir monter de 29 200 pendant que le prix s'en
+approche, si.
+
+Elles sont **bornées à trente jours glissants** et élaguées à chaque écriture. Une
+série qui grossit sans fin est un piège différé, et les archives horodatées ont
+justement été désactivées pour cette raison. `--retention 0` n'écrit rien.
+
+Un point par minute et non par relevé : le collecteur tourne toutes les quinze
+secondes, ce qui ferait 5 760 lignes par jour pour une information qui bouge à
+peine d'un tour à l'autre. La minute est aussi la granularité des barres, donc les
+deux séries partagent le même axe de temps.
+
+L'écriture passe par un fichier temporaire puis un renommage. Sans cela, un
+lecteur qui ouvre pendant l'écriture verrait un parquet incomplet — et un parquet
+incomplet se lit comme une séance qui s'arrête, pas comme une erreur.
+
+Conception : `docs/superpowers/specs/2026-08-26-barres-et-niveaux-design.md`.
+
 ### La coupure quotidienne
 
 TWS et Gateway se redémarrent **de force une fois par jour** — c'est ainsi qu'IB

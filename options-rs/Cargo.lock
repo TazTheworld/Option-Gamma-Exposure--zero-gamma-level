@@ -595,7 +595,9 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "gex-core",
+ "gex-store",
  "ibapi",
+ "time",
 ]
 
 [[package]]

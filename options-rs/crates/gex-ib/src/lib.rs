@@ -21,5 +21,6 @@
 #![warn(missing_docs)]
 
 pub mod assemblage;
+pub mod barres;
 pub mod client;
 pub mod decisions;

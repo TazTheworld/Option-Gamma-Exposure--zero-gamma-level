@@ -116,6 +116,15 @@ impl Passerelle {
         Ok(Passerelle { client, differe })
     }
 
+    /// Le client sous-jacent, pour les modules de cette crate.
+    ///
+    /// Volontairement restreint au crate : exposer le client d'`ibapi` au monde
+    /// laisserait n'importe qui passer un ordre, alors que tout le dépôt tient à
+    /// ne faire que de la lecture.
+    pub(crate) fn client(&self) -> &Client {
+        &self.client
+    }
+
     /// La passerelle répond-elle encore ?
     ///
     /// À vérifier AVANT chaque cycle, et pas seulement en cas d'erreur. Une

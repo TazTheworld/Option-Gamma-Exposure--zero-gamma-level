@@ -23,12 +23,20 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use clap::Parser;
+use gex_core::analyse::{Parametres, analyser};
 use gex_core::chaine::Chaine;
+use gex_core::contrat::multiplicateur;
 use gex_core::temps::InstantReleve;
 use gex_ib::assemblage::{build_chain, fusionner};
+use gex_ib::barres::PROFONDEUR_JOURS;
 use gex_ib::client::{ADRESSE_DEFAUT, ATTENTE_LOT, CLIENT_ID_DEFAUT, Passerelle, Valeurs};
 use gex_ib::decisions::{ContratOption, avec_conid, lots, perimetre, selection_vif};
 use gex_store::ecriture::{archiver, ecrire_courant};
+use gex_store::series::{
+    Barre, PointNiveaux, RETENTION_JOURS, borne_de_retention, chemin_barres, chemin_niveaux,
+    ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux, faut_il_ecrire_un_point,
+    lire_barres, lire_niveaux, recoller,
+};
 
 use decisions::{
     MARGE_BANDE, attente_avant_reprise, bande_couverte, faut_il_rebalayer,
@@ -101,6 +109,14 @@ struct Arguments {
     #[arg(long)]
     temps_reel: bool,
 
+    /// Jours de barres et de niveaux conservés. 0 pour ne rien écrire.
+    ///
+    /// Une série qui grossit sans fin est un piège différé : le collecteur élague
+    /// à chaque nouvelle journée de compensation, au même moment où il rebalaie
+    /// son socle.
+    #[arg(long, default_value_t = RETENTION_JOURS)]
+    retention: i64,
+
     /// Dossier des relevés.
     #[arg(long, default_value = "snapshots")]
     dir: PathBuf,
@@ -169,6 +185,12 @@ struct Etat {
     spot: f64,
     date_socle: Option<chrono::NaiveDateTime>,
     derniere_archive: Option<Instant>,
+    /// Les chandeliers, relus au démarrage puis entretenus.
+    barres: Vec<Barre>,
+    /// La trace des niveaux, un point par minute.
+    niveaux: Vec<PointNiveaux>,
+    /// La minute du dernier point écrit.
+    derniere_minute: Option<chrono::NaiveDateTime>,
 }
 
 /// Une session : connexion, puis la boucle, jusqu'à la coupure.
@@ -199,10 +221,53 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
         futur.local_symbol, futur.multiplier
     );
 
+    // Le multiplicateur du dépôt, croisé avec celui qu'IB annonce. C'est le piège
+    // maison : se tromper de contrat ne produit aucune erreur, un GEX cinq fois
+    // trop grand reste un nombre plausible. Les deux sources doivent s'accorder,
+    // et un désaccord se dit plutôt que de se choisir en silence.
+    let taille = multiplicateur(&args.produit).map_err(|e| e.to_string())?;
+    if let Ok(annonce) = futur.multiplier.trim().parse::<f64>()
+        && (annonce - taille).abs() > 1e-9
+    {
+        eprintln!(
+            "Attention : IB annonce x{annonce} pour {}, le dépôt applique x{taille}.              Les niveaux enregistrés suivent le dépôt.",
+            args.produit
+        );
+    }
+
     // Le vif ne survit PAS à la coupure : ses souscriptions sont mortes avec la
     // connexion, et les garder ferait croire à une bande couverte qui ne l'est
     // plus. Le socle, lui, reste : c'est de la donnée, pas un abonnement.
     etat.vif.clear();
+
+    if args.retention > 0 {
+        // La série sur disque garde l'historique long ; IB ne comble que ce qui
+        // manque depuis le dernier arrêt. Le recollage écrase par horodatage,
+        // parce qu'IB renvoie la dernière barre plusieurs fois pendant qu'elle se
+        // forme, et que l'historique d'une reprise recouvre ce qu'on avait déjà.
+        if etat.barres.is_empty() {
+            etat.barres = lire_barres(&chemin_barres(&args.dir, &args.produit))
+                .map_err(|e| e.to_string())?;
+            etat.niveaux = lire_niveaux(&chemin_niveaux(&args.dir, &args.produit))
+                .map_err(|e| e.to_string())?;
+            if !etat.barres.is_empty() {
+                println!(
+                    "Séries relues : {} barres, {} points de niveaux.",
+                    etat.barres.len(),
+                    etat.niveaux.len()
+                );
+            }
+        }
+        match ib.barres(&futur, PROFONDEUR_JOURS) {
+            Ok(fraiches) => {
+                etat.barres = recoller(&etat.barres, &fraiches);
+                println!("{} barres d'une minute.", etat.barres.len());
+            }
+            // Sans barres le collecteur reste utile : le GEX se calcule sans
+            // elles. Le dire, et continuer, plutôt que tout arrêter.
+            Err(e) => eprintln!("Barres indisponibles ({e}) — la collecte continue."),
+        }
+    }
     if etat.socle.is_some() && socle_reutilisable(etat.date_socle, maintenant()) {
         println!("Socle du jour conservé — pas de rebalayage.");
     }
@@ -330,6 +395,49 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             );
             use std::io::Write;
             let _ = std::io::stdout().flush();
+
+            if args.retention > 0 && faut_il_ecrire_un_point(etat.derniere_minute, instant) {
+                let analyse = analyser(
+                    &fondue,
+                    &Parametres {
+                        taille_contrat: taille,
+                        dte_max: Some(args.dte_max),
+                        dte_min: args.dte_min,
+                        ..Default::default()
+                    },
+                );
+                if let Ok(a) = analyse {
+                    etat.niveaux.push(PointNiveaux {
+                        instant,
+                        spot: a.spot,
+                        zero_gamma: a.zero_gamma,
+                        gex: a.gex,
+                        charm: a.charm,
+                        vanna: a.vanna,
+                        call_wall: a.murs.call,
+                        put_wall: a.murs.put,
+                        call_wall_oi: a.murs.call_oi,
+                        put_wall_oi: a.murs.put_oi,
+                    });
+                }
+                // Les barres se rafraîchissent à la minute elles aussi : plus
+                // souvent ne servirait à rien, la granularité étant la minute.
+                if let Ok(fraiches) = ib.barres(&futur, 1) {
+                    etat.barres = recoller(&etat.barres, &fraiches);
+                }
+
+                // L'élagage suit la même horloge que le socle : une borne
+                // glissante, appliquée quand on écrit, sans mécanisme de plus.
+                let borne = borne_de_retention(instant, args.retention);
+                etat.barres = elaguer_barres(&etat.barres, borne);
+                etat.niveaux = elaguer_niveaux(&etat.niveaux, borne);
+
+                ecrire_barres(&etat.barres, &chemin_barres(&args.dir, &args.produit))
+                    .map_err(|e| e.to_string())?;
+                ecrire_niveaux(&etat.niveaux, &chemin_niveaux(&args.dir, &args.produit))
+                    .map_err(|e| e.to_string())?;
+                etat.derniere_minute = Some(instant);
+            }
 
             let temps_d_archiver = pas_archive.is_some_and(|pas| {
                 etat.derniere_archive
