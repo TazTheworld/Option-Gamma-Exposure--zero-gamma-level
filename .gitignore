@@ -11,3 +11,6 @@ history.csv
 # Ce que le collecteur ecrit — releve courant, barres, niveaux. Quelques
 # centaines de Ko par seance et par sous-jacent.
 snapshots/
+
+# Journaux du collecteur et du serveur : une trace locale, pas du code.
+*.log
