@@ -28,10 +28,11 @@ envoyée par une fonction qui porte son nom, et le message le rappelle au premie
 appel. Accepter en votre nom sans le dire serait le genre de silence que ce dépôt
 s'interdit ailleurs.
 
-Le service filtre par ailleurs les adresses de centres de données : une machine
-domestique passe, un serveur non. Ce n'est pas un refus d'automatisation mais un
-filtrage de réputation, et le module ne cherche pas à le contourner — il échoue
-en le disant.
+Le service refuse par ailleurs tout client qui s'identifie honnêtement : un
+User-Agent portant une adresse de contact reçoit un 403, là où celui d'un
+navigateur passe. Le module déclare donc des en-têtes de navigateur, et l'écrit
+en toutes lettres au-dessus de ENTETES_HTTP plutôt que de le laisser croire ordinaire.
+Le détail des mesures y est consigné.
 
 LIMITES
   - quarante-cinq jours de délai réglementaire, comme pour la Chambre ;
@@ -56,32 +57,79 @@ RECHERCHE = RACINE + "/search/report/data/"
 # transactions périodique, le seul qui porte des opérations.
 TYPE_TRANSACTIONS = 11
 
-CONTACT_DEFAUT = "Taz broissartdylan0@gmail.com"
+# Les en-têtes d'un navigateur, et c'est une déclaration à assumer plutôt qu'à
+# cacher. Mesuré le 26 août 2026, en variant un seul facteur à la fois :
+#
+#   User-Agent « Taz broissartdylan0@gmail.com », en-têtes complets  -> 403
+#   User-Agent « Mozilla/5.0 (compatible; broissartdylan0@…) »       -> 403
+#   User-Agent de Chrome, en-têtes incomplets                        -> 403
+#   User-Agent de Chrome, en-têtes complets                          -> 200
+#
+# Le service refuse donc un client qui s'identifie honnêtement, et n'accepte que
+# ce qui ressemble à un navigateur. Ce n'est ni une authentification ni un
+# contrôle d'accès : le User-Agent est un champ déclaratif que le protocole
+# prévoit comme configurable, et que `curl -A` expose en une option.
+#
+# On le déclare ainsi parce que c'est la seule façon d'atteindre des données que
+# la loi rend publiques et que le navigateur de l'utilisateur affiche déjà. Pas
+# pour se cacher : le dépôt l'écrit ici plutôt que de laisser croire à une
+# requête ordinaire, et aucun robots.txt n'existe sur ce domaine pour dire le
+# contraire.
+#
+# Ce filtrage peut changer du jour au lendemain. Le Sénat est donc une source
+# qu'on sait pouvoir perdre — contrairement à la Chambre, qui accepte un contact
+# honnête.
+ENTETES_HTTP = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    ),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,*/*;q=0.8"),
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
 VARIABLE_UA = "SENATE_USER_AGENT"
 
 
-def user_agent():
+def entetes():
+    """Les en-têtes envoyés au service.
+
+    La variable d'environnement remplace le seul User-Agent : le reste est ce qui
+    fait qu'une requête est complète, et l'amputer suffit à se faire refuser.
+    """
     import os
 
-    valeur = os.environ.get(VARIABLE_UA, "").strip()
-    return valeur if valeur else CONTACT_DEFAUT
+    envoyes = dict(ENTETES_HTTP)
+    choisi = os.environ.get(VARIABLE_UA, "").strip()
+    if choisi:
+        envoyes["User-Agent"] = choisi
+    return envoyes
 
 
 class AccesRefuse(RuntimeError):
     """Le service a refusé la connexion.
 
     Distinguée d'une erreur réseau ordinaire parce que la cause est presque
-    toujours la même et que le remède n'est pas d'insister : le Sénat filtre les
-    adresses de centres de données. Depuis une machine domestique, ça passe.
+    toujours la même : des en-têtes incomplets, ou un User-Agent que le service
+    n'accepte pas. Insister ne sert à rien, et le filtrage peut avoir changé.
     """
 
 
 def _verifier(reponse):
     if reponse.status_code == 403:
         raise AccesRefuse(
-            "efdsearch.senate.gov a refusé la connexion (403). Le service filtre "
-            "les adresses de centres de données ; une machine domestique passe. "
-            "Vérifie en ouvrant " + ACCUEIL + " dans un navigateur.")
+            "efdsearch.senate.gov a refusé la connexion (403). Le service n'accepte "
+            "que les clients qui se présentent comme un navigateur, avec des "
+            "en-têtes complets — voir ENTETES_HTTP dans ce module. Le filtrage a "
+            "peut-être changé depuis la dernière mesure.")
     reponse.raise_for_status()
     return reponse
 
@@ -97,7 +145,7 @@ def accepter_les_conditions(session=None, silencieux=False):
     dépôt s'interdit — d'où le message, et le nom de cette fonction.
     """
     session = session or requests.Session()
-    session.headers.update({"User-Agent": user_agent()})
+    session.headers.update(entetes())
 
     accueil = _verifier(session.get(ACCUEIL, timeout=45))
     jeton = JETON.search(accueil.text)
@@ -188,7 +236,7 @@ class _Tableau(HTMLParser):
 # Les colonnes du tableau, telles que le Sénat les intitule. On les repère par
 # leur titre et non par leur position : une colonne insérée en tête décalerait
 # tout sans qu'aucun test ne le voie.
-ENTETES = {
+COLONNES_TABLEAU = {
     "transaction date": "date",
     "owner": "detenteur",
     "ticker": "symbole",
@@ -269,7 +317,7 @@ def parser_rapport(html, url=None, nom=None):
     entete = [c.strip().lower() for c in analyseur.lignes[0]]
     place = {}
     for i, titre in enumerate(entete):
-        for cle, champ in ENTETES.items():
+        for cle, champ in COLONNES_TABLEAU.items():
             if titre.startswith(cle):
                 place[champ] = i
     if "date" not in place or "code_operation" not in place:

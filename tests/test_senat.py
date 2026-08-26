@@ -1,9 +1,9 @@
 """Rapports de transactions du Sénat : la recherche, et le tableau HTML.
 
-Ces tests couvrent **le parsing**, pas l'accès. Le service filtre les adresses de
-centres de données, donc la couche réseau ne se vérifie que depuis une machine
-domestique — c'est la même règle que pour TWS : ce qui décide se teste hors
-ligne, ce qui parle au réseau se vérifie à la main.
+Ces tests couvrent **le parsing**, pas l'accès. Le service n'accepte que les
+clients qui se présentent comme un navigateur — voir ENTETES_HTTP dans le module — et
+ce filtrage peut changer sans prévenir. C'est la même règle que pour TWS : ce qui
+décide se teste hors ligne, ce qui parle au réseau se vérifie à la main.
 
 Les fixtures reproduisent le format servi. Si le Sénat change son gabarit, ce
 sont ces tests qui doivent échouer en premier, pas la collecte silencieusement.
@@ -192,14 +192,32 @@ def test_une_trame_vide_reste_utilisable():
 
 # ---=== L'accès ===---
 
+def test_les_entetes_sont_complets(monkeypatch):
+    """Un User-Agent seul ne suffit pas : mesuré, la requête amputée de ses
+    autres en-têtes reçoit un 403 même avec celui d'un navigateur."""
+    monkeypatch.delenv(S.VARIABLE_UA, raising=False)
+    envoyes = S.entetes()
+    for attendu in ("User-Agent", "Accept", "Accept-Language", "Sec-Fetch-Mode"):
+        assert attendu in envoyes, attendu
+
+
+def test_la_variable_remplace_le_seul_user_agent(monkeypatch):
+    """Le reste est ce qui fait qu'une requête est complète : le laisser
+    remplacer ferait échouer la connexion sans dire pourquoi."""
+    monkeypatch.setenv(S.VARIABLE_UA, "Autre client")
+    envoyes = S.entetes()
+    assert envoyes["User-Agent"] == "Autre client"
+    assert envoyes["Accept-Language"] == S.ENTETES_HTTP["Accept-Language"]
+
+
 def test_un_refus_dit_ou_est_le_probleme(monkeypatch):
-    """403 n'est pas une panne réseau : c'est un filtrage d'adresse, et insister
-    ne sert à rien."""
+    """403 n'est pas une panne réseau : le service n'accepte que ce qui se
+    présente comme un navigateur, et insister ne sert à rien."""
     class Reponse:
         status_code = 403
 
         def raise_for_status(self):
             raise AssertionError("ne doit pas être atteint")
 
-    with pytest.raises(S.AccesRefuse, match="centres de données"):
+    with pytest.raises(S.AccesRefuse, match="navigateur"):
         S._verifier(Reponse())
