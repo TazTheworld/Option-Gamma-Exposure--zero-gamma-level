@@ -59,6 +59,7 @@ compilateur qui l'impose.
 | `gex-store` | relevés parquet, séries de barres et de niveaux, historique, validation |
 | `gex-collector` | le démon : socle quotidien, vif entretenu |
 | `gex-cli` | le lecteur, binaire `gex` |
+| `gex-web` | l'écran de séance : sert les fichiers du collecteur en JSON, ne calcule rien |
 
 `gex-core` ne déclare **aucune dépendance capable d'ouvrir un fichier ou un
 socket**, et `chrono` y est déclaré sans sa feature `clock` : `Utc::now()` n'y
@@ -177,6 +178,28 @@ Avec `published`, le total et le zero gamma viennent d'estimateurs différents �
 lecteur le dit alors, avec l'écart mesuré. Les deux se rejoignent à 1,7 % sur le 7 DTE
 et divergent de 12,5 % sur toute la chaîne, là où `r = q = 0` cesse d'être neutre.
 
+**Le répit de 1,2 s après l'annulation d'un lot.** `cancel()` envoie le message ;
+TWS libère la ligne un peu plus tard. Sans ce répit, le lot suivant souscrit pendant
+que le précédent compte encore, et le quota de cent lignes est atteint. Mesuré sur NQ :
+quatre lots passaient, quatorze rendaient **1 260 contrats sans réponse** — un balayage
+large échouait là où un balayage court réussissait, ce qui égarait le diagnostic.
+
+**L'open interest se lit du côté du contrat, pas du dernier tick.** IB envoie les
+**deux** ticks pour chaque contrat, celui qui ne le concerne pas à zéro, et le pertinent
+en premier. Relevé sur NQ 29200 :
+
+```text
+contrat call : OptionCallOpenInterest = 53   puis OptionPutOpenInterest = 0
+contrat put  : OptionCallOpenInterest = 0    puis OptionPutOpenInterest = 92
+```
+
+Retenir le dernier arrivé mettait **tous** les calls à zéro et laissait les puts justes
+par hasard. Rien ne le signalait : une chaîne sans aucun call open interest se lit comme
+un marché chargé en puts. Sur la même séance, le total passait de −813 à −351 M$, et le
+zero gamma comme le call wall n'existaient tout simplement pas — sans calls, le gamma ne
+change jamais de signe. Filtrer les zéros aurait « corrigé » le symptôme en inventant une
+donnée sur les strikes réellement morts.
+
 **Le seuil d'alerte à 5 %** sur l'écart entre sources, et **20 %** sur le poids des
 0-1 DTE. En dessous, l'écart est du bruit ; au-dessus, il change la lecture.
 
@@ -247,12 +270,10 @@ toujours, les noms de fichiers non.
 
 ## Ce qui reste à faire
 
-- **Une séance quand le marché cote.** Les barres sont vérifiées contre TWS, la
-  série des niveaux ne l'est qu'à vide — la nuit américaine ne sert ni open
-  interest ni IV. Il faut la voir se remplir pour de vrai.
-- **L'interface**, qui lira les trois fichiers et ne touchera ni à IB ni au calcul.
-  Elle aura son propre document de conception : mélanger le stockage et le rendu
-  reviendrait à façonner l'un d'après l'autre.
+- **Le sens réel du flux des teneurs de marché.** La convention en place — les
+  dealers sont longs des calls et courts des puts — est un postulat, pas une mesure.
+  Classer les transactions contre le bid et l'ask donnerait le vrai signe. Tant que
+  ce n'est pas fait, le signe du GEX est une hypothèse, et devrait se dire comme telle.
 - **Le contexte de séance** — OHLCV, iv30, le ratio GEX/volume — a disparu avec le
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà

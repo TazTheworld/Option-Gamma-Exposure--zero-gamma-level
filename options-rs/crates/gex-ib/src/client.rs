@@ -52,6 +52,13 @@ pub const TICKS_GENERIQUES: [&str; 2] = ["101", "588"];
 /// amputé d'un quart**.
 pub const ATTENTE_LOT: Duration = Duration::from_secs(10);
 
+/// Répit laissé à TWS pour prendre en compte les annulations d'un lot.
+///
+/// `cancel()` envoie le message ; la ligne se libère un peu plus tard. Enchaîner
+/// sans attendre fait souscrire le lot suivant pendant que le précédent compte
+/// encore, et le quota de cent est atteint dès le deuxième — en silence.
+pub const REPIT_APRES_ANNULATION: Duration = Duration::from_millis(1200);
+
 /// Ce qui empêche de collecter.
 #[derive(Debug)]
 pub enum ErreurIb {
@@ -380,13 +387,13 @@ impl Passerelle {
                 .streaming()
                 .subscribe()
                 .map_err(|e| ErreurIb::Requete(e.to_string()))?;
-            abonnements.push((c.con_id, abonnement));
+            abonnements.push((c.con_id, c.cle.sens, abonnement));
         }
 
         let limite = Instant::now() + attente;
         while Instant::now() < limite {
             let mut recu_ce_tour = false;
-            for (con_id, abonnement) in &abonnements {
+            for (con_id, sens, abonnement) in &abonnements {
                 while let Some(item) = abonnement.try_next() {
                     recu_ce_tour = true;
                     // Un avis ou une erreur sur UN contrat n'arrête pas le lot :
@@ -423,7 +430,7 @@ impl Passerelle {
                         .valeurs
                         .entry(*con_id)
                         .or_default()
-                        .absorber(&tick);
+                        .absorber(&tick, *sens);
                 }
             }
             if !recu_ce_tour {
@@ -434,8 +441,17 @@ impl Passerelle {
         // Annuler libère les lignes pour le lot suivant. Sans ça, le quota de
         // cent est atteint au deuxième lot et les souscriptions échouent — en
         // silence, ce qui est le pire des deux mondes.
-        for (_, abonnement) in abonnements {
+        let combien = abonnements.len();
+        for (_, _, abonnement) in abonnements {
             abonnement.cancel();
+        }
+
+        // Et l'annulation n'est pas instantanée : elle part, TWS la traite. Sans
+        // ce répit, le lot suivant souscrit pendant que les lignes du précédent
+        // comptent encore, et un balayage large échoue là où un balayage court
+        // passait — mesuré, quatre lots passaient et quatorze non.
+        if combien > 0 {
+            std::thread::sleep(REPIT_APRES_ANNULATION);
         }
         Ok(recolte)
     }
@@ -461,14 +477,25 @@ pub struct Valeurs {
 }
 
 impl Valeurs {
-    /// Absorbe un tick.
+    /// Absorbe un tick, connaissant le sens du contrat qui l'a servi.
     ///
     /// Les grecs arrivent par `OptionComputation`, l'open interest par les ticks
-    /// de taille 27 (call), 28 (put) et 86 (future). Les trois sont lus parce que
-    /// rien ne dit lequel IB retient pour une option SUR future — et se tromper
-    /// ne produirait pas une erreur mais un open interest absent, donc un GEX nul
-    /// sur les strikes concernés.
-    fn absorber(&mut self, tick: &TickTypes) {
+    /// de taille 27 (call), 28 (put) et 86 (future).
+    ///
+    /// Le sens est indispensable, et son absence a coûté cher : **IB envoie les
+    /// DEUX ticks pour chaque contrat**, celui qui ne le concerne pas à zéro, et
+    /// le pertinent en premier. Mesuré sur NQ 29200, le 26 août :
+    ///
+    /// ```text
+    /// contrat call : OptionCallOpenInterest = 53   puis OptionPutOpenInterest = 0
+    /// contrat put  : OptionCallOpenInterest = 0    puis OptionPutOpenInterest = 92
+    /// ```
+    ///
+    /// Retenir le dernier arrivé mettait donc **tous** les calls à zéro et
+    /// laissait les puts justes par hasard. Rien ne le signalait : une chaîne
+    /// sans aucun call open interest se lit comme un marché sans calls. Le GEX
+    /// total, le zero gamma et le call wall en sortaient faux.
+    fn absorber(&mut self, tick: &TickTypes, sens: Sens) {
         match tick {
             TickTypes::OptionComputation(c) => {
                 // SEULEMENT les grecs du modèle — tick 13 en temps réel, 83 en
@@ -495,13 +522,15 @@ impl Valeurs {
                 self.theta = signe(c.theta, f64::NEG_INFINITY).or(self.theta);
             }
             TickTypes::Size(s) => {
-                if matches!(
-                    s.tick_type,
-                    TickType::OptionCallOpenInterest
-                        | TickType::OptionPutOpenInterest
-                        | TickType::FuturesOpenInterest
-                        | TickType::OpenInterest
-                ) {
+                // Seul le tick du bon côté compte. Les deux autres codes ne sont
+                // pas ambigus et se prennent tels quels.
+                let pour_nous = match s.tick_type {
+                    TickType::OptionCallOpenInterest => sens == Sens::Call,
+                    TickType::OptionPutOpenInterest => sens == Sens::Put,
+                    TickType::FuturesOpenInterest | TickType::OpenInterest => true,
+                    _ => false,
+                };
+                if pour_nous {
                     self.open_interest = Some(s.size);
                 }
             }
@@ -560,6 +589,44 @@ mod tests {
         assert_eq!(TICKS_GENERIQUES, ["101", "588"]);
     }
 
+    /// La séquence réelle d'IB, relevée sur NQ 29200 le 26 août : les deux ticks
+    /// arrivent pour chaque contrat, le non pertinent à zéro, EN DERNIER.
+    ///
+    /// Sans le sens, ce zéro écrasait la vraie valeur. La chaîne n'avait alors
+    /// plus un seul call open interest, et rien ne le disait — un GEX entièrement
+    /// négatif se lit comme un marché chargé en puts.
+    #[test]
+    fn le_zero_de_l_autre_cote_n_ecrase_pas_l_open_interest() {
+        let taille = |tick_type, size| {
+            TickTypes::Size(ibapi::market_data::realtime::TickSize { tick_type, size })
+        };
+
+        let mut call = Valeurs::default();
+        call.absorber(&taille(TickType::OptionCallOpenInterest, 53.0), Sens::Call);
+        call.absorber(&taille(TickType::OptionPutOpenInterest, 0.0), Sens::Call);
+        assert_eq!(call.open_interest, Some(53.0));
+
+        let mut put = Valeurs::default();
+        put.absorber(&taille(TickType::OptionCallOpenInterest, 0.0), Sens::Put);
+        put.absorber(&taille(TickType::OptionPutOpenInterest, 92.0), Sens::Put);
+        assert_eq!(put.open_interest, Some(92.0));
+    }
+
+    /// Un open interest réellement nul doit rester nul : filtrer les zéros aurait
+    /// « corrigé » le symptôme en inventant une donnée sur les strikes morts.
+    #[test]
+    fn un_open_interest_vraiment_nul_est_retenu() {
+        let mut v = Valeurs::default();
+        v.absorber(
+            &TickTypes::Size(ibapi::market_data::realtime::TickSize {
+                tick_type: TickType::OptionCallOpenInterest,
+                size: 0.0,
+            }),
+            Sens::Call,
+        );
+        assert_eq!(v.open_interest, Some(0.0));
+    }
+
     #[test]
     fn le_sens_se_lit_sur_le_droit() {
         assert_eq!(sens_de(Some(OptionRight::Call)), Some(Sens::Call));
@@ -577,7 +644,7 @@ mod tests {
             ..Default::default()
         };
         let vide = ibapi::contracts::OptionComputation::default();
-        v.absorber(&TickTypes::OptionComputation(vide));
+        v.absorber(&TickTypes::OptionComputation(vide), Sens::Call);
         assert_eq!(v.gamma, Some(0.0004));
         assert_eq!(v.iv, Some(0.18));
     }

@@ -32,16 +32,16 @@ et dans quel sens.
 ## Ce que ça donne
 
 ```
-NQ | sous-jacent 29,305.75 | 142 strikes / 3 échéances (<= 30j) | 2026-08-25 20:30
+NQ | sous-jacent 29,164.75 | 210 strikes / 3 échéances (<= 3j) | 2026-08-26 13:14
    | contrat x20 | gamma iv | T heures | vol sticky-strike
-Total GEX  : -357.42 millions $ / mouvement de 1%
-Zero Gamma : n/a
-Call Wall  :          n/a (gamma)            n/a (open interest)
-Put Wall   :    29,200.00 (gamma)      28,750.00 (open interest)
-Charm      : -15.93 millions $ de delta / jour
-Vanna      : +3.18 millions $ de delta / point de vol
+Total GEX  : -326.74 millions $ / mouvement de 1%
+Zero Gamma : 29,275.48
+Call Wall  :    29,800.00 (gamma)      29,800.00 (open interest)
+Put Wall   :    29,000.00 (gamma)      28,500.00 (open interest)
+Charm      : -713.89 millions $ de delta / jour
+Vanna      : +40.01 millions $ de delta / point de vol
 
-Attention : les échéances à 0-1 jour portent 40% du GEX, 3% du charm. Leurs greeks
+Attention : les échéances à 0-1 jour portent 76% du GEX, 84% du charm. Leurs greeks
 sont instables sur des données différées — compare avec --dte-min 2 avant de conclure.
 ```
 
@@ -57,12 +57,13 @@ git clone https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level
 cargo build --release --manifest-path options-rs/Cargo.toml
 ```
 
-Deux binaires en sortent, et ils tournent dans deux terminaux :
+Trois binaires en sortent. Le premier acquiert, les deux autres lisent :
 
 ```sh
 gex-collector NQ       # acquiert : balaie la chaîne, entretient un relevé sur disque
 gex NQ                 # lit : un rapport de séance
 gex NQ --watch 30s     # relu toutes les 30 secondes
+gex-web NQ             # lit : l'écran de séance, sur http://127.0.0.1:8787
 ```
 
 Le collecteur exige **TWS ou IB Gateway** en fonctionnement, avec l'API activée. Le mode
@@ -90,6 +91,31 @@ approche, si. Elles sont bornées à trente jours glissants.
 > rien** plutôt qu'un point à zéro. Une ligne plate se lirait comme « le gamma est nul »
 > là où la donnée dit « je ne cote pas ». Les barres, elles, continuent : le future se
 > traite la nuit.
+
+## L'écran de séance
+
+```sh
+gex-web NQ
+```
+
+Sept nombres dans un terminal sont exacts et illisibles d'un coup d'œil : un zero gamma à
+29 275 ne dit rien tant qu'on ne voit pas où le prix se tient par rapport à lui, ni depuis
+quand il dérive. L'écran met les niveaux **sur** le prix.
+
+Trois zones : les chandeliers au centre, avec le zero gamma et les murs par-dessus ; le
+GEX par strike à droite, en barres alignées sur l'axe des prix ; les totaux — GEX, charm,
+vanna — en bas, sur le même axe temporel.
+
+Il **ne calcule rien** : il lit les trois fichiers du collecteur et les traduit. Refaire
+l'analyse à chaque requête dupliquerait le moteur dans un second chemin, et deux chemins
+finissent par diverger — l'écran montrerait alors autre chose que le lecteur.
+
+Il n'écoute que sur `127.0.0.1` : ces relevés sont à toi. La bibliothèque de graphiques
+est servie depuis le disque, pas depuis un CDN, pour que l'écran marche sans réseau.
+
+> L'horodatage du dernier relevé est affiché **en permanence**, et vieillit visiblement
+> quand le collecteur s'arrête. Un écran qui a l'air vivant alors qu'il est figé est pire
+> qu'un écran vide.
 
 ## Les choix qui changent le chiffre
 

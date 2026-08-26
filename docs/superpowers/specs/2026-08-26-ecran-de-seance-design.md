@@ -1,0 +1,134 @@
+# L'écran de séance
+
+Conception, 26 août 2026.
+
+## Ce qu'on cherche
+
+Voir les niveaux sur le prix. Le lecteur rend aujourd'hui sept nombres et trois
+avertissements ; c'est exact et illisible d'un coup d'œil. Un zero gamma à 29 391
+ne dit rien tant qu'on ne voit pas où le prix se trouve par rapport à lui, ni
+depuis quand il dérive.
+
+## Ce qui existe déjà, et qu'il suffit de lire
+
+Le collecteur écrit trois fichiers, et l'écran n'aura besoin de rien d'autre :
+
+| | |
+|---|---|
+| `barres.parquet` | les chandeliers d'une minute, trente jours glissants |
+| `niveaux.parquet` | zero gamma, murs, GEX, charm, vanna — un point par minute |
+| `courant.parquet` | la chaîne complète à l'instant présent |
+
+Les deux premiers partagent le même axe de temps, à la minute. C'était le point
+de la conception des séries, et c'est ce qui permet de superposer sans aligner
+quoi que ce soit.
+
+## Les décisions, et pourquoi
+
+### Un serveur local, pas un fichier ouvert dans le navigateur
+
+Une page ouverte en `file://` ne peut pas lire un parquet sur disque : le
+navigateur l'interdit, et il faudrait de toute façon un décodeur parquet en
+JavaScript. Un petit serveur lit les fichiers, les rend en JSON, et sert la page.
+
+C'est aussi ce qui permet le rafraîchissement : la page redemande les données
+toutes les quelques secondes, sans que rien ne surveille le disque.
+
+**Le serveur ne calcule rien.** Il lit ce que le collecteur a écrit et le
+convertit. Refaire l'analyse à chaque requête HTTP dupliquerait `gex-core` dans un
+second chemin — deux chemins qui finiraient par diverger, et l'écran montrerait
+alors autre chose que le lecteur.
+
+### Le graphique : une bibliothèque, pas du dessin à la main
+
+Des chandeliers avec panoramique, zoom, curseur et échelles se comptent en
+milliers de lignes. `lightweight-charts` — la bibliothèque de TradingView,
+Apache 2.0 — les fait, pèse une quarantaine de kilo-octets, et donne exactement
+le rendu et les interactions attendus.
+
+Elle est **servie depuis le disque**, pas depuis un CDN : l'écran doit fonctionner
+sans réseau, comme le reste du dépôt. C'est une dépendance de plus, assumée : la
+seule alternative honnête serait de redessiner des chandeliers, et ce n'est pas le
+sujet du projet.
+
+### Ce que l'écran montre, et dans quel ordre
+
+Trois zones, du plus important au moins.
+
+**Le prix, au centre.** Les chandeliers, et par-dessus :
+
+- le **zero gamma** en ligne, avec sa trace des dernières heures — c'est sa dérive
+  qui porte l'information, pas sa valeur ;
+- les **murs** en lignes horizontales, call au-dessus, put en dessous ;
+- le **régime** en teinte de fond : au-dessus du zero gamma la couverture amortit,
+  en dessous elle amplifie.
+
+**Le profil par strike, à droite**, en barres horizontales alignées sur l'axe des
+prix. C'est ce qui montre *à quelle hauteur* le gamma se concentre, et pourquoi un
+mur est là où il est. Il vient de `courant.parquet` et ne concerne que l'instant
+présent — un profil passé n'aurait aucun sens, le book ayant changé.
+
+**Les totaux, en bas** : GEX, charm et vanna en séries temporelles, sur le même axe
+que le prix.
+
+### Ce que l'écran ne fera pas
+
+**Pas de rejeu.** Le curseur se promène sur les trente jours de séries, mais le
+profil par strike reste celui de maintenant. Reconstituer un profil passé
+demanderait d'archiver la chaîne entière chaque minute, ce que la conception des
+séries a explicitement écarté.
+
+**Pas de réglages.** L'horizon, la source de gamma et la convention de temps sont
+des décisions qui changent le chiffre, et elles appartiennent à la ligne de
+commande où elles sont explicites. Un menu déroulant les rendrait invisibles dans
+une capture d'écran.
+
+**Rien en silence.** Le différé de quinze minutes est écrit à l'écran, pas
+supposé connu. Un relevé qui date, une série vide parce que le marché ne cote pas,
+un collecteur arrêté : tout cela se dit.
+
+## Architecture
+
+Une crate de plus, et rien qui bouge ailleurs.
+
+```
+options-rs/crates/
+  gex-web/
+    src/main.rs      le serveur : trois routes, aucun calcul
+    static/          la page, son style, et lightweight-charts
+```
+
+| Route | Rend |
+|---|---|
+| `/` | la page |
+| `/api/barres` | les chandeliers |
+| `/api/niveaux` | la série des niveaux |
+| `/api/profil` | le GEX par strike de l'instant présent |
+
+`gex-core` ne bouge pas. `gex-store` gagne au plus une fonction de lecture si le
+profil par strike n'est pas déjà exposé.
+
+## Risques
+
+**1. Le différé rend l'écran trompeur.** Quinze minutes de retard sur un écran qui
+ressemble à du temps réel est le piège le plus sérieux. L'horodatage du dernier
+relevé est donc affiché **en permanence**, et vieillit visiblement quand le
+collecteur s'arrête. Un écran qui a l'air vivant alors qu'il est figé est pire
+qu'un écran vide.
+
+**2. Le front n'a pas le filet des tests.** Le reste du dépôt est couvert ; une
+page HTML ne l'est pas au même degré. La parade est de garder le JavaScript mince —
+il traduit du JSON en séries et ne décide rien — et de mettre toute logique dans
+le serveur, où elle se teste.
+
+Vérifié à la livraison en faisant tourner la page dans un DOM contre le serveur
+vivant : les sept valeurs remplies, 210 barres de profil, le strike le plus proche
+du spot mis en évidence, aucune exception. Puis contre un dossier **sans relevé** :
+rien d'inventé, l'avertissement affiché avec la commande à lancer. L'outil de
+vérification n'entre pas dans le dépôt — il tirerait npm et jsdom dans un projet
+Rust, pour un fichier que la conception garde volontairement mince.
+
+**3. Une dépendance JavaScript vendorée.** Même question que pour `ibapi` : un
+fichier de quarante kilo-octets figé dans le dépôt, contre une page qui ne
+fonctionnerait pas hors ligne. Le choix va à l'autonomie, et le fichier est
+identifié par sa version et sa licence.

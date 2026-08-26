@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>GEX — écran de séance</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/lightweight-charts.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>NQ — gamma exposure</h1>
+  <div class="mesure"><span class="etiquette">spot</span><span class="valeur" id="spot">—</span></div>
+  <div class="mesure"><span class="etiquette">GEX</span><span class="valeur" id="gex">—</span></div>
+  <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
+  <div class="mesure"><span class="etiquette">call wall</span><span class="valeur" id="cw">—</span></div>
+  <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
+  <div class="fraicheur" id="fraicheur">—</div>
+</header>
+
+<div id="avertissement"></div>
+
+<main>
+  <section class="panneau" id="prix"><span class="titre">prix &amp; niveaux</span></section>
+  <section class="panneau" id="profil"><span class="titre">GEX par strike</span><div id="strikes"></div></section>
+  <section class="panneau" id="totaux"><span class="titre">GEX · charm · vanna</span></section>
+</main>
+
+<footer>
+  <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
+  <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
+  <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
+  <span>données différées d'environ 15 minutes — ce n'est pas du temps réel</span>
+</footer>
+
+<script>
+"use strict";
+
+// Ce fichier ne DÉCIDE rien : il traduit du JSON en séries et l'affiche. Toute
+// logique qui produirait un chiffre appartient au serveur, où elle se teste.
+
+const RAFRAICHISSEMENT = 15000;   // le collecteur réécrit toutes les 15 s
+const PERIME = 300;               // au-delà, le relevé est visiblement vieux
+
+const commun = {
+  layout: { background: { color: "#0e1117" }, textColor: "#7d8794", fontSize: 11 },
+  grid: { vertLines: { color: "#1a202b" }, horzLines: { color: "#1a202b" } },
+  rightPriceScale: { borderColor: "#232a36" },
+  timeScale: { borderColor: "#232a36", timeVisible: true, secondsVisible: false },
+  crosshair: { mode: 0 },
+  // La bibliothèque suit la taille du conteneur elle-même : la grille CSS
+  // décide, et un panneau qui change de largeur sans que la fenêtre bouge — la
+  // barre de défilement du profil — est pris en compte.
+  autoSize: true,
+};
+
+const gPrix = LightweightCharts.createChart(document.getElementById("prix"), commun);
+const chandeliers = gPrix.addCandlestickSeries({
+  upColor: "#26a69a", downColor: "#ef5350",
+  borderUpColor: "#26a69a", borderDownColor: "#ef5350",
+  wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+});
+// Le zero gamma en ligne, avec sa trace : c'est sa DÉRIVE qui porte
+// l'information, pas sa valeur à un instant.
+const ligneZg = gPrix.addLineSeries({ color: "#e0a458", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+const ligneCw = gPrix.addLineSeries({ color: "#26a69a", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+
+const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"), {
+  ...commun,
+  timeScale: { ...commun.timeScale, visible: false },
+});
+const sGex = gTotaux.addLineSeries({ color: "#e0a458", lineWidth: 2, priceLineVisible: false, title: "GEX" });
+const sCharm = gTotaux.addLineSeries({ color: "#6b8cae", lineWidth: 1, priceLineVisible: false, title: "charm" });
+const sVanna = gTotaux.addLineSeries({ color: "#9a7fb8", lineWidth: 1, priceLineVisible: false, title: "vanna" });
+
+// Les deux graphiques partagent le même axe : les séries sont à la minute des
+// deux côtés, c'est tout l'intérêt de les avoir écrites ainsi.
+for (const [source, cible] of [[gPrix, gTotaux], [gTotaux, gPrix]]) {
+  source.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
+    if (plage) cible.timeScale().setVisibleLogicalRange(plage);
+  });
+}
+
+const millions = (v) =>
+  v == null ? "—"
+  : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + " Md$"
+  : (v / 1e6).toFixed(1) + " M$";
+
+const prix = (v) => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+
+function ecrire(id, texte, valeur) {
+  const noeud = document.getElementById(id);
+  noeud.textContent = texte;
+  noeud.className = "valeur" + (valeur == null ? "" : valeur < 0 ? " negatif" : " positif");
+}
+
+async function json(route) {
+  const reponse = await fetch(route);
+  if (!reponse.ok) throw new Error(await reponse.text());
+  return reponse.json();
+}
+
+function tracerProfil(strikes, spot) {
+  const noeud = document.getElementById("strikes");
+  if (!strikes.length) { noeud.innerHTML = ""; return; }
+  // La barre la plus large donne l'échelle : un GEX absolu ne dit rien, sa
+  // taille relative aux autres strikes si.
+  const pic = Math.max(...strikes.map((s) => Math.abs(s.gex))) || 1;
+  const proche = strikes.reduce((a, b) =>
+    Math.abs(b.strike - spot) < Math.abs(a.strike - spot) ? b : a);
+
+  noeud.innerHTML = strikes
+    .slice()
+    .sort((a, b) => b.strike - a.strike)
+    .map((s) => {
+      const part = (Math.abs(s.gex) / pic) * 50;
+      const style = s.gex >= 0
+        ? `left:50%;width:${part}%`
+        : `left:${50 - part}%;width:${part}%`;
+      const classe = s.gex >= 0 ? "pos" : "neg";
+      const ici = s.strike === proche.strike ? " proche" : "";
+      return `<div class="strike${ici}"><span class="prix">${prix(s.strike)}</span>`
+           + `<span class="barre"><span class="${classe}" style="${style}"></span></span></div>`;
+    })
+    .join("");
+}
+
+function fraicheur(etat) {
+  const noeud = document.getElementById("fraicheur");
+  if (!etat.releve) { noeud.textContent = "aucun relevé"; noeud.classList.add("perime"); return; }
+  const age = Math.round(Date.now() / 1000 - etat.releve);
+  const quand = new Date(etat.releve * 1000).toLocaleTimeString("fr-FR");
+  noeud.textContent = `relevé ${quand} · il y a ${age} s · ${etat.strikes} strikes`;
+  // Vieillir visiblement quand le collecteur s'arrête : sans ça, un écran figé
+  // se lit comme un marché calme.
+  noeud.classList.toggle("perime", age > PERIME);
+}
+
+function avertir(message) {
+  const noeud = document.getElementById("avertissement");
+  noeud.textContent = message || "";
+  noeud.classList.toggle("visible", Boolean(message));
+}
+
+let premierRendu = true;
+
+async function rafraichir() {
+  try {
+    const [barres, niveaux, profil] = await Promise.all([
+      json("/api/barres"), json("/api/niveaux"), json("/api/profil"),
+    ]);
+
+    chandeliers.setData(barres);
+
+    // Une valeur absente ne se trace pas : relier deux points de part et
+    // d'autre d'un trou inventerait un niveau qui n'a jamais existé.
+    const serie = (champ) => niveaux
+      .filter((n) => n[champ] != null)
+      .map((n) => ({ time: n.time, value: n[champ] }));
+
+    ligneZg.setData(serie("zero_gamma"));
+    ligneCw.setData(serie("call_wall"));
+    lignePw.setData(serie("put_wall"));
+    sGex.setData(serie("gex"));
+    sCharm.setData(serie("charm"));
+    sVanna.setData(serie("vanna"));
+
+    const dernier = niveaux.at(-1);
+    const spot = profil.etat.spot ?? dernier?.spot;
+    ecrire("spot", prix(spot));
+    ecrire("gex", millions(dernier?.gex), dernier?.gex);
+    ecrire("zg", prix(dernier?.zero_gamma));
+    ecrire("cw", prix(dernier?.call_wall));
+    ecrire("pw", prix(dernier?.put_wall));
+
+    tracerProfil(profil.strikes, spot ?? 0);
+    fraicheur(profil.etat);
+    avertir(profil.etat.avertissement);
+
+    if (premierRendu && barres.length) { gPrix.timeScale().fitContent(); premierRendu = false; }
+  } catch (err) {
+    avertir("Le serveur ne répond pas : " + err.message);
+  }
+}
+
+rafraichir();
+setInterval(rafraichir, RAFRAICHISSEMENT);
+</script>
+</body>
+</html>

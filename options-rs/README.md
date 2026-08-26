@@ -17,6 +17,7 @@ options-rs/
     gex-cli/        le lecteur, binaire `gex`
     gex-ib/         la source : décisions de collecte + réseau TWS
     gex-collector/  le démon : binaire `gex-collector`
+    gex-web/        l'écran : binaire `gex-web`, sert le disque en JSON  ← AUCUN CALCUL
   fixtures/         l'oracle : un relevé IB réel et ses résultats Python
 ```
 
@@ -89,6 +90,7 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | démon | `ib_collector.py` | ✅ `gex-collector` |
 | validation du modèle | `validate.py` | ✅ `gex-store::validation` |
 | graphiques | `plots.py` | ❌ abandonnés, volontairement |
+| écran de séance | — | ✅ `gex-web`, sans équivalent Python |
 
 ### Ce que le collecteur écrit
 

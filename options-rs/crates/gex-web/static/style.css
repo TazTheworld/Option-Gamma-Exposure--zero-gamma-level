@@ -1,0 +1,141 @@
+/* L'écran de séance. Sombre, parce qu'on le regarde longtemps. */
+
+:root {
+  --fond: #0e1117;
+  --fond-panneau: #151a23;
+  --bordure: #232a36;
+  --texte: #d4dae3;
+  --texte-faible: #7d8794;
+  --hausse: #26a69a;
+  --baisse: #ef5350;
+  --call: #26a69a;
+  --put: #ef5350;
+  --accent: #e0a458;
+  --alerte: #d97757;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--fond);
+  color: var(--texte);
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1.25rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--bordure);
+  background: var(--fond-panneau);
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.mesure { display: flex; gap: 0.4rem; align-items: baseline; }
+.mesure .etiquette { color: var(--texte-faible); font-size: 0.75rem; }
+.mesure .valeur { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.negatif { color: var(--baisse); }
+.positif { color: var(--hausse); }
+
+/* Le différé et la fraîcheur du relevé : affichés en permanence, parce qu'un
+   écran qui a l'air vivant alors qu'il est figé est pire qu'un écran vide. */
+.fraicheur {
+  margin-left: auto;
+  color: var(--texte-faible);
+  font-size: 0.75rem;
+  text-align: right;
+}
+.fraicheur.perime { color: var(--alerte); }
+
+#avertissement {
+  display: none;
+  padding: 0.5rem 1rem;
+  background: rgba(217, 119, 87, 0.12);
+  border-bottom: 1px solid var(--alerte);
+  color: var(--alerte);
+  font-size: 0.8rem;
+}
+#avertissement.visible { display: block; }
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  grid-template-rows: 1fr 170px;
+  gap: 1px;
+  background: var(--bordure);
+  min-height: 0;
+}
+
+.panneau {
+  background: var(--fond);
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panneau .titre {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.75rem;
+  z-index: 3;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--texte-faible);
+  pointer-events: none;
+}
+
+#prix { grid-row: 1; grid-column: 1; }
+#profil { grid-row: 1 / 3; grid-column: 2; overflow-y: auto; padding: 2rem 0.75rem 1rem; }
+#totaux { grid-row: 2; grid-column: 1; }
+
+/* Le profil par strike : des barres horizontales alignées sur les prix, pour
+   voir A QUELLE HAUTEUR le gamma se concentre. */
+.strike {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  align-items: center;
+  gap: 0.4rem;
+  height: 15px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.strike .prix { color: var(--texte-faible); text-align: right; }
+.strike.proche .prix { color: var(--texte); font-weight: 600; }
+
+.barre { height: 9px; position: relative; }
+.barre span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  border-radius: 1px;
+}
+.barre span.pos { background: var(--call); }
+.barre span.neg { background: var(--put); }
+
+footer {
+  padding: 0.35rem 1rem;
+  border-top: 1px solid var(--bordure);
+  background: var(--fond-panneau);
+  color: var(--texte-faible);
+  font-size: 0.7rem;
+  display: flex;
+  gap: 1.25rem;
+}
+
+.legende { display: flex; align-items: center; gap: 0.3rem; }
+.pastille { width: 9px; height: 2px; display: inline-block; }
