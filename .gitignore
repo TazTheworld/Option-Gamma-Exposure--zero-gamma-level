@@ -1,30 +1,13 @@
-# Environnements virtuels
-venv/
-.env/
+# Artefacts de compilation Rust : plusieurs centaines de Mo, regenerables.
+target/
 
-# Fichiers compilés Python
-*.pyc
-__pycache__/
-*.egg-info/
-.pytest_cache/
-
-# Graphiques générés
-charts/
-
-# Configurations d'éditeur
+# Configurations d'editeur
 .vscode/
 .idea/
 
-# Environnements virtuels
-node_modules/
-.node_modules/
-
-# Historique des relevés (local)
+# Historique des releves : une base locale, pas du code.
 history.csv
 
-# Chaînes brutes archivées : quelques centaines de Ko par séance et par
-# sous-jacent, c'est une base de données locale, pas du code.
+# Ce que le collecteur ecrit — releve courant, barres, niveaux. Quelques
+# centaines de Ko par seance et par sous-jacent.
 snapshots/
-
-# Flux collecté par flow_tracker
-flux_*.csv

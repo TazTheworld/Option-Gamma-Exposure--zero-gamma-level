@@ -189,13 +189,11 @@ ordre n'est passé nulle part.
 
 ## Sous le capot
 
-**Rust** (`options-rs/`), collecteur compris, en cinq crates. La discipline y est
-structurelle plutôt que conventionnelle : la crate qui produit les chiffres ne déclare
-aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire l'horloge — un
-calcul qui dépendrait de l'heure courante ne compile pas.
-
-`sec_data.py` lit les déclarations d'initiés auprès de la SEC, en Python, et n'a pas de
-rapport avec les options.
+**Rust de bout en bout**, collecteur compris, en cinq crates. Aucune autre dépendance :
+ni Python, ni environnement virtuel, ni paquet à installer. La discipline y est
+structurelle plutôt que conventionnelle — la crate qui produit les chiffres ne déclare
+aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire l'horloge, et
+un calcul qui dépendrait de l'heure courante ne compile pas.
 
 L'architecture, les conventions, les tests et les pièges d'Interactive Brokers sont dans
 [`AGENTS.md`](AGENTS.md) et [`options-rs/README.md`](options-rs/README.md).

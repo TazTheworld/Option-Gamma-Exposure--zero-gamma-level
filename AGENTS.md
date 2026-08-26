@@ -13,17 +13,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --release                 # gex et gex-collector dans target/release/
 ```
 
-Le seul Python restant est `sec_data.py`, la lecture des déclarations d'initiés
-SEC, qui n'a jamais eu de rapport avec les options et attend son propre dossier :
+**Il n'y a rien d'autre à installer.** Ni Python, ni environnement virtuel, ni
+paquet : `cargo` suffit, et la chaîne complète — collecte, calcul, lecture — tient
+dans les cinq crates.
 
-```sh
-venv\Scripts\activate                 # Windows
-pip install -r requirements.txt       # pandas, requests, rien d'autre
-python -m pytest tests -q
-```
-
-**Ne jamais régénérer `requirements.txt` avec `pip freeze`.** Le moteur d'options
-n'a plus aucune dépendance Python.
+Les déclarations d'initiés, qui vivaient ici, sont parties dans leur propre dépôt
+(`insiders`) : elles ne partageaient aucun code avec le gamma exposure, et les
+garder ensemble obligeait à lire deux README pour comprendre l'un ou l'autre.
 
 ## Langue
 
@@ -257,7 +253,6 @@ toujours, les noms de fichiers non.
 - **L'interface**, qui lira les trois fichiers et ne touchera ni à IB ni au calcul.
   Elle aura son propre document de conception : mélanger le stockage et le rendu
   reviendrait à façonner l'un d'après l'autre.
-- **`sec_data.py` dans son propre dossier**, avec ses tests.
 - **Le contexte de séance** — OHLCV, iv30, le ratio GEX/volume — a disparu avec le
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà
