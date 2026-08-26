@@ -1,11 +1,25 @@
-"""Transactions d'initiés, depuis les formulaires 4 déposés à la SEC.
+"""Déclarations d'initiés, depuis les formulaires 4 déposés à la SEC.
 
 Aucune source privée : dirigeants, administrateurs et détenteurs de plus de 10 %
 sont tenus de déclarer leurs opérations dans les deux jours ouvrés. Les dépôts
 sont publics, structurés en XML, et servis par EDGAR sans clé ni compte.
 
-    python sec_data.py              # les derniers dépôts, tous codes
-    python sec_data.py --achats     # seulement les achats sur le marché ouvert
+    python sec_data.py                      # aperçu des derniers dépôts
+    python sec_data.py --csv initiés.csv    # les 45 colonnes
+    python sec_data.py --achats             # les achats sur le marché ouvert
+    python sec_data.py --transactions       # sans les positions détenues
+
+TOUT EST EXTRAIT
+
+Les quatre tables du formulaire sont lues — transactions et détentions, sur
+actions et sur dérivés — avec les champs annexes : identité et adresse du
+déclarant, détention directe ou indirecte et par quel intermédiaire, ponctualité
+du dépôt, prix d'exercice et échéance des options, notes de bas de page,
+remarques, signature.
+
+Le tri se fait APRÈS, par les colonnes `nature`, `categorie` et `evenement`. Un
+filtre à la lecture se change ; une donnée jamais extraite demande de tout
+redemander à EDGAR.
 
 CE QUI PORTE UN SIGNAL, ET CE QUI N'EN PORTE PAS
 
@@ -21,7 +35,9 @@ LIMITES
   - deux jours ouvrés de délai réglementaire : ce n'est jamais du temps réel ;
   - un plan 10b5-1 signalé retire tout caractère décisionnel à une opération, et
     le drapeau n'est pas toujours renseigné ;
-  - la SEC demande un User-Agent identifiant avec un contact, et limite le débit.
+  - les montants ne s'additionnent qu'entre actions : le « prix » d'un dérivé est
+    celui de l'option, pas du titre sous-jacent ;
+  - la SEC limite le débit et exige un contact joignable dans le User-Agent.
 """
 
 import argparse
@@ -41,18 +57,24 @@ TICKERS = "https://www.sec.gov/files/company_tickers.json"
 VARIABLE_UA = "SEC_USER_AGENT"
 
 
+# Contact déclaré à la SEC. Elle l'exige — un User-Agent sans adresse joignable
+# renvoie 403 — et s'en sert pour prévenir avant de bloquer un client trop
+# gourmand. Ce doit donc être une adresse réellement relevée.
+CONTACT_DEFAUT = "Taz broissartdylan0@gmail.com"
+
+
 def user_agent():
-    """User-Agent déclaré à la SEC, ou une erreur qui dit quoi faire."""
+    """User-Agent déclaré à la SEC.
+
+    La variable d'environnement l'emporte, pour qu'un autre utilisateur du dépôt
+    déclare son propre contact sans toucher au code. Sans elle, celui du dépôt
+    sert : refuser de partir faute de configuration ferait échouer un script qui
+    a tout ce qu'il lui faut.
+    """
     import os
 
     valeur = os.environ.get(VARIABLE_UA, "").strip()
-    if "@" not in valeur:
-        raise ValueError(
-            f"La SEC exige un contact dans le User-Agent, sinon elle renvoie 403.\n"
-            f"  export {VARIABLE_UA}=\"Ton Nom ton.adresse@exemple.fr\"\n"
-            f"Mets une adresse que tu relèves : c'est par là qu'ils préviennent "
-            f"avant de bloquer.")
-    return valeur
+    return valeur if "@" in valeur else CONTACT_DEFAUT
 
 # (libellé, nature). La nature est ce qui décide de la lecture : seules les
 # opérations « décision » engagent un choix de l'initié.
@@ -107,30 +129,159 @@ def _nombre(noeud, chemin):
         return None
 
 
-def _role(relation):
-    """Rôle du déclarant, du plus significatif au moins."""
+def _drapeaux(relation):
+    """Les quatre qualités déclarées, telles quelles.
+
+    Un initié peut être plusieurs choses à la fois — administrateur ET détenteur
+    de plus de 10 %, par exemple. Les réduire à un seul rôle perd de
+    l'information : les drapeaux bruts vivent donc À CÔTÉ du rôle résumé, et ce
+    sont eux qu'on filtre.
+    """
     if relation is None:
-        return "non précisé"
-    titre = _texte(relation, "officerTitle")
-    drapeaux = {c: _texte(relation, c) in ("1", "true") for c in
-                ("isOfficer", "isDirector", "isTenPercentOwner", "isOther")}
-    if drapeaux["isOfficer"] and titre:
-        return titre
-    if drapeaux["isOfficer"]:
+        return {"dirigeant": False, "administrateur": False,
+                "detenteur_10pct": False, "autre": False, "titre_officier": None}
+
+    def vrai(champ):
+        return _texte(relation, champ) in ("1", "true")
+
+    return {
+        "dirigeant": vrai("isOfficer"),
+        "administrateur": vrai("isDirector"),
+        "detenteur_10pct": vrai("isTenPercentOwner"),
+        "autre": vrai("isOther"),
+        "titre_officier": _texte(relation, "officerTitle") or _texte(relation, "otherText"),
+    }
+
+
+def _role(relation):
+    """Rôle du déclarant, du plus significatif au moins.
+
+    Un résumé lisible, pas une donnée : quand un initié cumule les qualités,
+    celle-ci en choisit une seule. Pour trier, il faut les colonnes `est_*`.
+    """
+    d = _drapeaux(relation)
+    if d["dirigeant"] and d["titre_officier"]:
+        return d["titre_officier"]
+    if d["dirigeant"]:
         return "dirigeant"
-    if drapeaux["isTenPercentOwner"]:
+    if d["detenteur_10pct"]:
         return "détenteur > 10 %"
-    if drapeaux["isDirector"]:
+    if d["administrateur"]:
         return "administrateur"
+    if d["autre"]:
+        return d["titre_officier"] or "autre"
     return "non précisé"
 
 
-def parser_formulaire4(xml_texte, source=None):
-    """Un formulaire 4 -> une ligne par transaction sur titres non dérivés.
+def _valeur(noeud, chemin):
+    """La valeur d'un champ, qu'il soit enveloppé dans `value` ou non.
 
-    Les tables dérivées (options, bons) sont écartées : elles mélangent des
-    attributions et des exercices dont la valeur en dollars n'est pas comparable
-    à un achat d'actions, et les additionner produirait des totaux faux.
+    Le schéma enveloppe la plupart des champs, mais pas tous, et pas dans toutes
+    ses versions. Chercher les deux évite de perdre un champ selon l'âge du dépôt.
+    """
+    return _texte(noeud, chemin + "/value") or _texte(noeud, chemin)
+
+
+def _forme_de_detention(noeud):
+    """Directe ou indirecte, et par quel intermédiaire.
+
+    « D » se lit en son nom propre, « I » par un trust, un conjoint, une société.
+    L'intermédiaire est en clair dans `natureOfOwnership`, et c'est souvent la
+    seule chose qui distingue deux lignes autrement identiques.
+    """
+    forme = _valeur(noeud, ".//directOrIndirectOwnership")
+    return {
+        "detention": {"D": "directe", "I": "indirecte"}.get(forme, forme),
+        "nature_detention": _valeur(noeud, ".//natureOfOwnership"),
+    }
+
+
+def _ponctualite(code):
+    """La déclaration a-t-elle été faite dans les temps ?
+
+    Deux jours ouvrés, c'est la règle. Un dépôt tardif est une information en
+    soi — et le formulaire ne le dit que lorsqu'il l'est : la case vide signifie
+    « dans les délais », pas « non renseigné ».
+    """
+    return {"E": "anticipée", "L": "tardive"}.get(code, "dans les délais")
+
+
+def _lignes_d_une_table(racine, balise, categorie, evenement, commun):
+    """Toutes les lignes d'une table du formulaire.
+
+    Les quatre tables — transactions et détentions, sur actions et sur dérivés —
+    ont la même ossature. Les traiter séparément dupliquerait vingt extractions
+    identiques et laisserait les quatre diverger au premier champ ajouté.
+    """
+    lignes = []
+    for noeud in racine.findall(".//" + balise):
+        code = _valeur(noeud, ".//transactionCoding/transactionCode")
+        libelle, nature = decrire_code(code) if code else ("détention", "detention")
+        titres = _nombre(noeud, ".//transactionShares/value")
+        prix = _nombre(noeud, ".//transactionPricePerShare/value")
+        sens = _valeur(noeud, ".//transactionAcquiredDisposedCode")
+
+        ligne = dict(commun)
+        ligne.update({
+            "categorie": categorie,
+            "evenement": evenement,
+            # Une détention n'a pas de date propre : elle vaut à la date du
+            # rapport, et laisser la case vide la ferait disparaître de tout tri
+            # chronologique.
+            "date": _valeur(noeud, ".//transactionDate") or commun.get("periode"),
+            "code": code,
+            "operation": libelle,
+            "nature": nature,
+            # A = acquis, D = cédé. Le signe rend les totaux additionnables ; une
+            # détention ne déplace rien, donc zéro.
+            "sens": 1 if sens == "A" else (-1 if sens == "D" else 0),
+            "titres": titres,
+            "prix": prix,
+            "montant": (titres or 0) * (prix or 0),
+            "titre": _valeur(noeud, ".//securityTitle"),
+            "detenu_apres": _nombre(noeud, ".//sharesOwnedFollowingTransaction/value"),
+            # Certains dérivés déclarent une valeur en dollars plutôt qu'un nombre
+            # de titres : l'ignorer ferait passer la position pour nulle.
+            "valeur_detenue_apres": _nombre(noeud, ".//valueOwnedFollowingTransaction/value"),
+            "date_execution_reputee": _valeur(noeud, ".//deemedExecutionDate"),
+            "ponctualite": _ponctualite(_valeur(noeud, ".//transactionTimeliness")),
+            "swap_actions": _valeur(noeud, ".//equitySwapInvolved") in ("1", "true"),
+        })
+        ligne.update(_forme_de_detention(noeud))
+
+        if categorie == "derive":
+            # Ce qui n'existe que sur un dérivé, et qui décide de ce qu'il vaut :
+            # à quel prix il se convertit, quand il devient exerçable, et sur
+            # combien de titres il porte.
+            ligne.update({
+                "prix_exercice": _nombre(noeud, ".//conversionOrExercisePrice/value"),
+                "date_exercice": _valeur(noeud, ".//exerciseDate"),
+                "date_expiration": _valeur(noeud, ".//expirationDate"),
+                "sous_jacent": _valeur(noeud, ".//underlyingSecurityTitle"),
+                "titres_sous_jacent": _nombre(noeud, ".//underlyingSecurityShares/value"),
+                "valeur_sous_jacent": _nombre(noeud, ".//underlyingSecurityValue/value"),
+            })
+        lignes.append(ligne)
+    return lignes
+
+
+# Les quatre tables d'un formulaire 4, et ce qu'elles décrivent.
+TABLES = [
+    ("nonDerivativeTransaction", "action", "transaction"),
+    ("nonDerivativeHolding", "action", "detention"),
+    ("derivativeTransaction", "derive", "transaction"),
+    ("derivativeHolding", "derive", "detention"),
+]
+
+
+def parser_formulaire4(xml_texte, source=None):
+    """Un formulaire 4 -> une ligne par événement déclaré.
+
+    **Tout est extrait**, y compris ce qui ne relève d'aucune décision
+    d'investissement : les attributions, les exercices mécaniques, les dérivés et
+    les positions simplement détenues. Le tri se fait après, par les colonnes
+    `nature`, `categorie` et `evenement` — un filtre à la lecture se change, une
+    donnée jamais extraite est perdue.
 
     Fonction pure : elle prend le XML, pas une URL. C'est ce qui la rend testable
     sans toucher au réseau.
@@ -138,16 +289,12 @@ def parser_formulaire4(xml_texte, source=None):
     racine = ET.fromstring(xml_texte)
     emetteur = racine.find(".//issuer")
     proprietaire = racine.find(".//reportingOwner")
+    relation = racine.find(".//reportingOwnerRelationship")
+    adresse = racine.find(".//reportingOwnerAddress")
+    drapeaux = _drapeaux(relation)
 
-    commun = {
-        "societe": _texte(emetteur, "issuerName"),
-        "ticker": (_texte(emetteur, "issuerTradingSymbol") or "").upper() or None,
-        "cik_emetteur": _texte(emetteur, "issuerCik"),
-        "declarant": _texte(proprietaire, ".//rptOwnerName"),
-        "role": _role(racine.find(".//reportingOwnerRelationship")),
-        "periode": _texte(racine, "periodOfReport"),
-        "source": source,
-    }
+    notes = [(n.text or "").strip() for n in racine.iter("footnote")]
+    notes = [n for n in notes if n]
 
     # Le drapeau 10b5-1 a changé de nom selon les versions du schéma, et reste
     # parfois seulement mentionné en note de bas de page.
@@ -155,47 +302,82 @@ def parser_formulaire4(xml_texte, source=None):
         (n.text or "").strip() in ("1", "true")
         for n in racine.iter() if "10b5" in n.tag.lower())
     if not programme:
-        notes = " ".join((n.text or "") for n in racine.iter("footnote")).lower()
-        programme = "10b5-1" in notes
+        programme = "10b5-1" in " ".join(notes).lower()
+
+    commun = {
+        "societe": _texte(emetteur, "issuerName"),
+        "ticker": (_texte(emetteur, "issuerTradingSymbol") or "").upper() or None,
+        "cik_emetteur": _texte(emetteur, "issuerCik"),
+        "declarant": _texte(proprietaire, ".//rptOwnerName"),
+        "cik_declarant": _texte(proprietaire, ".//rptOwnerCik"),
+        "role": _role(relation),
+        "est_dirigeant": drapeaux["dirigeant"],
+        "est_administrateur": drapeaux["administrateur"],
+        "est_detenteur_10pct": drapeaux["detenteur_10pct"],
+        "est_autre": drapeaux["autre"],
+        "ville_declarant": _texte(adresse, "rptOwnerCity"),
+        "etat_declarant": _texte(adresse, "rptOwnerState"),
+        "periode": _texte(racine, "periodOfReport"),
+        "type_formulaire": _texte(racine, "documentType"),
+        # Un amendement corrige un dépôt antérieur : le confondre avec une
+        # opération neuve compterait deux fois la même transaction.
+        "amendement": _texte(racine, "dateOfOriginalSubmission") is not None,
+        "hors_section_16": _texte(racine, "notSubjectToSection16") in ("1", "true"),
+        "date_signature": _texte(racine, ".//signatureDate"),
+        "remarques": _texte(racine, "remarks"),
+        "notes": " | ".join(notes) or None,
+        "programme_10b5_1": programme,
+        "source": source,
+    }
 
     lignes = []
-    for tr in racine.findall(".//nonDerivativeTransaction"):
-        code = _texte(tr, ".//transactionCode")
-        titres = _nombre(tr, ".//transactionShares/value")
-        prix = _nombre(tr, ".//transactionPricePerShare/value")
-        sens = _texte(tr, ".//transactionAcquiredDisposedCode/value")
-        libelle, nature = decrire_code(code)
-        lignes.append({
-            **commun,
-            "date": _texte(tr, ".//transactionDate/value"),
-            "code": code,
-            "operation": libelle,
-            "nature": nature,
-            # A = acquis, D = cédé. Le signe rend les totaux additionnables.
-            "sens": 1 if sens == "A" else (-1 if sens == "D" else 0),
-            "titres": titres,
-            "prix": prix,
-            "montant": (titres or 0) * (prix or 0),
-            "detenu_apres": _nombre(tr, ".//sharesOwnedFollowingTransaction/value"),
-            "titre": _texte(tr, ".//securityTitle/value"),
-            "programme_10b5_1": programme,
-        })
+    for balise, categorie, evenement in TABLES:
+        lignes.extend(_lignes_d_une_table(racine, balise, categorie, evenement, commun))
     return lignes
 
 
-def en_trame(lignes):
-    """Lignes -> trame typée, la plus récente d'abord."""
-    colonnes = ["date", "ticker", "societe", "declarant", "role", "code", "operation",
-                "nature", "sens", "titres", "prix", "montant", "detenu_apres",
-                "programme_10b5_1", "periode", "cik_emetteur", "titre", "source"]
-    df = pd.DataFrame(lignes, columns=colonnes)
+# L'ordre d'affichage, et le contrat de la trame. Les colonnes propres aux
+# dérivés viennent en dernier : elles sont vides sur la plupart des lignes.
+COLONNES = [
+    "date", "ticker", "societe", "declarant", "role", "categorie", "evenement",
+    "code", "operation", "nature", "sens", "titres", "prix", "montant",
+    "detenu_apres", "valeur_detenue_apres", "detention", "nature_detention",
+    "programme_10b5_1", "ponctualite", "swap_actions", "titre",
+    "est_dirigeant", "est_administrateur", "est_detenteur_10pct", "est_autre",
+    "ville_declarant", "etat_declarant", "cik_emetteur", "cik_declarant",
+    "periode", "type_formulaire", "amendement", "hors_section_16",
+    "date_execution_reputee", "date_signature", "remarques", "notes",
+    "prix_exercice", "date_exercice", "date_expiration",
+    "sous_jacent", "titres_sous_jacent", "valeur_sous_jacent",
+    "source",
+]
+
+DATES = ("date", "date_execution_reputee", "date_exercice", "date_expiration",
+         "date_signature", "periode")
+
+NOMBRES = ("titres", "prix", "montant", "detenu_apres", "sens",
+           "valeur_detenue_apres", "prix_exercice", "titres_sous_jacent",
+           "valeur_sous_jacent")
+
+
+def en_trame(lignes, seulement_transactions=False):
+    """Lignes -> trame typée, la plus récente d'abord.
+
+    Les détentions sont **gardées par défaut** : une position détenue sans
+    mouvement dit ce que l'initié possède, ce qu'aucune transaction ne raconte.
+    Elles portent zéro titre échangé, donc `seulement_transactions` les écarte
+    quand on veut sommer des flux — sans quoi les moyennes seraient tirées vers
+    le bas par des lignes qui ne sont pas des opérations.
+    """
+    df = pd.DataFrame(lignes, columns=COLONNES)
     if df.empty:
         return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    for colonne in ("titres", "prix", "montant", "detenu_apres", "sens"):
+    for colonne in DATES:
+        df[colonne] = pd.to_datetime(df[colonne], errors="coerce")
+    for colonne in NOMBRES:
         df[colonne] = pd.to_numeric(df[colonne], errors="coerce")
-    # Une opération sans titres échangés n'est pas une transaction exploitable
-    df = df[df.titres.fillna(0) > 0]
+    if seulement_transactions:
+        df = df[(df.evenement == "transaction") & (df.titres.fillna(0) > 0)]
     return df.sort_values("date", ascending=False).reset_index(drop=True)
 
 
@@ -270,8 +452,13 @@ def _xml_du_depot(url_index, session):
     return None, dossier
 
 
-def fetch_insiders(nombre=40, session=None, seulement_achats=False):
-    """Derniers formulaires 4 -> trame de transactions.
+def fetch_insiders(nombre=40, session=None, seulement_achats=False,
+                   seulement_transactions=False):
+    """Derniers formulaires 4 -> trame de tout ce qui y est déclaré.
+
+    Tout est rendu par défaut : transactions et détentions, actions et dérivés,
+    décisions et attributions. Les deux filtres restreignent, ils n'ajoutent rien
+    — ce qui n'a pas été extrait ne se récupère pas sans redemander à EDGAR.
 
     Un dépôt illisible est ignoré plutôt que de faire échouer l'ensemble : EDGAR
     sert aussi de vieux formats et des dépôts corrigés.
@@ -286,8 +473,10 @@ def fetch_insiders(nombre=40, session=None, seulement_achats=False):
         except (requests.RequestException, ET.ParseError):
             continue
 
-    df = en_trame(lignes)
+    df = en_trame(lignes, seulement_transactions=seulement_transactions)
     if seulement_achats and not df.empty:
+        # L'achat sur le marché ouvert, hors plan programmé : le seul cas où
+        # l'initié engage son argent à un moment qu'il choisit.
         df = df[(df.code == "P") & (~df.programme_10b5_1)].reset_index(drop=True)
     return df
 
@@ -300,9 +489,15 @@ def resume_par_societe(df, minimum=1):
     """
     if df.empty:
         return df
-    achats = df[df.code == "P"]
-    ventes = df[df.code == "S"]
-    par = df.groupby(["ticker", "societe"], dropna=False).agg(
+    # Les montants ne s'additionnent qu'entre actions : le « prix » d'un dérivé
+    # est celui de l'option, pas du titre, et les mêler produirait des totaux
+    # qui ne veulent rien dire. Les détentions, elles, ne sont pas des flux.
+    flux = df[(df.categorie == "action") & (df.evenement == "transaction")]
+    if flux.empty:
+        return flux
+    achats = flux[flux.code == "P"]
+    ventes = flux[flux.code == "S"]
+    par = flux.groupby(["ticker", "societe"], dropna=False).agg(
         operations=("code", "size"),
         declarants=("declarant", "nunique"),
         derniere=("date", "max"),
@@ -318,22 +513,43 @@ def resume_par_societe(df, minimum=1):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Transactions d'initiés (formulaires 4 SEC)")
+    p = argparse.ArgumentParser(
+        description="Déclarations d'initiés (formulaires 4 SEC) — tout ce qui y figure")
     p.add_argument("--nombre", type=int, default=40, help="dépôts à lire (défaut : 40)")
     p.add_argument("--achats", action="store_true",
                    help="ne garder que les achats sur le marché ouvert hors plan 10b5-1")
+    p.add_argument("--transactions", action="store_true",
+                   help="écarter les positions simplement détenues")
+    p.add_argument("--csv", metavar="FICHIER",
+                   help="écrire toutes les colonnes dans un CSV plutôt qu'un aperçu")
     args = p.parse_args()
 
-    df = fetch_insiders(args.nombre, seulement_achats=args.achats)
+    df = fetch_insiders(args.nombre, seulement_achats=args.achats,
+                        seulement_transactions=args.transactions)
     if df.empty:
-        print("aucune transaction exploitable dans les derniers dépôts")
+        print("aucune déclaration exploitable dans les derniers dépôts")
         return
+
+    if args.csv:
+        # Les 45 colonnes, pas l'aperçu : c'est le point de tout extraire.
+        df.to_csv(args.csv, index=False)
+        print(f"{len(df)} lignes, {len(df.columns)} colonnes -> {args.csv}")
+        return
+
     maintenant = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"{len(df)} transactions, relevé du {maintenant}\n")
-    colonnes = ["date", "ticker", "declarant", "role", "operation", "titres", "prix", "montant"]
+    print(f"{len(df)} déclarations, relevé du {maintenant}")
+    # Ce que l'aperçu cache : le détail est dans le CSV, et le dire évite de
+    # croire que la trame se limite à ces huit colonnes.
+    par_categorie = df.groupby(["categorie", "evenement"]).size()
+    print("  " + " | ".join(f"{k[0]} {k[1]} : {v}" for k, v in par_categorie.items()))
+    print(f"  {len(df.columns)} colonnes au total — --csv pour les avoir toutes")
+    print()
+
+    colonnes = ["date", "ticker", "declarant", "role", "operation", "titres",
+                "prix", "detention"]
     apercu = df[colonnes].head(25).copy()
     apercu["date"] = apercu.date.dt.strftime("%Y-%m-%d")
-    print(apercu.to_string(index=False, max_colwidth=28))
+    print(apercu.to_string(index=False, max_colwidth=26))
 
 
 if __name__ == "__main__":
