@@ -1,0 +1,25 @@
+# Declarations d'inities : dirigeants d'entreprise (SEC) et elus du Congres
+# (STOCK Act).
+#
+# Meme decoupe que options-rs, et pour la meme raison : ce qui analyse un
+# document ne doit pas pouvoir ouvrir un socket ni lire l'horloge, et c'est le
+# compilateur qui l'impose plutot que la discipline. insider-core ne declare
+# aucune dependance capable de l'un ou de l'autre.
+
+[workspace]
+resolver = "3"
+members = ["crates/insider-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level"
+
+[workspace.dependencies]
+# Sans la feature clock : une date se lit dans un document, jamais a l'horloge.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

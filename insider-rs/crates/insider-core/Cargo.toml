@@ -1,0 +1,9 @@
+[package]
+name = "insider-core"
+description = "Le vocabulaire commun : declaration, transaction, fourchette, codes. Aucune E/S."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
