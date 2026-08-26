@@ -71,6 +71,34 @@ présent — un profil passé n'aurait aucun sens, le book ayant changé.
 **Les totaux, en bas** : GEX, charm et vanna en séries temporelles, sur le même axe
 que le prix.
 
+### Ce que l'usage a ajouté
+
+Écrit après avoir regardé l'écran pendant une séance. Chaque point vient d'une
+lecture fausse qu'il rendait possible.
+
+**Chaque série dans sa bande, jamais sur un axe partagé.** GEX, charm et vanna
+n'ont pas la même unité — dollars par mouvement de 1 %, dollars de delta par jour,
+dollars de delta par point de vol. Sur un axe commun elles se croisent, et un
+croisement se lit comme un événement alors qu'il ne dépend que du facteur
+d'échelle. Les séparer supprime le faux signal sans rien perdre : le signe et la
+dérive sont tout ce qui compte pour chacune. Même raison pour l'IV et le skew,
+qui sont des pourcentages et vivent dans un panneau à part.
+
+**Le régime peint en fond.** `analyser()` rend déjà le GEX sur une grille de
+niveaux de spot : ce que serait la couverture *si* le prix allait là. Le zero
+gamma n'en montre qu'un point — la frontière. La courbe entière montre les zones,
+et c'est ce que le fond peint. Contrôle de cohérence à l'écran : la bascule
+vert/rouge doit tomber exactement sur la ligne du zero gamma.
+
+**Les murs par open interest, à côté de ceux du gamma.** Ils étaient calculés et
+stockés depuis le début, mais jamais affichés. Ils répondent à « où y a-t-il le
+plus de contrats » quand les murs gamma répondent à « où la couverture est-elle la
+plus sensible ». C'est leur accord qui rend un niveau crédible.
+
+**La bande ±1σ implicite**, en lignes de prix et non en série : la durée restante
+diminue de minute en minute, donc une bande tracée dans le passé montrerait un T
+qui n'était pas celui du moment. Elle ne vaut que pour maintenant.
+
 ### Ce que l'écran ne fera pas
 
 **Pas de rejeu.** Le curseur se promène sur les trente jours de séries, mais le

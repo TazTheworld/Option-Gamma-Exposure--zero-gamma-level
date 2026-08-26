@@ -75,6 +75,14 @@ pub struct PointNiveaux {
     pub call_wall_oi: Option<f64>,
     /// Mur put en open interest brut.
     pub put_wall_oi: Option<f64>,
+    /// La volatilité implicite à la monnaie, sur l'échéance la plus proche.
+    ///
+    /// Elle n'est pas un prix et ne se trace pas sur l'axe du sous-jacent. Elle
+    /// est là parce que le vanna ne veut rien dire sans elle : une exposition
+    /// « par point de volatilité » ne compte que si la volatilité bouge.
+    pub iv_atm: Option<f64>,
+    /// La pente du smile sur cette même échéance.
+    pub skew: Option<f64>,
 }
 
 /// La minute a-t-elle changé depuis le dernier point écrit ?
@@ -238,6 +246,8 @@ pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), Erreu
             ("put_wall", peut_etre(|p| p.put_wall)),
             ("call_wall_oi", peut_etre(|p| p.call_wall_oi)),
             ("put_wall_oi", peut_etre(|p| p.put_wall_oi)),
+            ("iv_atm", peut_etre(|p| p.iv_atm)),
+            ("skew", peut_etre(|p| p.skew)),
         ],
     )?;
     ecrire_atomique(&lot, cible)
@@ -327,6 +337,8 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             "put_wall",
             "call_wall_oi",
             "put_wall_oi",
+            "iv_atm",
+            "skew",
         ],
     )?;
     Ok(instants
@@ -343,6 +355,10 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             put_wall: c[6][i],
             call_wall_oi: c[7][i],
             put_wall_oi: c[8][i],
+            // Absentes des fichiers ecrits avant leur ajout : la lecture rend
+            // alors None, et la serie reste lisible.
+            iv_atm: c[9][i],
+            skew: c[10][i],
         })
         .collect())
 }
@@ -377,6 +393,8 @@ mod tests {
             call_wall: None,
             put_wall: Some(29_050.0),
             call_wall_oi: None,
+            iv_atm: None,
+            skew: None,
             put_wall_oi: Some(29_000.0),
         }
     }

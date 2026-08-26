@@ -24,7 +24,10 @@
 <div id="avertissement"></div>
 
 <main>
-  <section class="panneau" id="prix"><span class="titre">prix &amp; niveaux</span></section>
+  <section class="panneau" id="prix">
+    <canvas id="regime"></canvas>
+    <span class="titre">prix &amp; niveaux</span>
+  </section>
   <section class="panneau" id="profil">
     <span class="titre">GEX par strike</span>
     <div id="strikes"></div>
@@ -35,6 +38,10 @@
     <div class="piste" id="p-charm" style="top:38%"></div>
     <div class="piste" id="p-vanna" style="top:70%"></div>
   </section>
+  <section class="panneau" id="vol">
+    <div class="piste" id="p-iv" style="top:10%"></div>
+    <div class="piste" id="p-skew" style="top:58%"></div>
+  </section>
 </main>
 
 <footer>
@@ -42,6 +49,8 @@
   <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
   <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
   <span class="legende"><i class="pastille" style="background:#1d7268"></i><i class="pastille" style="background:#a13c39"></i> murs par open interest</span>
+  <span class="legende"><i class="pastille" style="background:#3f4d63"></i> ±1σ implicite d'ici l'échéance (IV·√T)</span>
+  <span class="legende"><i class="pastille pave" style="background:rgba(38,166,154,.35)"></i><i class="pastille pave" style="background:rgba(239,83,80,.35)"></i> fond : la couverture amortit / amplifie à ce niveau</span>
   <span class="legende"><i class="pastille" style="background:#6b8cae"></i> charm</span>
   <span class="legende"><i class="pastille" style="background:#9a7fb8"></i> vanna</span>
   <span>trois unités différentes, trois bandes séparées : elles ne se comparent pas entre elles</span>
@@ -59,7 +68,7 @@ const PERIME = 300;               // au-delà, le relevé est visiblement vieux
 const MARGE_DROITE = 8;           // barres d'air à droite du dernier prix
 
 const commun = {
-  layout: { background: { color: "#0e1117" }, textColor: "#7d8794", fontSize: 11 },
+  layout: { background: { color: "rgba(0,0,0,0)" }, textColor: "#7d8794", fontSize: 11 },
   grid: { vertLines: { color: "#1a202b" }, horzLines: { color: "#1a202b" } },
   rightPriceScale: { borderColor: "#232a36" },
   timeScale: {
@@ -101,6 +110,29 @@ const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle:
 // plutot que « ou la couverture est-elle la plus sensible ». Traces en pointille
 // fin, plus discret : c'est leur ACCORD avec les murs gamma qui compte, et il se
 // voit d'un coup d'oeil quand les deux lignes se superposent.
+// Le mouvement que le marche price d'ici l'echeance : spot ± iv*racine(T).
+// A distinguer des murs — eux disent ou sont les CONTRATS, celle-ci dit ce que
+// le marche juge atteignable. Les deux se contredisent souvent, et c'est
+// justement quand ils se contredisent qu'il y a quelque chose a lire.
+// En lignes de prix, pas en series : la duree restante diminue de minute en
+// minute, donc une bande tracee dans le passe montrerait un T qui n'etait pas
+// celui du moment. Le mouvement implicite ne vaut que pour maintenant.
+let bandeHaute = null;
+let bandeBasse = null;
+
+function tracerBande(spot, attendu) {
+  for (const l of [bandeHaute, bandeBasse]) if (l) chandeliers.removePriceLine(l);
+  bandeHaute = null;
+  bandeBasse = null;
+  if (spot == null || attendu == null) return;
+  const trait = (prix, titre) => chandeliers.createPriceLine({
+    price: prix, color: "#3f4d63", lineWidth: 1, lineStyle: 3,
+    axisLabelVisible: true, title: titre,
+  });
+  bandeHaute = trait(spot + attendu, "+1σ");
+  bandeBasse = trait(spot - attendu, "-1σ");
+}
+
 const ligneCwOi = gPrix.addLineSeries({ color: "#1d7268", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 const lignePwOi = gPrix.addLineSeries({ color: "#a13c39", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
@@ -116,6 +148,7 @@ const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"),
 // aux totaux exactement les memes instants qu'au prix, et l'indice redevient
 // comparable.
 const squelette = gTotaux.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+let squeletteVol = null;   // cree avec gVol, plus bas
 
 // Trois bandes qui ne se touchent pas, et NON trois courbes sur un axe commun.
 //
@@ -147,10 +180,43 @@ const sGex = bande("gex", "#e0a458", "GEX", 0.06, 0.70);
 const sCharm = bande("charm", "#6b8cae", "charm", 0.38, 0.38);
 const sVanna = bande("vanna", "#9a7fb8", "vanna", 0.70, 0.06);
 
+// L'IV et le skew sont des pourcentages : les mettre avec des dollars sur le
+// meme panneau reproduirait exactement le defaut qu'on vient de corriger.
+const gVol = LightweightCharts.createChart(document.getElementById("vol"), {
+  ...commun,
+  timeScale: { ...commun.timeScale, visible: false },
+  rightPriceScale: { visible: false },
+});
+function bandeVol(id, couleur, titre, haut, bas) {
+  const s = gVol.addLineSeries({
+    color: couleur, lineWidth: 2, priceLineVisible: false,
+    lastValueVisible: false, title: titre, priceScaleId: id,
+  });
+  gVol.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
+  return s;
+}
+const sIv = bandeVol("iv", "#c9805e", "IV ATM", 0.12, 0.56);
+const sSkew = bandeVol("skew", "#7fa88a", "skew", 0.60, 0.08);
+
+squeletteVol = gVol.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+
+synchroniser([gPrix, gTotaux, gVol]);
+
+const millions = (v) =>
+  v == null ? "—"
+  : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + " Md$"
+  : (v / 1e6).toFixed(1) + " M$";
+
+const prix = (v) => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+
+const pourcent = (v) => v == null ? "—" : (v * 100).toFixed(2) + " %";
+
 const PISTES = [
-  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458" },
-  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae" },
-  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8" },
+  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458", format: millions },
+  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae", format: millions },
+  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8", format: millions },
+  { id: "p-iv", champ: "iv_atm", nom: "IV ATM", unite: "échéance la plus proche", couleur: "#c9805e", format: pourcent },
+  { id: "p-skew", champ: "skew", nom: "skew", unite: "dIV / d ln(K/S) — négatif = puts plus chers", couleur: "#7fa88a", format: (v) => v == null ? "—" : v.toFixed(3) },
 ];
 
 // La valeur courante ET la plage de ce qui est trace : sans la plage, une ligne
@@ -166,9 +232,9 @@ function etiqueterPistes(niveaux) {
     const dernier = v[v.length - 1];
     noeud.innerHTML =
       '<b style="color:' + piste.couleur + '">' + piste.nom + "</b>"
-      + '<span class="v ' + (dernier < 0 ? "negatif" : "positif") + '">' + millions(dernier) + "</span>"
+      + '<span class="v ' + (dernier < 0 ? "negatif" : "positif") + '">' + piste.format(dernier) + "</span>"
       + '<span class="u">' + piste.unite + "</span>"
-      + '<span class="p">' + millions(bas) + " → " + millions(haut) + "</span>";
+      + '<span class="p">' + piste.format(bas) + " → " + piste.format(haut) + "</span>";
   }
 }
 
@@ -176,21 +242,18 @@ function etiqueterPistes(niveaux) {
 // deux côtés, c'est tout l'intérêt de les avoir écrites ainsi. Le drapeau
 // empêche l'aller-retour de se relancer indéfiniment.
 let enSynchro = false;
-for (const [source, cible] of [[gPrix, gTotaux], [gTotaux, gPrix]]) {
-  source.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
-    if (!plage || enSynchro) return;
-    enSynchro = true;
-    cible.timeScale().setVisibleLogicalRange(plage);
-    enSynchro = false;
-  });
+function synchroniser(graphiques) {
+  for (const source of graphiques) {
+    source.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
+      if (!plage || enSynchro) return;
+      enSynchro = true;
+      for (const cible of graphiques) {
+        if (cible !== source) cible.timeScale().setVisibleLogicalRange(plage);
+      }
+      enSynchro = false;
+    });
+  }
 }
-
-const millions = (v) =>
-  v == null ? "—"
-  : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + " Md$"
-  : (v / 1e6).toFixed(1) + " M$";
-
-const prix = (v) => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
 
 function ecrire(id, texte, valeur) {
   const noeud = document.getElementById(id);
@@ -276,11 +339,57 @@ function surveiller() {
     const a = chandeliers.priceToCoordinate(profilCourant[0].strike);
     const b = chandeliers.priceToCoordinate(profilCourant[profilCourant.length - 1].strike);
     const empreinte = a + "|" + b + "|" + noeudStrikes.clientHeight;
-    if (empreinte !== derniereEmpreinte) { derniereEmpreinte = empreinte; dessinerProfil(); }
+    if (empreinte !== derniereEmpreinte) {
+      derniereEmpreinte = empreinte;
+      dessinerProfil();
+      peindreRegime();
+    }
   }
   requestAnimationFrame(surveiller);
 }
 requestAnimationFrame(surveiller);
+
+// --- Le regime, peint derriere le prix ------------------------------------
+//
+// `analyser()` rend le GEX a une grille de niveaux de spot : ce que serait la
+// couverture SI le prix allait la. Un seul niveau — le zero gamma — n'en montre
+// qu'un point ; la courbe entiere montre les zones. Verte, la couverture amortit ;
+// rouge, elle amplifie. Peinte derriere les bougies, elle repond a « ou vais-je
+// si je bouge » sans qu'on ait a lire un chiffre.
+
+const toile = document.getElementById("regime");
+let regimeCourant = [];
+
+function peindreRegime() {
+  const panneau = document.getElementById("prix");
+  const l = panneau.clientWidth;
+  const h = panneau.clientHeight;
+  if (!l || !h) return;
+  if (toile.width !== l || toile.height !== h) { toile.width = l; toile.height = h; }
+  const ctx = toile.getContext("2d");
+  ctx.clearRect(0, 0, l, h);
+  if (!regimeCourant.length) return;
+
+  const pic = Math.max.apply(null, regimeCourant.map((p) => Math.abs(p.gex))) || 1;
+  // Les niveaux sont ordonnes : on peint la bande entre chaque paire.
+  const points = regimeCourant
+    .map((p) => ({ gex: p.gex, y: chandeliers.priceToCoordinate(p.niveau) }))
+    .filter((p) => p.y != null)
+    .sort((a, b) => a.y - b.y);
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    // Le SIGNE d'abord — amortit ou amplifie —, l'amplitude ensuite. Une teinte
+    // purement proportionnelle laissait les zones faibles invisibles, alors que
+    // c'est justement leur signe qui dit ce qui se passe si le prix y va.
+    const force = 0.09 + Math.min(1, Math.abs(a.gex) / pic) * 0.20;
+    ctx.fillStyle = a.gex >= 0
+      ? "rgba(38, 166, 154, " + force + ")"
+      : "rgba(239, 83, 80, " + force + ")";
+    ctx.fillRect(0, a.y, l, Math.max(1, b.y - a.y));
+  }
+}
 
 // --- La fraîcheur ---------------------------------------------------------
 
@@ -364,6 +473,7 @@ async function rafraichir() {
     // Les memes instants, sans valeur : c'est ce qui rend les deux axes
     // comparables point par point.
     poser("squelette", squelette, barres.map((b) => ({ time: b.time })));
+    poser("squelette-vol", squeletteVol, barres.map((b) => ({ time: b.time })));
 
     // Une valeur absente ne se trace pas : relier deux points de part et
     // d'autre d'un trou inventerait un niveau qui n'a jamais existé.
@@ -376,6 +486,9 @@ async function rafraichir() {
     poser("pw", lignePw, serie("put_wall"));
     poser("cwoi", ligneCwOi, serie("call_wall_oi"));
     poser("pwoi", lignePwOi, serie("put_wall_oi"));
+    poser("iv", sIv, serie("iv_atm"));
+    poser("skew", sSkew, serie("skew"));
+
     poser("gex", sGex, serie("gex"));
     poser("charm", sCharm, serie("charm"));
     poser("vanna", sVanna, serie("vanna"));
@@ -392,6 +505,8 @@ async function rafraichir() {
     ecrire("pw", prix(dernier?.put_wall));
 
     profilCourant = profil.strikes;
+    regimeCourant = profil.regime;
+    tracerBande(profil.etat.spot, profil.attendu);
     spotCourant = spot;
     derniereEmpreinte = "";   // forcer le redessin sur les nouvelles valeurs
     etiqueterPistes(niveaux);

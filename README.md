@@ -102,9 +102,18 @@ Sept nombres dans un terminal sont exacts et illisibles d'un coup d'œil : un ze
 29 275 ne dit rien tant qu'on ne voit pas où le prix se tient par rapport à lui, ni depuis
 quand il dérive. L'écran met les niveaux **sur** le prix.
 
-Trois zones : les chandeliers au centre, avec le zero gamma et les murs par-dessus ; le
-GEX par strike à droite, en barres alignées sur l'axe des prix ; les totaux — GEX, charm,
-vanna — en bas, sur le même axe temporel.
+Sur le prix : le **zero gamma** avec sa trace, les **murs** — ceux du gamma et ceux de
+l'open interest, qui répondent à deux questions différentes et divergent souvent —, la
+bande **±1σ implicite** d'ici l'échéance, et le **régime peint en fond** : vert là où la
+couverture amortirait, rouge là où elle amplifierait. Ce fond n'est pas un niveau, c'est
+une carte — il dit ce qui arriverait *si* le prix allait là.
+
+À droite, le **GEX par strike**, en barres posées à la hauteur exacte de leur strike sur
+l'axe des prix : quand le cours bouge, le profil bouge avec.
+
+En bas, les séries temporelles, **chacune dans sa bande** : GEX, charm, vanna, puis IV ATM
+et skew. Elles ne partagent pas d'axe — ce sont cinq unités différentes, et un croisement
+entre deux d'entre elles ne voudrait rien dire.
 
 Il **ne calcule rien** : il lit les trois fichiers du collecteur et les traduit. Refaire
 l'analyse à chaque requête dupliquerait le moteur dans un second chemin, et deux chemins

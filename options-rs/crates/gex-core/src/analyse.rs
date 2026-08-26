@@ -202,6 +202,53 @@ pub struct Analyse {
     pub ecart_gamma: Option<EcartGamma>,
     /// Le poids des 0-1 DTE.
     pub part_courtes: PartCourtes,
+    /// La volatilité implicite à la monnaie, sur l'échéance la plus proche.
+    pub iv_atm: Option<f64>,
+    /// La pente du smile sur cette même échéance.
+    pub skew: Option<f64>,
+    /// Le mouvement que le marché price d'ici cette échéance, en points.
+    pub attendu: Option<f64>,
+}
+
+/// La volatilité implicite à la monnaie d'une échéance.
+///
+/// La moyenne du call et du put du strike le plus proche du spot, en ignorant
+/// les IV nulles — un contrat très dans la monnaie n'en publie pas, et le compter
+/// tirerait la mesure vers zéro.
+///
+/// C'est le strike le plus proche, pas une interpolation : le pas de strike sur
+/// NQ est de dix points pour un spot autour de trente mille, soit trois
+/// centièmes de pourcent. Interpoler ajouterait une précision que la donnée
+/// différée n'a pas.
+pub fn iv_atm(lignes: &[LigneExposee], echeance: EcheanceNy, spot: f64) -> Option<f64> {
+    lignes
+        .iter()
+        .filter(|l| l.ligne.echeance == echeance)
+        .filter_map(|l| {
+            let ivs: Vec<f64> = [l.ligne.call.iv, l.ligne.put.iv]
+                .into_iter()
+                .filter(|v| *v > 0.0)
+                .collect();
+            if ivs.is_empty() {
+                return None;
+            }
+            let moyenne = ivs.iter().sum::<f64>() / ivs.len() as f64;
+            Some(((l.ligne.strike - spot).abs(), moyenne))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, iv)| iv)
+}
+
+/// Le mouvement que le marché price d'ici l'échéance, en points de sous-jacent.
+///
+/// `spot * iv * racine(T)` — l'écart-type d'un mouvement lognormal sur la durée
+/// restante. Ce n'est pas une prévision : c'est ce que **coûtent** les options,
+/// donc l'amplitude que leurs acheteurs et vendeurs se sont accordés à payer.
+///
+/// À distinguer des murs, qui disent où sont les contrats. Celui-ci dit ce que
+/// le marché juge atteignable, et les deux se contredisent souvent.
+pub fn attendu_implicite(spot: f64, iv: f64, t: f64) -> Option<f64> {
+    (spot > 0.0 && iv > 0.0 && t > 0.0).then(|| spot * iv * t.sqrt())
 }
 
 /// Jours calendaires jusqu'à l'échéance.
@@ -624,6 +671,12 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
     let profil = profil_gamma(&lignes, &niveaux, spot, params);
     let croisements = croisements_zero(&niveaux, &profil);
 
+    // L'échéance la plus proche, celle sur laquelle l'IV et le skew sont mesurés.
+    let proche = lignes
+        .iter()
+        .min_by(|a, b| a.t.total_cmp(&b.t))
+        .map(|l| l.ligne.echeance);
+
     Ok(Analyse {
         spot,
         releve: chaine.releve,
@@ -637,6 +690,15 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
         murs: murs(&agreges, spot, params),
         ecart_gamma: ecart_gamma(&lignes),
         part_courtes: part_courtes(&lignes, 1),
+        // Sur l'échéance la plus proche : c'est elle qui porte l'essentiel du
+        // gamma, et mélanger les échéances donnerait une IV qui n'est celle
+        // d'aucune d'entre elles.
+        iv_atm: proche.and_then(|e| iv_atm(&lignes, e, spot)),
+        skew: proche.map(|e| pente_skew(&lignes, e, spot)),
+        attendu: proche.and_then(|e| {
+            let t = lignes.iter().find(|l| l.ligne.echeance == e).map(|l| l.t)?;
+            attendu_implicite(spot, iv_atm(&lignes, e, spot)?, t)
+        }),
         par_strike: agreges,
         lignes,
         niveaux,
@@ -891,6 +953,46 @@ mod tests {
         let m = murs(&vides, SPOT, &params());
         assert_eq!(m.call, None);
         assert_eq!(m.put, None);
+    }
+
+    /// L'IV à la monnaie sort du strike le plus proche du spot, pas d'une moyenne
+    /// de la chaîne : les ailes se paient beaucoup plus cher et la tireraient.
+    #[test]
+    fn l_iv_atm_vient_du_strike_le_plus_proche_du_spot() {
+        let a = analyser(&chaine_essai(), &params()).unwrap();
+        let lignes = &a.lignes;
+        let e = EcheanceNy(instant(ECHEANCES[0]));
+        let iv = iv_atm(lignes, e, SPOT).unwrap();
+
+        let attendu = lignes
+            .iter()
+            .filter(|l| l.ligne.echeance == e)
+            .min_by(|a, b| {
+                (a.ligne.strike - SPOT)
+                    .abs()
+                    .total_cmp(&(b.ligne.strike - SPOT).abs())
+            })
+            .map(|l| (l.ligne.call.iv + l.ligne.put.iv) / 2.0)
+            .unwrap();
+        assert!((iv - attendu).abs() < 1e-12, "{iv} != {attendu}");
+    }
+
+    /// Le mouvement implicite est un écart-type, donc il grandit en RACINE du
+    /// temps : quadrupler la durée le double, il ne le quadruple pas.
+    #[test]
+    fn l_attendu_grandit_en_racine_du_temps() {
+        let un = attendu_implicite(29_000.0, 0.20, 0.01).unwrap();
+        let quatre = attendu_implicite(29_000.0, 0.20, 0.04).unwrap();
+        assert!((quatre / un - 2.0).abs() < 1e-12);
+    }
+
+    /// Une entrée absurde ne rend pas un nombre : un mouvement implicite
+    /// silencieusement nul se lirait comme « le marché n'attend rien ».
+    #[test]
+    fn l_attendu_refuse_les_entrees_impossibles() {
+        assert_eq!(attendu_implicite(29_000.0, 0.20, 0.0), None);
+        assert_eq!(attendu_implicite(29_000.0, 0.0, 0.01), None);
+        assert_eq!(attendu_implicite(0.0, 0.20, 0.01), None);
     }
 
     /// La pente doit retrouver le skew injecté : -0,15 par unité de ln(K/S).

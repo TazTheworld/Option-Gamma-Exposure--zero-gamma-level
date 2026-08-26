@@ -79,6 +79,12 @@ struct Niveau {
     /// le lecteur en ligne de commande les montre côte à côte pour cette raison.
     call_wall_oi: Option<f64>,
     put_wall_oi: Option<f64>,
+    /// La volatilité implicite à la monnaie, et la pente du smile.
+    ///
+    /// Ni l'une ni l'autre n'est un prix : elles vont dans leur propre bande, pas
+    /// sur l'axe du sous-jacent.
+    iv_atm: Option<f64>,
+    skew: Option<f64>,
 }
 
 /// Le GEX d'un strike, à l'instant présent.
@@ -107,11 +113,35 @@ struct Etat {
     avertissement: Option<String>,
 }
 
+/// Le GEX à un niveau de prix hypothétique.
+///
+/// C'est la réponse à « si le sous-jacent allait là, la couverture amortirait-elle
+/// ou amplifierait-elle ? ». Un niveau isolé ne le dit pas ; la courbe entière si,
+/// et c'est ce qui permet de peindre le régime derrière le prix.
+#[derive(Serialize)]
+struct PointProfil {
+    niveau: f64,
+    gex: f64,
+}
+
 #[derive(Serialize)]
 struct Profil {
     etat: Etat,
     strikes: Vec<Strike>,
+    /// Le régime en fonction du niveau de prix.
+    regime: Vec<PointProfil>,
+    /// Le mouvement que le marché price d'ici l'échéance la plus proche.
+    attendu: Option<f64>,
 }
+
+/// Demi-plage du profil de régime, autour du spot.
+///
+/// Assez large pour couvrir une séance agitée, assez serrée pour que chaque pas
+/// vaille une quinzaine de points sur NQ — de quoi peindre un dégradé et non des
+/// bandeaux.
+const PLAGE_REGIME: f64 = 0.04;
+/// Nombre de pas sur cette plage.
+const NIVEAUX_REGIME: usize = 160;
 
 fn erreur(message: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::SERVICE_UNAVAILABLE, message.to_string())
@@ -149,6 +179,8 @@ async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse
             put_wall: p.put_wall,
             call_wall_oi: p.call_wall_oi,
             put_wall_oi: p.put_wall_oi,
+            iv_atm: p.iv_atm,
+            skew: p.skew,
         })
         .collect();
     Ok(axum::Json(sortie))
@@ -174,6 +206,8 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
                 )),
             },
             strikes: Vec::new(),
+            regime: Vec::new(),
+            attendu: None,
         }));
     }
 
@@ -187,6 +221,12 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
         &Parametres {
             taille_contrat: taille,
             dte_max: Some(args.dte_max),
+            // Le profil sert ici de FOND derrière le prix, pas de tableau : il lui
+            // faut du grain là où le prix se trouve, pas une couverture large et
+            // grossière. Les défauts du lecteur — ±20 % en soixante pas, soit près
+            // de deux cents points par pas — donneraient une seule bande à l'écran.
+            plage: PLAGE_REGIME,
+            niveaux: NIVEAUX_REGIME,
             ..Default::default()
         },
     )
@@ -220,6 +260,16 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             }),
         },
         strikes,
+        regime: analyse
+            .niveaux
+            .iter()
+            .zip(analyse.profil.iter())
+            .map(|(niveau, gex)| PointProfil {
+                niveau: *niveau,
+                gex: *gex,
+            })
+            .collect(),
+        attendu: analyse.attendu,
     }))
 }
 

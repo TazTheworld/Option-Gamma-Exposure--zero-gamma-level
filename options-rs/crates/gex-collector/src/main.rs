@@ -554,6 +554,8 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                         put_wall: a.murs.put,
                         call_wall_oi: a.murs.call_oi,
                         put_wall_oi: a.murs.put_oi,
+                        iv_atm: a.iv_atm,
+                        skew: a.skew,
                     });
                 }
                 // L'élagage suit la même horloge que le socle : une borne
