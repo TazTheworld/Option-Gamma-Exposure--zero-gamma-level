@@ -98,26 +98,19 @@ Un GEX n'existe pas dans l'absolu. Quatre décisions le déplacent, parfois de p
 
 ### D'où vient le gamma (`--gamma-source`)
 
-IB publie un gamma par contrat, et on peut aussi le recalculer en Black-76 depuis la
-volatilité implicite. Le script d'origine **mélangeait les deux sans le dire** : le total
-prenait le gamma publié pendant que le profil — donc le zero gamma affiché juste en
-dessous — recalculait depuis l'IV.
+IB publie un gamma par contrat, et il se recalcule aussi en Black-76 depuis la
+volatilité implicite. **Une seule source alimente tout le pipeline**, et l'en-tête dit
+laquelle.
 
 Le défaut est `iv`, seul choix cohérent de bout en bout : à un niveau de spot
-hypothétique, aucun gamma publié n'existe. Avec `published`, l'écart entre les deux est
-affiché dès qu'il dépasse 5 %.
+hypothétique, aucun gamma publié n'existe, donc le profil ne peut être que recalculé.
+Avec `published`, le total et le zero gamma viennent forcément d'estimateurs
+différents — l'écart est alors affiché dès qu'il dépasse 5 %.
 
-Relevé du SPX du 12 août 2026, une fois la mesure du temps corrigée :
-
-| horizon | gamma publié | recalculé | écart |
-|---|---|---|---|
-| ≤ 1 j | +5,06 Md | +5,64 Md | +11,4 % |
-| ≤ 7 j | +15,37 Md | +15,62 Md | +1,7 % |
-| ≤ 30 j | +39,89 Md | +39,46 Md | −1,1 % |
-| toute la chaîne | +87,92 Md | +76,96 Md | −12,5 % |
-
-L'écart subsiste là où on l'attend : sur les 0-1 DTE, où le gamma explose et dépend du
-spot à la minute ; et sur les LEAPS, où l'hypothèse `r = q = 0` cesse d'être neutre.
+Les deux se rejoignent sur les horizons courants et divergent aux extrêmes : sur les
+0-1 DTE, où le gamma explose et dépend du spot à la minute que des données différées ne
+donnent pas ; et sur les échéances lointaines, où l'hypothèse `r = q = 0` cesse d'être
+neutre.
 
 ### L'horizon d'échéance (`--dte-max`)
 
@@ -125,18 +118,19 @@ Une chaîne complète porte des échéances jusqu'à plusieurs trimestres. Prise
 lointaines — strikes ronds à très gros open interest — dominent les murs et tirent le zero
 gamma, alors qu'elles ne produisent aucun flux de couverture à court terme.
 
-Sur le SPX du 10 août 2026, la chaîne entière donnait **+70,8 Md** de GEX quand le 0–7 DTE
-donnait **−1,1 Md** : deux régimes opposés, pour la même séance. Le défaut est 30 jours.
+L'effet n'est pas marginal : sur un indice, la chaîne entière et le 0–7 DTE peuvent
+donner des GEX de **signes opposés** pour la même séance. Le défaut est 30 jours.
 
 ### La mesure du temps (`--time-convention`)
 
-Le script de référence compte en jours ouvrés / 262 avec un **plancher à un jour** pour les
-0DTE. Ce plancher les surestime lourdement — un 0DTE à 10 h du matin, c'est 0,23 jour, pas
-1 — et le gamma variant en 1/√T, l'erreur est massive.
+Le défaut est `heures` : le temps réel restant jusqu'au règlement servi par IB, rapporté
+à 365 jours. C'est ce qui rend le gamma recalculé et le gamma publié comparables — ils se
+superposent presque exactement.
 
-Le défaut est `heures` : le temps réel restant jusqu'au règlement, rapporté à 365 jours.
-Mesuré sur le SPX, le rapport gamma recalculé / gamma publié passe d'une médiane de 1,134
-à 1,000.
+`bourse` restaure la convention du script de référence, jours ouvrés / 262 avec un
+plancher à un jour. Ce plancher surestime lourdement les 0DTE — un 0DTE à 10 h du matin,
+c'est 0,23 jour, pas 1 — et le gamma variant en 1/√T, l'écart est massif. Il est là pour
+reproduire, pas pour être utilisé.
 
 ### Ce que devient la volatilité (`--vol-regime`)
 
@@ -179,10 +173,9 @@ du terrain est exacte, pas qu'on peut en tirer de l'argent.
 **Interactive Brokers**, et elle seule — TWS ou Gateway, options sur futures CME, forfait,
 temps réel ou différé.
 
-Le CBOE, le CME, Databento et Barchart ont été retirés : tous ne servaient que le règlement
-de la veille, et aucun ne publiait le gamma. IB apporte les trois choses qu'aucun n'avait —
-le temps réel, un tarif forfaitaire, et un gamma **publié**, ce qui permet enfin de
-confronter deux estimateurs sur du future.
+IB apporte trois choses ensemble, ce qui est rare : le temps réel, un tarif forfaitaire,
+et un gamma **publié** — c'est lui qui permet de confronter deux estimateurs sur du
+future plutôt que d'en croire un sur parole.
 
 **Lecture seule.** Le collecteur énumère des contrats et souscrit à des cotations. Aucun
 ordre n'est passé nulle part.
@@ -190,21 +183,21 @@ ordre n'est passé nulle part.
 ## Ce que ça n'est pas
 
 - **Pas du temps réel** sans abonnement CME : le différé décale de quinze minutes.
-- **Pas de graphiques** : le portage en Rust ne les a pas repris. Le profil complet reste
-  dans la sortie du moteur, pour qui voudrait le tracer autrement.
+- **Pas de graphiques** : la sortie est du texte. Le profil complet et le détail par
+  strike restent dans la sortie du moteur, pour qui voudrait les tracer autrement.
 - **Pas un signal d'achat.** Le GEX décrit une contrainte de couverture, pas une direction.
 
 ## Sous le capot
 
-Tout est en **Rust** (`options-rs/`), collecteur compris, et la discipline du dépôt y est
-devenue structurelle : la crate qui produit les chiffres ne déclare aucune dépendance
-capable d'ouvrir un fichier, un socket, ni même de lire l'horloge — un calcul qui
-dépendrait de l'heure courante ne compile pas.
+**Rust** (`options-rs/`), collecteur compris, en cinq crates. La discipline y est
+structurelle plutôt que conventionnelle : la crate qui produit les chiffres ne déclare
+aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire l'horloge — un
+calcul qui dépendrait de l'heure courante ne compile pas.
 
-Le seul Python restant est `sec_data.py`, qui lit les déclarations d'initiés auprès de la
-SEC et n'a jamais eu de rapport avec les options.
+`sec_data.py` lit les déclarations d'initiés auprès de la SEC, en Python, et n'a pas de
+rapport avec les options.
 
-L'architecture, les conventions, les tests et les pièges rencontrés sont dans
+L'architecture, les conventions, les tests et les pièges d'Interactive Brokers sont dans
 [`AGENTS.md`](AGENTS.md) et [`options-rs/README.md`](options-rs/README.md).
 
 Le calcul s'appuie sur le script de https://perfiliev.com/author/perfiliev/.
