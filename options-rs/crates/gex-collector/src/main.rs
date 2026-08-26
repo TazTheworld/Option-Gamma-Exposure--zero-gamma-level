@@ -243,6 +243,8 @@ struct Etat {
     rien_ne_cote_signale: bool,
     /// Et pour un refus d'IB sur le vif.
     refus_signale: bool,
+    /// Et pour des barres qui ne se rafraîchissent plus.
+    barres_muettes_signale: bool,
 }
 
 /// Une session : connexion, puis la boucle, jusqu'à la coupure.
@@ -508,8 +510,26 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                 // nuit, quand les options ne cotent pas. Les conditionner à la
                 // cotation des options ferait un trou dans le graphique de prix là
                 // où le marché bouge encore.
-                if let Ok(fraiches) = ib.barres(&futur, 1) {
-                    etat.barres = recoller(&etat.barres, &fraiches);
+                match ib.barres(&futur, 1) {
+                    Ok(fraiches) => {
+                        etat.barres = recoller(&etat.barres, &fraiches);
+                        if etat.barres_muettes_signale {
+                            println!("  Les barres repartent.");
+                            etat.barres_muettes_signale = false;
+                        }
+                    }
+                    // Jeter cette erreur laissait le graphique de prix se figer
+                    // sans un mot, pendant que le reste continuait de vivre :
+                    // l'écran montrait alors un prix vieux de plusieurs minutes
+                    // sous des niveaux à jour, ce qui se lit très mal.
+                    Err(e) => {
+                        if !etat.barres_muettes_signale {
+                            eprintln!(
+                                "  Barres bloquées ({e}) — le graphique de prix                                  s'arrête là, le GEX continue."
+                            );
+                            etat.barres_muettes_signale = true;
+                        }
+                    }
                 }
 
                 let analyse = analyser(

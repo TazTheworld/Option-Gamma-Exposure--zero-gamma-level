@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>GEX — écran de séance</title>
 <link rel="stylesheet" href="/style.css">
+<!-- Servi en ligne : sans lui le navigateur reclame /favicon.ico et se prend
+     un 404 a chaque chargement. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#x1F4C8;</text></svg>">
 <script src="/lightweight-charts.js"></script>
 </head>
 <body>
@@ -22,7 +25,11 @@
 
 <main>
   <section class="panneau" id="prix"><span class="titre">prix &amp; niveaux</span></section>
-  <section class="panneau" id="profil"><span class="titre">GEX par strike</span><div id="strikes"></div></section>
+  <section class="panneau" id="profil">
+    <span class="titre">GEX par strike</span>
+    <div id="strikes"></div>
+    <span class="axe-zero"></span>
+  </section>
   <section class="panneau" id="totaux"><span class="titre">GEX · charm · vanna</span></section>
 </main>
 
@@ -41,16 +48,22 @@
 
 const RAFRAICHISSEMENT = 15000;   // le collecteur réécrit toutes les 15 s
 const PERIME = 300;               // au-delà, le relevé est visiblement vieux
+const MARGE_DROITE = 8;           // barres d'air à droite du dernier prix
 
 const commun = {
   layout: { background: { color: "#0e1117" }, textColor: "#7d8794", fontSize: 11 },
   grid: { vertLines: { color: "#1a202b" }, horzLines: { color: "#1a202b" } },
   rightPriceScale: { borderColor: "#232a36" },
-  timeScale: { borderColor: "#232a36", timeVisible: true, secondsVisible: false },
+  timeScale: {
+    borderColor: "#232a36",
+    timeVisible: true,
+    secondsVisible: false,
+    rightOffset: MARGE_DROITE,
+  },
   crosshair: { mode: 0 },
   // La bibliothèque suit la taille du conteneur elle-même : la grille CSS
-  // décide, et un panneau qui change de largeur sans que la fenêtre bouge — la
-  // barre de défilement du profil — est pris en compte.
+  // décide, et un panneau qui change de largeur sans que la fenêtre bouge est
+  // pris en compte.
   autoSize: true,
 };
 
@@ -63,22 +76,52 @@ const chandeliers = gPrix.addCandlestickSeries({
 // Le zero gamma en ligne, avec sa trace : c'est sa DÉRIVE qui porte
 // l'information, pas sa valeur à un instant.
 const ligneZg = gPrix.addLineSeries({ color: "#e0a458", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-const ligneCw = gPrix.addLineSeries({ color: "#26a69a", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+// Les murs sautent d'un strike a l'autre et se tiennent parfois tres loin du
+// prix : les laisser dicter l'echelle tassait les bougies dans une bande de
+// quelques pixels pour montrer un mur a mille points. Ils sont traces, mais ne
+// commandent plus le cadrage vertical — le prix, si.
+// Et en escalier : un mur est un STRIKE. Quand il passe de 29 300 a 30 000, il
+// n'a traverse aucune valeur intermediaire — une diagonale dessinerait un
+// glissement continu qui n'a pas eu lieu.
+const horsEchelle = {
+  autoscaleInfoProvider: () => null,
+  lineType: LightweightCharts.LineType.WithSteps,
+};
+const ligneCw = gPrix.addLineSeries({ color: "#26a69a", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
 const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"), {
   ...commun,
   timeScale: { ...commun.timeScale, visible: false },
+  // Des dollars bruts donnent « 200000000.00 » sur l'axe, illisible. Le lecteur
+  // parle en millions, l'ecran aussi.
+  localization: {
+    priceFormatter: (v) =>
+      Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(1) + " Md" : Math.round(v / 1e6) + " M",
+  },
 });
+// Les totaux n'ont qu'un point par minute cotee, les barres en ont des milliers :
+// synchroniser deux axes par INDICE revient alors a aligner le centieme point de
+// l'un sur le centieme de l'autre, qui ne sont pas au meme instant. La vue
+// partait ainsi sur la nuit precedente. Cette serie ne trace rien : elle donne
+// aux totaux exactement les memes instants qu'au prix, et l'indice redevient
+// comparable.
+const squelette = gTotaux.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+
 const sGex = gTotaux.addLineSeries({ color: "#e0a458", lineWidth: 2, priceLineVisible: false, title: "GEX" });
 const sCharm = gTotaux.addLineSeries({ color: "#6b8cae", lineWidth: 1, priceLineVisible: false, title: "charm" });
 const sVanna = gTotaux.addLineSeries({ color: "#9a7fb8", lineWidth: 1, priceLineVisible: false, title: "vanna" });
 
 // Les deux graphiques partagent le même axe : les séries sont à la minute des
-// deux côtés, c'est tout l'intérêt de les avoir écrites ainsi.
+// deux côtés, c'est tout l'intérêt de les avoir écrites ainsi. Le drapeau
+// empêche l'aller-retour de se relancer indéfiniment.
+let enSynchro = false;
 for (const [source, cible] of [[gPrix, gTotaux], [gTotaux, gPrix]]) {
   source.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
-    if (plage) cible.timeScale().setVisibleLogicalRange(plage);
+    if (!plage || enSynchro) return;
+    enSynchro = true;
+    cible.timeScale().setVisibleLogicalRange(plage);
+    enSynchro = false;
   });
 }
 
@@ -101,37 +144,92 @@ async function json(route) {
   return reponse.json();
 }
 
-function tracerProfil(strikes, spot) {
-  const noeud = document.getElementById("strikes");
-  if (!strikes.length) { noeud.innerHTML = ""; return; }
-  // La barre la plus large donne l'échelle : un GEX absolu ne dit rien, sa
-  // taille relative aux autres strikes si.
-  const pic = Math.max(...strikes.map((s) => Math.abs(s.gex))) || 1;
-  const proche = strikes.reduce((a, b) =>
-    Math.abs(b.strike - spot) < Math.abs(a.strike - spot) ? b : a);
+// --- Le profil par strike -------------------------------------------------
+//
+// Aligné sur l'axe des prix du graphique, pas listé : chaque barre est posée à
+// la hauteur exacte de son strike, via `priceToCoordinate`. C'est ce qui permet
+// de lire à QUELLE HAUTEUR le gamma se concentre par rapport au prix — une liste
+// triée ne le montre pas, elle demande de chercher, et elle ne bouge pas quand
+// le cours bouge.
 
-  noeud.innerHTML = strikes
-    .slice()
-    .sort((a, b) => b.strike - a.strike)
-    .map((s) => {
-      const part = (Math.abs(s.gex) / pic) * 50;
-      const style = s.gex >= 0
-        ? `left:50%;width:${part}%`
-        : `left:${50 - part}%;width:${part}%`;
-      const classe = s.gex >= 0 ? "pos" : "neg";
-      const ici = s.strike === proche.strike ? " proche" : "";
-      return `<div class="strike${ici}"><span class="prix">${prix(s.strike)}</span>`
-           + `<span class="barre"><span class="${classe}" style="${style}"></span></span></div>`;
-    })
-    .join("");
+const noeudStrikes = document.getElementById("strikes");
+let profilCourant = [];
+let spotCourant = null;
+let derniereEmpreinte = "";
+
+function dessinerProfil() {
+  const hauteur = noeudStrikes.clientHeight;
+  if (!profilCourant.length || hauteur <= 0) { noeudStrikes.innerHTML = ""; return; }
+
+  // Seuls les strikes visibles sur le graphique comptent : garder les autres
+  // écraserait l'échelle des barres avec un pic hors champ.
+  const places = [];
+  for (const s of profilCourant) {
+    const y = chandeliers.priceToCoordinate(s.strike);
+    if (y == null || y < 0 || y > hauteur) continue;
+    places.push({ strike: s.strike, gex: s.gex, y: y });
+  }
+  if (!places.length) { noeudStrikes.innerHTML = ""; return; }
+
+  const pic = Math.max.apply(null, places.map((s) => Math.abs(s.gex))) || 1;
+  places.sort((a, b) => a.y - b.y);
+
+  // L'espacement entre strikes voisins donne l'épaisseur : au zoom, les barres
+  // s'épaississent au lieu de laisser des trous.
+  const ecart = places.length > 1
+    ? Math.min.apply(null, places.slice(1).map((s, i) => s.y - places[i].y))
+    : 10;
+  const epaisseur = Math.max(2, Math.min(11, ecart - 1));
+
+  // Le strike le plus proche du spot, repère du regard.
+  const proche = spotCourant == null ? null : places.reduce((a, b) =>
+    Math.abs(b.strike - spotCourant) < Math.abs(a.strike - spotCourant) ? b : a);
+
+  let dernierEtiquete = -99;
+  noeudStrikes.innerHTML = places.map((s) => {
+    const estProche = proche && s.strike === proche.strike;
+    const part = (Math.abs(s.gex) / pic) * 50;
+    const style = s.gex >= 0 ? "left:50%;width:" + part + "%"
+                             : "left:" + (50 - part) + "%;width:" + part + "%";
+    const classe = s.gex >= 0 ? "pos" : "neg";
+    const ici = estProche ? " proche" : "";
+    // Une étiquette tous les 13 px au moins : plus serré, elles se chevauchent
+    // et deviennent illisibles. Le strike du spot fait exception — c'est le
+    // repere du regard, le taire pour cause d'encombrement cache l'essentiel.
+    let etiquette = "";
+    if (estProche || s.y - dernierEtiquete >= 13) {
+      etiquette = prix(s.strike);
+      dernierEtiquete = s.y;
+    }
+    return '<div class="strike' + ici + '" style="top:' + s.y + "px;height:" + epaisseur + 'px">'
+         + '<span class="prix">' + etiquette + "</span>"
+         + '<span class="barre"><span class="' + classe + '" style="' + style + '"></span></span></div>';
+  }).join("");
 }
+
+// Redessiner quand le graphique bouge. lightweight-charts n'émet rien sur son
+// échelle de PRIX — un zoom vertical ou un glissement ne préviennent pas. On
+// compare donc les coordonnées à chaque image : deux conversions par image, et
+// le rendu ne se refait que si quelque chose a réellement bougé.
+function surveiller() {
+  if (profilCourant.length) {
+    const a = chandeliers.priceToCoordinate(profilCourant[0].strike);
+    const b = chandeliers.priceToCoordinate(profilCourant[profilCourant.length - 1].strike);
+    const empreinte = a + "|" + b + "|" + noeudStrikes.clientHeight;
+    if (empreinte !== derniereEmpreinte) { derniereEmpreinte = empreinte; dessinerProfil(); }
+  }
+  requestAnimationFrame(surveiller);
+}
+requestAnimationFrame(surveiller);
+
+// --- La fraîcheur ---------------------------------------------------------
 
 function fraicheur(etat) {
   const noeud = document.getElementById("fraicheur");
   if (!etat.releve) { noeud.textContent = "aucun relevé"; noeud.classList.add("perime"); return; }
   const age = Math.round(Date.now() / 1000 - etat.releve);
   const quand = new Date(etat.releve * 1000).toLocaleTimeString("fr-FR");
-  noeud.textContent = `relevé ${quand} · il y a ${age} s · ${etat.strikes} strikes`;
+  noeud.textContent = "relevé " + quand + " · il y a " + age + " s · " + etat.strikes + " strikes";
   // Vieillir visiblement quand le collecteur s'arrête : sans ça, un écran figé
   // se lit comme un marché calme.
   noeud.classList.toggle("perime", age > PERIME);
@@ -143,7 +241,58 @@ function avertir(message) {
   noeud.classList.toggle("visible", Boolean(message));
 }
 
+// --- Poser les points sans toucher a la vue -------------------------------
+//
+// `setData()` reecrit toute la serie et RECALE l'axe : appele toutes les quinze
+// secondes, il ramenait la vue au debut des qu'on avait zoome. Sauvegarder puis
+// restaurer la plage ne suffisait pas — la restauration est un second recalage,
+// visible et decale d'une image.
+//
+// `update()` n'a pas cet effet : il ajoute ou remplace un point, la vue ne bouge
+// pas. On ne fait donc `setData()` qu'au premier rendu, ou quand la serie a ete
+// reecrite en profondeur — elaguee, purgee, recollee autrement.
+
+const suivi = new Map();
+
+function poser(cle, serie, points) {
+  if (!points.length) return;
+  const avant = suivi.get(cle);
+  const debut = points[0].time;
+  const fin = points[points.length - 1].time;
+
+  // Le debut qui bouge ou la serie qui raccourcit : ce n'est plus la meme
+  // serie, `update()` ne saurait pas la rattraper.
+  if (!avant || avant.debut !== debut || points.length < avant.taille) {
+    serie.setData(points);
+  } else {
+    // Le dernier point connu est renvoye : la minute en cours n'est pas close,
+    // sa cloture et ses extremes bougent encore.
+    for (const p of points) {
+      if (p.time >= avant.fin) serie.update(p);
+    }
+  }
+  suivi.set(cle, { debut, fin, taille: points.length });
+}
+
+// --- Le cadrage -----------------------------------------------------------
+
 let premierRendu = true;
+
+// Au premier affichage, cadrer sur ce que la série des niveaux couvre — c'est le
+// sujet de l'écran. `fitContent()` montrait les trente jours de barres, où une
+// heure de niveaux tient dans quelques pixels : les niveaux avaient l'air absents
+// du graphique alors qu'ils y étaient tracés.
+function cadrer(barres, niveaux) {
+  const fin = barres[barres.length - 1].time;
+  const depuis = niveaux.length
+    ? niveaux[0].time - Math.max(fin - niveaux[0].time, 1800) * 0.3
+    : fin - 6 * 3600;
+  gPrix.timeScale().setVisibleRange({
+    from: Math.max(Math.round(depuis), barres[0].time),
+    to: fin,
+  });
+  gPrix.timeScale().scrollToRealTime();
+}
 
 async function rafraichir() {
   try {
@@ -151,7 +300,10 @@ async function rafraichir() {
       json("/api/barres"), json("/api/niveaux"), json("/api/profil"),
     ]);
 
-    chandeliers.setData(barres);
+    poser("barres", chandeliers, barres);
+    // Les memes instants, sans valeur : c'est ce qui rend les deux axes
+    // comparables point par point.
+    poser("squelette", squelette, barres.map((b) => ({ time: b.time })));
 
     // Une valeur absente ne se trace pas : relier deux points de part et
     // d'autre d'un trou inventerait un niveau qui n'a jamais existé.
@@ -159,26 +311,29 @@ async function rafraichir() {
       .filter((n) => n[champ] != null)
       .map((n) => ({ time: n.time, value: n[champ] }));
 
-    ligneZg.setData(serie("zero_gamma"));
-    ligneCw.setData(serie("call_wall"));
-    lignePw.setData(serie("put_wall"));
-    sGex.setData(serie("gex"));
-    sCharm.setData(serie("charm"));
-    sVanna.setData(serie("vanna"));
+    poser("zg", ligneZg, serie("zero_gamma"));
+    poser("cw", ligneCw, serie("call_wall"));
+    poser("pw", lignePw, serie("put_wall"));
+    poser("gex", sGex, serie("gex"));
+    poser("charm", sCharm, serie("charm"));
+    poser("vanna", sVanna, serie("vanna"));
 
-    const dernier = niveaux.at(-1);
-    const spot = profil.etat.spot ?? dernier?.spot;
+    // Le cadrage n'a lieu qu'une fois. Ensuite la vue appartient a qui regarde.
+    if (premierRendu && barres.length) { cadrer(barres, niveaux); premierRendu = false; }
+
+    const dernier = niveaux[niveaux.length - 1];
+    const spot = profil.etat.spot ?? dernier?.spot ?? null;
     ecrire("spot", prix(spot));
     ecrire("gex", millions(dernier?.gex), dernier?.gex);
     ecrire("zg", prix(dernier?.zero_gamma));
     ecrire("cw", prix(dernier?.call_wall));
     ecrire("pw", prix(dernier?.put_wall));
 
-    tracerProfil(profil.strikes, spot ?? 0);
+    profilCourant = profil.strikes;
+    spotCourant = spot;
+    derniereEmpreinte = "";   // forcer le redessin sur les nouvelles valeurs
     fraicheur(profil.etat);
     avertir(profil.etat.avertissement);
-
-    if (premierRendu && barres.length) { gPrix.timeScale().fitContent(); premierRendu = false; }
   } catch (err) {
     avertir("Le serveur ne répond pas : " + err.message);
   }
