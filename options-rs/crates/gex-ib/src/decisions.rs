@@ -149,6 +149,24 @@ fn resoudre(place: Tz, locale: NaiveDateTime) -> chrono::DateTime<Tz> {
     panic!("heure {locale} introuvable dans le fuseau {place}")
 }
 
+/// Sépare le champ d'échéance servi par IB : date, heure, fuseau.
+///
+/// `ibapi` consolide les trois dans `last_trade_date_or_contract_month`, sous la
+/// forme `"20260827 15:00:00 US/Central"`, et laisse `last_trade_time` vide. Lire
+/// le mauvais champ ne casse rien de visible : on retombe sur la clôture supposée,
+/// et l'échéance se décale silencieusement de sept heures sur une mensuelle réglée
+/// le matin. C'est la troisième fois que cette heure se dérobe dans ce projet.
+///
+/// Le format court — `"20260827"` seul — reste accepté : c'est ce que rend le
+/// champ pour un contrat déjà échu.
+pub fn separer_echeance(champ: &str) -> (Option<NaiveDate>, Option<&str>, Option<&str>) {
+    let mut morceaux = champ.split_whitespace();
+    let jour = morceaux
+        .next()
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y%m%d").ok());
+    (jour, morceaux.next(), morceaux.next())
+}
+
 /// Les échéances à énumérer, triées et dédoublonnées.
 ///
 /// C'est la seule chose pour laquelle `reqSecDefOptParams` est fiable : il rend
@@ -241,7 +259,11 @@ pub const BUDGET_LIGNES: usize = 90;
 /// Un périmètre vide rend une liste vide — une échéance sans strike dans la plage
 /// n'est pas une panne. Une taille nulle, elle, en est une : elle bouclerait
 /// indéfiniment.
-pub fn lots(contrats: &[ContratOption], taille: usize) -> Result<Vec<Vec<ContratOption>>, String> {
+///
+/// Générique parce que le découpage ne dépend pas de ce qu'on découpe : la couche
+/// réseau fait voyager le contrat IB complet à côté de sa clé, et la spécialiser
+/// obligerait à réécrire la même fonction deux fois.
+pub fn lots<T: Clone>(contrats: &[T], taille: usize) -> Result<Vec<Vec<T>>, String> {
     if taille < 1 {
         return Err(format!("taille de lot absurde : {taille} (attendu : au moins 1)"));
     }
@@ -382,6 +404,33 @@ mod tests {
     // ---=== échéances utiles ===---
 
     #[test]
+    fn le_champ_d_echeance_d_ib_se_separe_en_trois() {
+        // Ce que TWS sert réellement, relevé le 26 août 2026.
+        let (jour, heure, fuseau) = separer_echeance("20260827 15:00:00 US/Central");
+        assert_eq!(jour, Some(date("2026-08-27")));
+        assert_eq!(heure, Some("15:00:00"));
+        assert_eq!(fuseau, Some("US/Central"));
+        // Et l'échéance datée qu'on en tire
+        assert_eq!(
+            instant_echeance(jour.unwrap(), heure, fuseau).unwrap(),
+            ech("2026-08-27 16:00:00")
+        );
+    }
+
+    #[test]
+    fn un_champ_d_echeance_sans_heure_reste_lisible() {
+        let (jour, heure, fuseau) = separer_echeance("20260827");
+        assert_eq!(jour, Some(date("2026-08-27")));
+        assert_eq!((heure, fuseau), (None, None));
+    }
+
+    #[test]
+    fn un_champ_d_echeance_illisible_ne_rend_aucune_date() {
+        assert_eq!(separer_echeance("").0, None);
+        assert_eq!(separer_echeance("bientot").0, None);
+    }
+
+    #[test]
     fn l_horizon_se_compte_en_jours_calendaires() {
         let toutes = [
             date("2026-08-25"),
@@ -468,13 +517,15 @@ mod tests {
 
     #[test]
     fn un_perimetre_vide_ne_fait_aucun_lot() {
-        assert!(lots(&[], BUDGET_LIGNES).unwrap().is_empty());
+        let vide: [ContratOption; 0] = [];
+        assert!(lots(&vide, BUDGET_LIGNES).unwrap().is_empty());
     }
 
     /// Une taille nulle bouclerait indéfiniment : c'est une panne, pas un cas limite.
     #[test]
     fn une_taille_de_lot_nulle_est_refusee() {
-        assert!(lots(&[], 0).is_err());
+        let vide: [ContratOption; 0] = [];
+        assert!(lots(&vide, 0).is_err());
     }
 
     // ---=== sélection du vif ===---

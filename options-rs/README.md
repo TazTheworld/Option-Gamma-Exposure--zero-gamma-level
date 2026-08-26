@@ -84,7 +84,7 @@ vérifier qu'on retrouve la vérité terrain — pas à graver une régression.
 | suivi `--watch`, historique | `main.py`, `history.py` | ⬜ |
 | graphiques | `plots.py` | ⬜ |
 | décisions de collecte | `ib_data.py` | ✅ `gex-ib::decisions` |
-| couche réseau TWS | `ib_data.py` | ⬜ `gex-ib::client` |
+| couche réseau TWS | `ib_data.py` | ✅ `gex-ib::client` |
 | démon | `ib_collector.py` | ⬜ `gex-collector` |
 
 ### Ce que le portage a déjà rendu impossible à écrire
@@ -114,6 +114,27 @@ Ce qui reste à écrire est le câblage, pas le protocole.
 **Rien dans `gex-ib` ne passe d'ordre.** Le collecteur consulte : il énumère des
 contrats et souscrit à des cotations. La crate expose bien un constructeur
 d'ordres — il n'est appelé nulle part.
+
+### Trois pièges que seul un TWS réel révèle
+
+`cargo run --example sonde -p gex-ib -- "AAAA-MM-JJ HH:MM:SS"` confronte le client
+à une passerelle vivante. Les trois défauts ci-dessous compilaient, passaient les
+tests, et ne rendaient rien — ou pire, auraient rendu des chiffres faux.
+
+**Le `conId` seul ne suffit pas.** Une souscription sur un contrat réduit à son
+identifiant rend l'erreur 200, « aucune définition de titre trouvée ». Le contrat
+complet voyage donc à côté de sa clé. Sans ça, la souscription part, aucune donnée
+n'arrive, et un contrat muet ne se distingue pas d'un contrat sans open interest.
+
+**L'heure d'échéance vit dans le champ de date.** `ibapi` consolide les trois dans
+`last_trade_date_or_contract_month` — `"20260827 15:00:00 US/Central"` — et laisse
+`last_trade_time` vide. Lire le mauvais champ ne casse rien de visible : on
+retombe sur la clôture supposée, et une mensuelle réglée le matin se décale de
+sept heures.
+
+**Les grecs bid/ask servent des sentinelles.** `DelayedBidOption` porte une IV de
+-1 et un gamma de -2 quand la cote manque. Les absorber écraserait le calcul du
+modèle par un nombre négatif. Seuls les ticks 13 et 83 — le modèle — sont lus.
 
 ## Tests
 
