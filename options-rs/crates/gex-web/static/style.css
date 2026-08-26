@@ -78,7 +78,7 @@ main {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 250px;
-  grid-template-rows: 1fr 170px;
+  grid-template-rows: 1fr 210px;
   gap: 1px;
   background: var(--bordure);
   min-height: 0;

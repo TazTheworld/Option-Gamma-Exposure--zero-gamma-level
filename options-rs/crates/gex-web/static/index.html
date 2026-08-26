@@ -18,6 +18,8 @@
   <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
   <div class="mesure"><span class="etiquette">call wall</span><span class="valeur" id="cw">—</span></div>
   <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
+  <div class="mesure"><span class="etiquette">charm / jour</span><span class="valeur" id="charm">—</span></div>
+  <div class="mesure"><span class="etiquette">vanna / pt vol</span><span class="valeur" id="vanna">—</span></div>
   <div class="fraicheur" id="fraicheur">—</div>
 </header>
 
@@ -37,6 +39,9 @@
   <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
   <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
   <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
+  <span class="legende"><i class="pastille" style="background:#6b8cae"></i> charm</span>
+  <span class="legende"><i class="pastille" style="background:#9a7fb8"></i> vanna</span>
+  <span>trois unités différentes, trois bandes séparées : elles ne se comparent pas entre elles</span>
   <span>données différées d'environ 15 minutes — ce n'est pas du temps réel</span>
 </footer>
 
@@ -93,12 +98,7 @@ const lignePw = gPrix.addLineSeries({ color: "#ef5350", lineWidth: 1, lineStyle:
 const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"), {
   ...commun,
   timeScale: { ...commun.timeScale, visible: false },
-  // Des dollars bruts donnent « 200000000.00 » sur l'axe, illisible. Le lecteur
-  // parle en millions, l'ecran aussi.
-  localization: {
-    priceFormatter: (v) =>
-      Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(1) + " Md" : Math.round(v / 1e6) + " M",
-  },
+  rightPriceScale: { visible: false },
 });
 // Les totaux n'ont qu'un point par minute cotee, les barres en ont des milliers :
 // synchroniser deux axes par INDICE revient alors a aligner le centieme point de
@@ -108,9 +108,35 @@ const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"),
 // comparable.
 const squelette = gTotaux.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
 
-const sGex = gTotaux.addLineSeries({ color: "#e0a458", lineWidth: 2, priceLineVisible: false, title: "GEX" });
-const sCharm = gTotaux.addLineSeries({ color: "#6b8cae", lineWidth: 1, priceLineVisible: false, title: "charm" });
-const sVanna = gTotaux.addLineSeries({ color: "#9a7fb8", lineWidth: 1, priceLineVisible: false, title: "vanna" });
+// Trois bandes qui ne se touchent pas, et NON trois courbes sur un axe commun.
+//
+// Les trois grandeurs n'ont pas la meme unite : le GEX est en dollars par
+// mouvement de 1 % du spot, le charm en dollars de delta par JOUR, le vanna en
+// dollars de delta par POINT DE VOL. Sur un axe partage, elles se croisent — et
+// un croisement se lit comme un evenement alors qu'il ne depend que du facteur
+// d'echelle choisi ici. C'est un faux signal fabrique par l'ecran.
+//
+// Les separer physiquement le supprime, sans rien perdre : ce qui compte pour
+// chacune est son SIGNE et sa DERIVE, tous deux intacts dans sa propre bande.
+function bande(id, couleur, titre, haut, bas) {
+  const s = gTotaux.addLineSeries({
+    color: couleur,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    title: titre,
+    priceScaleId: id,
+  });
+  gTotaux.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
+  // Le zero, parce que c'est le passage par zero qui change la lecture — pas la
+  // valeur absolue.
+  s.createPriceLine({ price: 0, color: "#2c3442", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+  return s;
+}
+
+const sGex = bande("gex", "#e0a458", "GEX", 0.06, 0.70);
+const sCharm = bande("charm", "#6b8cae", "charm", 0.38, 0.38);
+const sVanna = bande("vanna", "#9a7fb8", "vanna", 0.70, 0.06);
 
 // Les deux graphiques partagent le même axe : les séries sont à la minute des
 // deux côtés, c'est tout l'intérêt de les avoir écrites ainsi. Le drapeau
@@ -328,6 +354,8 @@ async function rafraichir() {
     ecrire("zg", prix(dernier?.zero_gamma));
     ecrire("cw", prix(dernier?.call_wall));
     ecrire("pw", prix(dernier?.put_wall));
+    ecrire("charm", millions(dernier?.charm), dernier?.charm);
+    ecrire("vanna", millions(dernier?.vanna), dernier?.vanna);
 
     profilCourant = profil.strikes;
     spotCourant = spot;
