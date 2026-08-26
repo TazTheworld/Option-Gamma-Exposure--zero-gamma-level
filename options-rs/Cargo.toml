@@ -30,3 +30,9 @@ chrono-tz = "0.10"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# ibapi corrige localement, pour UNE ligne. Voir vendor/ibapi/CORRECTIF.md :
+# le code 10090 d'IB manquait a la liste des avis de repli, si bien qu'il tuait
+# le flux au lieu de le laisser servir les donnees differees qui suivent.
+[patch.crates-io]
+ibapi = { path = "vendor/ibapi" }

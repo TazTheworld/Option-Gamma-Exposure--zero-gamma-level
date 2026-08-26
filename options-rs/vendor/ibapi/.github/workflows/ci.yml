@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - v2-stable
+  push:
+    branches:
+      - main
+      - v2-stable
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Enable more efficient cargo builds
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_LOG: info
+
+jobs:
+  # Single job that runs all checks for each feature set
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [sync, async]
+    name: CI ${{ matrix.feature }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+
+      # Use Swatinem's Rust cache for better performance
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.feature }}
+          cache-on-failure: true
+          # Cache target directory for each feature set separately
+          cache-targets: true
+          # Clean cache if it gets too large
+          cache-all-crates: true
+
+      # Combine format check (run once per matrix to catch issues early)
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      # Build with optimizations for faster subsequent steps
+      - name: Build
+        run: cargo build --features ${{ matrix.feature }}
+
+      # Run clippy before tests to catch issues early
+      - name: Run clippy
+        run: cargo clippy --all-targets --features ${{ matrix.feature }} -- -D warnings
+
+      # Run tests
+      - name: Run tests
+        run: cargo test --features ${{ matrix.feature }}
+
+      # Build examples (only if previous steps pass)
+      - name: Build examples
+        run: cargo build --examples --features ${{ matrix.feature }}
+
+      # Build documentation
+      - name: Build documentation
+        run: cargo doc --no-deps --features ${{ matrix.feature }}
+
+      # Check that benches compile (if any exist)
+      - name: Check benches compile
+        run: cargo check --benches --features ${{ matrix.feature }} || true
+
+  # Separate minimal job for basic checks that don't need feature matrix
+  basic-checks:
+    runs-on: ubuntu-latest
+    name: Basic checks
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: basic-checks
+
+      # Check that Cargo.toml is properly formatted and valid
+      - name: Check Cargo.toml
+        run: |
+          cargo metadata --format-version 1 > /dev/null
+          
+      # Audit dependencies for security vulnerabilities
+      - name: Security audit
+        run: |
+          cargo install cargo-audit || true
+          cargo audit || true

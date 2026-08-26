@@ -1,0 +1,459 @@
+//! # Account Management
+//!
+//! This module provides functionality for managing positions and profit and loss (PnL)
+//! information in a trading system. It includes structures and implementations for:
+//!
+//! - Position tracking
+//! - Daily, unrealized, and realized PnL calculations
+//! - Family code management
+//! - Real-time PnL updates for individual positions
+//!
+
+// Common implementation modules
+pub(crate) mod common;
+
+// Domain types
+pub mod types;
+
+use crate::contracts::Contract;
+use crate::Error;
+use serde::{Deserialize, Serialize};
+
+// Public types - always available regardless of feature flags
+
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+/// Account information as it appears in the TWS' Account Summary Window
+pub struct AccountSummary {
+    /// The account identifier.
+    pub account: String,
+    /// The account's attribute.
+    pub tag: String,
+    /// The account's attribute's value.
+    pub value: String,
+    /// The currency in which the value is expressed.
+    pub currency: String,
+}
+
+/// Constants for account summary tags used in account summary requests.
+/// These tags define which account information fields to retrieve.
+pub struct AccountSummaryTags {}
+
+impl AccountSummaryTags {
+    /// Identifies the account type (e.g. cash, margin, IRA).
+    pub const ACCOUNT_TYPE: &'static str = "AccountType";
+    /// Net liquidation value of the account including cash and positions.
+    pub const NET_LIQUIDATION: &'static str = "NetLiquidation";
+    /// Total cash across currencies converted to the base currency.
+    pub const TOTAL_CASH_VALUE: &'static str = "TotalCashValue";
+    /// Settled cash available for trading.
+    pub const SETTLED_CASH: &'static str = "SettledCash";
+    /// Accrued cash such as interest or dividends due.
+    pub const ACCRUED_CASH: &'static str = "AccruedCash";
+    /// Maximum capital available to open new positions.
+    pub const BUYING_POWER: &'static str = "BuyingPower";
+    /// Equity with loan value after margin calculations.
+    pub const EQUITY_WITH_LOAN_VALUE: &'static str = "EquityWithLoanValue";
+    /// Equity with loan value recorded on the previous trading day.
+    pub const PREVIOUS_EQUITY_WITH_LOAN_VALUE: &'static str = "PreviousEquityWithLoanValue";
+    /// Gross market value of all positions.
+    pub const GROSS_POSITION_VALUE: &'static str = "GrossPositionValue";
+    /// Regulation-T equity available in the account.
+    pub const REQ_T_EQUITY: &'static str = "RegTEquity";
+    /// Regulation-T margin requirement.
+    pub const REQ_T_MARGIN: &'static str = "RegTMargin";
+    /// Special Memorandum Account value as defined by Regulation-T.
+    pub const SMA: &'static str = "SMA";
+    /// Initial margin requirement for current positions.
+    pub const INIT_MARGIN_REQ: &'static str = "InitMarginReq";
+    /// Maintenance margin requirement for current positions.
+    pub const MAINT_MARGIN_REQ: &'static str = "MaintMarginReq";
+    /// Funds currently available for trading.
+    pub const AVAILABLE_FUNDS: &'static str = "AvailableFunds";
+    /// Excess liquidity above maintenance requirements.
+    pub const EXCESS_LIQUIDITY: &'static str = "ExcessLiquidity";
+    /// Cushion percentage representing excess liquidity scaled by equity.
+    pub const CUSHION: &'static str = "Cushion";
+    /// Full initial margin requirement across all related accounts.
+    pub const FULL_INIT_MARGIN_REQ: &'static str = "FullInitMarginReq";
+    /// Full maintenance margin requirement across all related accounts.
+    pub const FULL_MAINT_MARGIN_REQ: &'static str = "FullMaintMarginReq";
+    /// Full funds available for trading across all related accounts.
+    pub const FULL_AVAILABLE_FUNDS: &'static str = "FullAvailableFunds";
+    /// Full excess liquidity across all related accounts.
+    pub const FULL_EXCESS_LIQUIDITY: &'static str = "FullExcessLiquidity";
+    /// Estimated time of the next margin change event.
+    pub const LOOK_AHEAD_NEXT_CHANGE: &'static str = "LookAheadNextChange";
+    /// Projected initial margin requirement at the next change.
+    pub const LOOK_AHEAD_INIT_MARGIN_REQ: &'static str = "LookAheadInitMarginReq";
+    /// Projected maintenance margin requirement at the next change.
+    pub const LOOK_AHEAD_MAINT_MARGIN_REQ: &'static str = "LookAheadMaintMarginReq";
+    /// Projected funds available for trading at the next change.
+    pub const LOOK_AHEAD_AVAILABLE_FUNDS: &'static str = "LookAheadAvailableFunds";
+    /// Projected excess liquidity at the next change.
+    pub const LOOK_AHEAD_EXCESS_LIQUIDITY: &'static str = "LookAheadExcessLiquidity";
+    /// Highest pending warning severity for the account.
+    pub const HIGHEST_SEVERITY: &'static str = "HighestSeverity";
+    /// Day trades remaining before hitting the PDT limit.
+    pub const DAY_TRADES_REMAINING: &'static str = "DayTradesRemaining";
+    /// Effective account leverage based on net liquidation.
+    pub const LEVERAGE: &'static str = "Leverage";
+    /// Returns cash balance data in the account's base currency only.
+    /// Available since TWS Build 956 / IB Gateway 956.
+    ///
+    /// For currency-specific queries, use the literal string format `"$LEDGER:CURRENCY"`
+    /// where CURRENCY is replaced with the actual currency code (e.g., `"$LEDGER:USD"`,
+    /// `"$LEDGER:EUR"`, `"$LEDGER:HKD"`).
+    pub const LEDGER: &'static str = "$LEDGER";
+    /// Returns aggregated cash balance data across all accounts and currencies.
+    /// Available since TWS Build 956 / IB Gateway 956.
+    pub const LEDGER_ALL: &'static str = "$LEDGER:ALL";
+
+    /// Convenience slice containing every supported account summary tag.
+    pub const ALL: &'static [&'static str] = &[
+        Self::ACCOUNT_TYPE,
+        Self::NET_LIQUIDATION,
+        Self::TOTAL_CASH_VALUE,
+        Self::SETTLED_CASH,
+        Self::ACCRUED_CASH,
+        Self::BUYING_POWER,
+        Self::EQUITY_WITH_LOAN_VALUE,
+        Self::PREVIOUS_EQUITY_WITH_LOAN_VALUE,
+        Self::GROSS_POSITION_VALUE,
+        Self::REQ_T_EQUITY,
+        Self::REQ_T_MARGIN,
+        Self::SMA,
+        Self::INIT_MARGIN_REQ,
+        Self::MAINT_MARGIN_REQ,
+        Self::AVAILABLE_FUNDS,
+        Self::EXCESS_LIQUIDITY,
+        Self::CUSHION,
+        Self::FULL_INIT_MARGIN_REQ,
+        Self::FULL_MAINT_MARGIN_REQ,
+        Self::FULL_AVAILABLE_FUNDS,
+        Self::FULL_EXCESS_LIQUIDITY,
+        Self::LOOK_AHEAD_NEXT_CHANGE,
+        Self::LOOK_AHEAD_INIT_MARGIN_REQ,
+        Self::LOOK_AHEAD_MAINT_MARGIN_REQ,
+        Self::LOOK_AHEAD_AVAILABLE_FUNDS,
+        Self::LOOK_AHEAD_EXCESS_LIQUIDITY,
+        Self::HIGHEST_SEVERITY,
+        Self::DAY_TRADES_REMAINING,
+        Self::LEVERAGE,
+        Self::LEDGER_ALL,
+    ];
+}
+
+/// Result of an account summary request emitted by the [Client](crate::client::Client).
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug)]
+pub enum AccountSummaryResult {
+    /// Summary of account details such as net liquidation, cash balance, etc.
+    Summary(AccountSummary),
+    /// End marker for a batch of account summaries
+    End,
+}
+
+/// Aggregated profit and loss metrics for the entire account.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PnL {
+    /// DailyPnL for the position
+    pub daily_pnl: f64,
+    /// UnrealizedPnL total unrealized PnL for the position (since inception) updating in real time.
+    pub unrealized_pnl: Option<f64>,
+    /// RealizedPnL is the realized PnL for the position.
+    pub realized_pnl: Option<f64>,
+}
+
+/// Real-time profit and loss metrics for a single position.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PnLSingle {
+    /// Current size of the position
+    pub position: f64,
+    /// DailyPnL for the position
+    pub daily_pnl: f64,
+    /// UnrealizedPnL is the total unrealized PnL for the position (since inception) updating in real time
+    pub unrealized_pnl: f64,
+    /// RealizedPnL is the realized PnL for the position.
+    pub realized_pnl: f64,
+    /// Current market value of the position
+    pub value: f64,
+}
+
+/// Open position held within the account.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Position {
+    /// Account holding position
+    pub account: String,
+    /// Contract
+    pub contract: Contract,
+    /// Number of shares held
+    pub position: f64,
+    /// Average cost of shares
+    pub average_cost: f64,
+}
+
+/// Messages emitted while streaming position updates.
+#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug)]
+pub enum PositionUpdate {
+    /// Update for a position in the account
+    Position(Position),
+    /// Indicates all positions have been transmitted
+    PositionEnd,
+}
+
+/// Messages emitted while streaming model-code scoped position updates.
+#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug)]
+pub enum PositionUpdateMulti {
+    /// Position update scoped to a specific account/model code pair.
+    Position(PositionMulti),
+    /// Indicates all positions have been transmitted.
+    PositionEnd,
+}
+
+/// Position scoped to a specific account and model code.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PositionMulti {
+    /// Account holding position
+    pub account: String,
+    /// Contract
+    pub contract: Contract,
+    /// Number of shares held
+    pub position: f64,
+    /// Average cost of shares
+    pub average_cost: f64,
+    /// Model code for the position
+    pub model_code: String,
+}
+
+/// Family code assigned to a group of accounts.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FamilyCode {
+    /// Account ID for the account family
+    pub account_id: String,
+    /// Account family code
+    pub family_code: String,
+}
+
+/// Account update events delivered while streaming high-level account data.
+#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug)]
+pub enum AccountUpdate {
+    /// Key/value update describing an account metric.
+    AccountValue(AccountValue),
+    /// Update describing a position's valuation data.
+    PortfolioValue(AccountPortfolioValue),
+    /// Timestamp indicating when the account snapshot was generated.
+    UpdateTime(AccountUpdateTime),
+    /// Indicates the end of the account update stream.
+    End,
+}
+
+/// Single account value update emitted by the API.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct AccountValue {
+    /// Key describing the value
+    pub key: String,
+    /// Value corresponding to the key
+    pub value: String,
+    /// Currency of the value
+    pub currency: String,
+    /// Account ID (optional)
+    pub account: Option<String>,
+}
+
+/// Aggregated valuation details for a single contract within the account.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountPortfolioValue {
+    /// Contract for the position
+    pub contract: Contract,
+    /// Number of shares held
+    pub position: f64,
+    /// Current market price of the contract
+    pub market_price: f64,
+    /// Current market value of the position (shares * market price)
+    pub market_value: f64,
+    /// Average cost per share
+    pub average_cost: f64,
+    /// Unrealized profit and loss
+    pub unrealized_pnl: f64,
+    /// Realized profit and loss
+    pub realized_pnl: f64,
+    /// Account holding the position
+    pub account: Option<String>,
+}
+
+/// Timestamp wrapper for account update streams.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountUpdateTime {
+    /// Timestamp of the last account update
+    pub timestamp: String,
+}
+
+/// Account update events scoped to an account/model code pair.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, PartialEq)]
+pub enum AccountUpdateMulti {
+    /// Key/value update for a specific account/model code pair.
+    AccountMultiValue(AccountMultiValue),
+    /// Indicates the end of the scoped account update stream.
+    End,
+}
+
+/// Key/value pair returned for a specific account/model code pair.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountMultiValue {
+    /// Account ID
+    pub account: String,
+    /// Model code
+    pub model_code: String,
+    /// Key describing the value
+    pub key: String,
+    /// Value corresponding to the key
+    pub value: String,
+    /// Currency of the value
+    pub currency: String,
+}
+
+/// User identity information returned by `Client::user_info`.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserInfo {
+    /// White branding identifier, if applicable.
+    pub white_branding_id: String,
+}
+
+/// Financial Advisor configuration data type.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FaDataType {
+    /// Account groups configuration.
+    Groups = 1,
+    /// Account aliases configuration.
+    AccountAliases = 3,
+}
+
+impl FaDataType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Groups => "1",
+            Self::AccountAliases => "3",
+        }
+    }
+
+    fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "1" => Some(Self::Groups),
+            "3" => Some(Self::AccountAliases),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn from_i32(v: i32) -> Result<Self, Error> {
+        match v {
+            1 => Ok(Self::Groups),
+            3 => Ok(Self::AccountAliases),
+            _ => Err(Error::Parse(0, v.to_string(), "unknown FaDataType".into())),
+        }
+    }
+}
+
+impl_wire_enum!(FaDataType);
+
+/// Financial Advisor configuration data returned by `Client::request_fa`.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaConfig {
+    /// Which FA dataset this configuration represents (echoed from the request).
+    pub fa_data_type: FaDataType,
+    /// The XML configuration data.
+    pub xml: String,
+}
+
+/// Confirmation returned by `Client::replace_fa`.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplaceFaResult {
+    /// Confirmation text from the server.
+    pub text: String,
+}
+
+/// Server-side log verbosity level for TWS API diagnostics.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServerLogLevel {
+    /// System-level messages.
+    System = 1,
+    /// Error messages.
+    Error = 2,
+    /// Warning messages.
+    Warning = 3,
+    /// Informational messages.
+    Info = 4,
+    /// Detailed debugging output.
+    Detail = 5,
+}
+
+impl ServerLogLevel {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "1",
+            Self::Error => "2",
+            Self::Warning => "3",
+            Self::Info => "4",
+            Self::Detail => "5",
+        }
+    }
+
+    fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "1" => Some(Self::System),
+            "2" => Some(Self::Error),
+            "3" => Some(Self::Warning),
+            "4" => Some(Self::Info),
+            "5" => Some(Self::Detail),
+            _ => None,
+        }
+    }
+}
+
+impl_wire_enum!(ServerLogLevel);
+
+/// API verification data returned by `Client::verify_request`.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationChallenge {
+    /// The API data string from the verification response.
+    pub api_data: String,
+}
+
+/// Result of a `Client::verify_message` call.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationResult {
+    /// Whether the verification was successful.
+    pub is_successful: bool,
+    /// Error text if verification failed.
+    pub error_text: String,
+}
+
+// Feature-specific implementations
+#[cfg(feature = "sync")]
+mod sync;
+
+#[cfg(feature = "async")]
+mod r#async;
