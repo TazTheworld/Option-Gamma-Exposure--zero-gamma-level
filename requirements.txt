@@ -1,5 +1,7 @@
 # Le moteur d'options est en Rust : voir options-rs/ et son README.
-# Ce qui reste en Python est sec_data.py, les declarations d'inities SEC.
+# Ce qui reste en Python lit les declarations d'inities : sec_data.py pour les
+# dirigeants d'entreprise (SEC), congres_data.py pour les elus (STOCK Act).
+#   pip install -e ".[congres]"     lecture des PDF du Congres (pypdf)
 #   pip install -e ".[dev]"         tests
 pandas==3.0.5
 requests==2.34.2

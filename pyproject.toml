@@ -20,13 +20,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Les rapports de transactions du Congres sont des PDF : seul congres_data les
+# lit, et il ne l'importe que dans la fonction qui en a besoin.
+congres = ["pypdf>=5.0"]
+
 dev = ["pytest>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level"
 
 [tool.setuptools]
-py-modules = ["sec_data"]
+py-modules = ["sec_data", "congres_data"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
