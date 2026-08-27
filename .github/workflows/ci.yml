@@ -1,0 +1,55 @@
+# Pourquoi cette CI tourne sur DEUX architectures.
+#
+# Le poste de développement est en x86_64, la machine visée est un Raspberry Pi
+# en aarch64. Un dépôt qui ne vérifie qu'une des deux ne découvre l'écart qu'au
+# déploiement — au moment précis où l'on n'a plus sous la main de quoi le
+# corriger. Les tests tournent donc sur les deux, et c'est le travail de l'ARM64
+# qui répond à la question que la machine de développement ne peut pas poser.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  x86:
+    name: Tests et clippy (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: options-rs
+      - name: Tests
+        run: cargo test --workspace --manifest-path options-rs/Cargo.toml
+      - name: Clippy
+        run: >
+          cargo clippy --workspace --all-targets
+          --manifest-path options-rs/Cargo.toml -- -D warnings
+      # `cargo fmt` n'est PAS vérifié ici, et c'est délibéré : le dépôt porte
+      # quatre-vingt-neuf écarts antérieurs à cette CI. Les mettre au barrage
+      # rendrait rouge une branche saine, ce qui apprend en deux jours à ne plus
+      # regarder le rouge. À reprendre dans un commit dédié, puis à brancher ici
+      # une fois le compte ramené à zéro.
+
+  aarch64:
+    name: Tests sur l'architecture du Pi
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: options-rs
+      # Compilation NATIVE, pas croisée : le runner est lui-même en aarch64, donc
+      # les tests s'exécutent vraiment sur l'architecture de destination au lieu
+      # d'être seulement compilés pour elle.
+      - name: Tests
+        run: cargo test --workspace --manifest-path options-rs/Cargo.toml

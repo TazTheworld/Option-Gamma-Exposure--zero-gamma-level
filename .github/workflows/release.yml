@@ -1,0 +1,57 @@
+# Les binaires du Pi sont construits ici, pas sur le Pi.
+#
+# Compiler sur place coûte trois quarts d'heure la première fois et occupe la
+# machine qui, pendant ce temps, ne collecte pas. Le runner aarch64 de GitHub est
+# gratuit sur un dépôt public et compile nativement : le Pi n'a plus qu'à
+# télécharger. C'est aussi ce qui évite d'installer une chaîne de compilation sur
+# la machine qui tient une session Gateway authentifiée.
+name: Binaires ARM64
+
+on:
+  push:
+    tags: ["v*"]
+  # Pour éprouver la construction sans publier : utile puisqu'un workflow ne se
+  # teste pas ailleurs que sur GitHub.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publier:
+    name: Compiler et publier
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: options-rs
+
+      - name: Compiler
+        run: cargo build --release --workspace --manifest-path options-rs/Cargo.toml
+
+      - name: Empaqueter
+        run: |
+          cd options-rs/target/release
+          strip gex gex-collector gex-web
+          tar czf "$GITHUB_WORKSPACE/gex-aarch64.tar.gz" gex gex-collector gex-web
+          cd "$GITHUB_WORKSPACE"
+          # La somme accompagne l'archive : le Pi la vérifie AVANT de remplacer
+          # des binaires en service, sans quoi un téléchargement tronqué
+          # arrêterait la collecte au lieu de la mettre à jour.
+          sha256sum gex-aarch64.tar.gz > gex-aarch64.tar.gz.sha256
+
+      - name: Déposer l'archive sur l'exécution
+        uses: actions/upload-artifact@v4
+        with:
+          name: gex-aarch64
+          path: gex-aarch64.tar.gz*
+
+      - name: Publier la version
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            gex-aarch64.tar.gz
+            gex-aarch64.tar.gz.sha256
