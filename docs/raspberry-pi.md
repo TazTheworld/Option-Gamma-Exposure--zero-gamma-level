@@ -41,6 +41,56 @@ plus. C'est Gateway qui dimensionne la machine, pas nous.
 Une carte SD suffit, mais un SSD USB vaut mieux — pas pour la place, pour l'usure :
 le collecteur réécrit `courant.parquet` toutes les quinze secondes.
 
+## La distribution
+
+**Raspberry Pi OS Lite, 64 bits.** La version courante repose sur Debian 13
+« Trixie ».
+
+Le **64 bits** n'est pas négociable : l'installeur ARM d'IB Gateway est en
+aarch64, et les binaires publiés par la CI aussi. Une image 32 bits est une
+impasse dont on ne sort qu'en réinstallant. **Lite** veut dire sans bureau, ce
+qu'on cherche puisque la machine n'aura pas d'écran — Xvfb viendra ensuite pour
+Gateway seul, plutôt qu'un environnement graphique complet qui tournerait pour
+rien.
+
+### Pourquoi ne pas chercher plus léger
+
+Le réflexe est bon mais il ne s'applique pas ici. Raspberry Pi OS Lite occupe
+environ 200 Mo au repos, DietPi descend sous 40 Mo — et **Gateway en prendra 700
+à lui seul**. Économiser cent cinquante mégaoctets sur le système quand la JVM en
+consomme cinq fois plus ne change rien de mesurable, et DietPi ajoute une couche
+de configuration qui, elle, se paie en temps.
+
+Le critère utile n'est donc pas l'empreinte mais le support matériel et la
+stabilité, et c'est Raspberry Pi OS qui gagne sur les deux : il est fait pour
+cette carte.
+
+### Et Ubuntu Server ?
+
+Il ferait très bien l'affaire en 24.04 LTS ARM64, et son support long est un vrai
+argument pour une machine qu'on veut oublier pendant des années. Deux réserves :
+il charge sur un Pi des modules noyau dont il n'a pas l'usage, et le support de
+la carte reste meilleur du côté de Raspberry Pi OS.
+
+### L'installation
+
+Passe par **Raspberry Pi Imager**, qui règle tout avant le premier démarrage —
+utilisateur, mot de passe, SSH activé, Wi-Fi. Sans lui il faut un clavier et un
+écran pour la première connexion, ce qui est absurde pour une machine destinée à
+n'en avoir jamais.
+
+Nos binaires ne demandent rien d'autre que la glibc du système. Gateway, lui, est
+une application graphique et réclame de quoi en faire tourner une sans écran :
+
+```sh
+sudo apt update
+sudo apt install -y xvfb libxtst6 libxrender1 libxi6 curl
+```
+
+L'installeur officiel de Gateway apporte normalement son propre JRE ; s'il ne le
+fait pas, `openjdk-17-jre` est dans les dépôts ARM64 de Debian. Une chaîne Rust
+n'est nécessaire que si tu veux compiler sur place, ce dont la CI te dispense.
+
 ## IB Gateway sur ARM64
 
 IBKR publie désormais un installeur `linux-arm` **officiel**, à partir de la version
