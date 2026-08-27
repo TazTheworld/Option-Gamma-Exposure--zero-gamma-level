@@ -128,6 +128,19 @@ huit courbes, à n'importe quel zoom. C'est ce qui permet de descendre du regard
 prix vers ce que le GEX a fait au même instant — la seule raison d'empiler des panneaux.
 Les étiquettes vivent dans la gouttière de droite, jamais par-dessus les courbes.
 
+**Le panneau des couches**, en haut à gauche du prix, éteint ce qui encombre : le fond de
+régime, le zero gamma, les murs, le max pain, la bande ±1σ, et chacune des huit mesures.
+C'est aussi la légende — pastille, nom, allumé ou non.
+
+Masquer une mesure de la bande lui reprend sa **place** et la donne aux autres : huit
+couloirs dans 316 px font 32 px chacun, cinq en font 55. C'est là que l'extinction sert le
+plus.
+
+Le panneau liste toujours tout, y compris ce qui est masqué — **barré, jamais retiré**. Une
+couche absente de la liste se lirait « il n'y a pas de put wall » au lieu de « tu l'as
+éteinte ». Et replié, son en-tête annonce quand même le compte : `couches 9/14 · 5
+masquées`. Une capture d'écran ne peut donc pas mentir sur ce qui manque.
+
 **Survole n'importe où** — le graphique de prix comme la bande du bas : un trait vertical
 traverse tout, la gouttière affiche la valeur de cet instant en face de chaque courbe, et
 une bulle suit le curseur avec l'instant entier — cours, haut/bas, zero gamma, murs, max

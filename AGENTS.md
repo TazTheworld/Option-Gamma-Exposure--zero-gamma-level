@@ -280,6 +280,17 @@ disent. Dans la série, ces trois-là sont des `Option<f64>` et non des `f64` co
 voisins, pour la même raison : un fichier écrit avant leur ajout n'en a aucune trace, et
 les relire à zéro dessinerait une ligne plate sur toute la séance précédente.
 
+**Une couche éteinte reste listée, barrée.** Le panneau des couches ne retire jamais une
+entrée : une couche absente de la liste se lirait « il n'y a pas de put wall » au lieu de
+« tu l'as éteinte ». Et son en-tête annonce le compte même replié — `couches 9/14 ·
+5 masquées`, en couleur d'alerte — pour qu'une capture d'écran ne puisse pas mentir sur ce
+qui manque. C'est ce qui rend le réglage acceptable là où la conception disait « pas de
+réglages » : le problème était l'invisibilité, pas le réglage.
+
+Le voile de la zone sans cotation, lui, **ne s'éteint pas avec le fond de régime**. Il ne
+dit pas le régime, il dit que le sous-jacent ne traite pas : l'éteindre par préférence
+d'affichage ferait disparaître un fait.
+
 Et un couloir vide de l'écran **le dit** au lieu de rester muet — muet, on le lit comme une
 mesure nulle. Avec deux formulations à ne pas confondre : « aucun point écrit » quand la
 mesure n'existe nulle part dans la série, « hors de la fenêtre » quand le zoom l'a laissée

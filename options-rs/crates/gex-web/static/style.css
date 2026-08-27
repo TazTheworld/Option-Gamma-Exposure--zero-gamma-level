@@ -131,6 +131,65 @@ main {
   min-width: 0;
 }
 
+/* Le panneau des couches, en haut à gauche du prix.
+   Replié il ne coûte qu'une ligne ; ouvert il couvre un coin du graphique, ce qui
+   est acceptable le temps d'un clic. L'en-tête reste visible dans les deux cas et
+   annonce le compte de ce qui est masqué : une capture ne peut pas mentir. */
+#couches {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.6rem;
+  z-index: 6;
+  font-size: 0.68rem;
+}
+#couches-entete {
+  font: inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--texte-faible);
+  background: rgba(14, 17, 23, 0.72);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.12rem 0.4rem;
+  cursor: pointer;
+}
+#couches-entete:hover { color: var(--texte); border-color: var(--bordure); }
+#couches-entete.alerte { color: var(--accent); }
+#couches-entete::after { content: " ▸"; }
+#couches.ouvert #couches-entete::after { content: " ▾"; }
+
+#couches-liste { display: none; }
+#couches.ouvert #couches-liste {
+  display: block;
+  margin-top: 0.2rem;
+  padding: 0.25rem;
+  background: rgba(21, 26, 35, 0.96);
+  border: 1px solid var(--bordure);
+  border-radius: 3px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.couche {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  color: var(--texte);
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  padding: 0.12rem 0.3rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.couche:hover { background: rgba(255, 255, 255, 0.05); }
+/* Barrée et grisée, jamais retirée : une couche absente de la liste se lirait
+   « il n'y a pas de put wall » au lieu de « tu l'as éteinte ». */
+.couche.eteinte { color: #4d5666; }
+.couche.eteinte span { text-decoration: line-through; }
+.couche.eteinte .pastille { opacity: 0.3; }
+
 .panneau .titre {
   position: absolute;
   top: 0.5rem;

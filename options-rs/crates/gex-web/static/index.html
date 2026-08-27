@@ -46,7 +46,16 @@
 <main>
   <section class="panneau" id="prix">
     <canvas id="regime"></canvas>
-    <span class="titre">prix &amp; niveaux</span>
+    <!-- Le panneau des couches, et non un simple titre.
+         Il EST la legende : pastille, nom, allume ou non. Et il liste toujours
+         tout, y compris ce qui est masque — barre, jamais retire. Une couche
+         retiree de la liste se lirait « il n'y a pas de put wall » alors qu'elle
+         dit « tu l'as eteinte ». Replie, l'en-tete annonce quand meme le compte
+         de ce qui manque : une capture d'ecran ne peut donc pas mentir. -->
+    <div id="couches">
+      <button id="couches-entete" type="button"></button>
+      <div id="couches-liste"></div>
+    </div>
   </section>
   <section class="panneau" id="profil">
     <span class="titre">GEX par strike</span>
@@ -70,16 +79,11 @@
      graphique du prix comme la bande du bas. -->
 <div id="bulle" hidden></div>
 
+<!-- Le pied de page ne redit plus les couleurs : le panneau des couches EST la
+     légende, pastille et nom côte à côte, et lui au moins dit aussi ce qui est
+     éteint. Ne restent ici que les choses qu'aucune pastille ne peut porter. -->
 <footer>
-  <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
-  <span class="legende" title="Le gamma total change de signe plusieurs fois dès que les ailes sont chargées. Ces traits marquent les autres passages, là où le fond change aussi de couleur."><i class="pastille" style="background:#8a6d3f"></i> les autres bascules du régime</span>
-  <span class="legende" title="Le strike où l'ensemble des options de l'échéance la plus proche vaudrait le moins au règlement. Une description de l'open interest — pas une cible, rien ici ne mesure que le prix y va."><i class="pastille" style="background:#c2b280"></i> max pain — les options de l'échéance proche y valent le moins au règlement</span>
-  <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
-  <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
-  <span class="legende"><i class="pastille" style="background:#1d7268"></i><i class="pastille" style="background:#a13c39"></i> murs par open interest</span>
-  <span class="legende"><i class="pastille" style="background:#3f4d63"></i> la bande où le marché price 2 chances sur 3 d'ici l'échéance (spot ± IV·√T)</span>
-  <span class="legende"><i class="pastille pave" style="background:rgba(38,166,154,.35)"></i><i class="pastille pave" style="background:rgba(239,83,80,.35)"></i> fond : la couverture amortit / amplifie à ce niveau</span>
-  <span class="legende"><i class="pastille pave" style="background:rgba(14,17,23,.75);outline:1px dashed #3d4658"></i> au-delà : les niveaux s'écrivent, le sous-jacent ne traite pas</span>
+  <span class="legende"><i class="pastille pave" style="background:rgba(14,17,23,.75);outline:1px dashed #3d4658"></i> zone voilée : les niveaux s'écrivent, le sous-jacent ne traite pas</span>
   <span class="legende" title="Le collecteur écrit un point par horizon : les tracés suivent le bouton. Ces traits pleins ne servent que dans l'intervalle où la série n'a pas encore de point à l'horizon demandé.">traits pleins étiquetés « 1j », « 0DTE »… : l'horizon choisi n'a pas encore de tracé</span>
   <span>chaque mesure a sa propre échelle : elles ne se comparent pas entre elles</span>
   <span>survole n'importe où — prix ou bande : le trait traverse tout, la bulle donne l'instant entier</span>
@@ -166,7 +170,7 @@ function tracerBande(spot, attendu) {
   for (const l of [bandeHaute, bandeBasse]) if (l) chandeliers.removePriceLine(l);
   bandeHaute = null;
   bandeBasse = null;
-  if (spot == null || attendu == null) return;
+  if (spot == null || attendu == null || !visible("sigma")) return;
   const trait = (prix, titre) => chandeliers.createPriceLine({
     price: prix, color: "#3f4d63", lineWidth: 1, lineStyle: 3,
     axisLabelVisible: true, title: titre,
@@ -228,23 +232,27 @@ function tracerMaintenant(m, memeHorizon, horizon) {
   traitsMaintenant = [];
   if (!m || memeHorizon) return;
   const suffixe = " " + nomHorizon(horizon);
-  const poser = (valeur, couleur, titre) => {
-    if (valeur == null) return;
+  // Chacun suit la couche a laquelle il appartient : eteindre les murs doit
+  // eteindre AUSSI leur position a l'horizon choisi, sinon le filet rallumerait
+  // ce qu'on vient de masquer.
+  const poser = (valeur, couche, couleur, titre) => {
+    if (valeur == null || !visible(couche)) return;
     traitsMaintenant.push(chandeliers.createPriceLine({
       price: valeur, color: couleur, lineWidth: 1, lineStyle: 0,
       axisLabelVisible: true, title: titre + suffixe,
     }));
   };
-  poser(m.zero_gamma, "#e0a458", "zero gamma");
-  poser(m.call_wall, "#26a69a", "call wall");
-  poser(m.put_wall, "#ef5350", "put wall");
-  poser(m.max_pain, "#c2b280", "max pain");
+  poser(m.zero_gamma, "zg", "#e0a458", "zero gamma");
+  poser(m.call_wall, "murs", "#26a69a", "call wall");
+  poser(m.put_wall, "murs", "#ef5350", "put wall");
+  poser(m.max_pain, "maxpain", "#c2b280", "max pain");
 }
 
 function tracerCroisements(croisements, retenu) {
   for (const l of traitsCroisements) chandeliers.removePriceLine(l);
   traitsCroisements = [];
-  if (!croisements) return 0;
+  // Les bascules appartiennent au zero gamma : elles s'eteignent avec lui.
+  if (!croisements || !visible("zg")) return 0;
   const autres = croisements.filter((c) => retenu == null || Math.abs(c - retenu) > 1e-6);
   for (const c of autres) {
     traitsCroisements.push(chandeliers.createPriceLine({
@@ -316,6 +324,78 @@ const GROUPES = [
 ];
 const MESURES = GROUPES.flatMap((g) => g.mesures);
 
+// --- Les couches ----------------------------------------------------------
+//
+// Quatorze choses se dessinent a l'ecran. Toutes ne servent pas en meme temps :
+// les murs par open interest encombrent quand on suit le zero gamma, le thêta
+// n'interesse personne quand on lit le flux. D'ou l'extinction.
+//
+// Masquer une mesure de la bande lui reprend sa PLACE et la donne aux autres :
+// huit couloirs dans 316 px font 32 px chacun, quatre en font 65. C'est la que le
+// gain est le plus fort — sans cela, eteindre ne laisserait qu'un trou.
+const COUCHES = [
+  { cle: "regime", nom: "fond de régime", couleurs: ["rgba(38,166,154,.5)", "rgba(239,83,80,.5)"], pave: true },
+  { cle: "zg", nom: "zero gamma & bascules", couleurs: ["#e0a458"] },
+  { cle: "murs", nom: "murs gamma", couleurs: ["#26a69a", "#ef5350"] },
+  { cle: "mursoi", nom: "murs par open interest", couleurs: ["#1d7268", "#a13c39"] },
+  { cle: "maxpain", nom: "max pain", couleurs: ["#c2b280"] },
+  { cle: "sigma", nom: "bande ±1σ implicite", couleurs: ["#3f4d63"] },
+  ...MESURES.map((m) => ({ cle: m.champ, nom: m.nom, couleurs: [m.couleur], bande: true })),
+];
+
+const CLE_COUCHES = "gex-couches-masquees";
+let masquees = new Set();
+try {
+  masquees = new Set(JSON.parse(localStorage.getItem(CLE_COUCHES) || "[]"));
+} catch (e) {
+  // Un stockage indisponible ou corrompu ne doit pas empecher l'ecran de
+  // s'ouvrir : tout est visible, ce qui est le pire cas acceptable.
+}
+
+const visible = (cle) => !masquees.has(cle);
+
+function appliquerCouches() {
+  ligneZg.applyOptions({ visible: visible("zg") });
+  for (const s of [ligneCw, lignePw]) s.applyOptions({ visible: visible("murs") });
+  for (const s of [ligneCwOi, lignePwOi]) s.applyOptions({ visible: visible("mursoi") });
+  ligneMaxPain.applyOptions({ visible: visible("maxpain") });
+  try {
+    localStorage.setItem(CLE_COUCHES, JSON.stringify([...masquees]));
+  } catch (e) { /* sans stockage, le choix ne survit pas au rechargement */ }
+  // Le fond et la bande sont peints a la main : ils se refont a l'image
+  // suivante, quand l'empreinte a change.
+  derniereEmpreinte = "";
+  ecrirePanneauCouches();
+}
+
+function ecrirePanneauCouches() {
+  const eteintes = COUCHES.filter((c) => masquees.has(c.cle)).length;
+  const entete = document.getElementById("couches-entete");
+  entete.textContent = "couches " + (COUCHES.length - eteintes) + "/" + COUCHES.length
+    + (eteintes ? "  ·  " + eteintes + " masquée" + (eteintes > 1 ? "s" : "") : "");
+  entete.classList.toggle("alerte", eteintes > 0);
+
+  document.getElementById("couches-liste").innerHTML = COUCHES.map((c) => {
+    const pastilles = c.couleurs
+      .map((k) => '<i class="pastille' + (c.pave ? " pave" : "") + '" style="background:' + k + '"></i>')
+      .join("");
+    return '<button type="button" class="couche' + (masquees.has(c.cle) ? " eteinte" : "")
+      + '" data-cle="' + c.cle + '">' + pastilles + "<span>" + c.nom + "</span></button>";
+  }).join("");
+
+  for (const b of document.querySelectorAll("#couches-liste .couche")) {
+    b.addEventListener("click", () => {
+      const cle = b.dataset.cle;
+      if (masquees.has(cle)) masquees.delete(cle); else masquees.add(cle);
+      appliquerCouches();
+    });
+  }
+}
+
+document.getElementById("couches-entete").addEventListener("click", () => {
+  document.getElementById("couches").classList.toggle("ouvert");
+});
+
 // --- La bande des mesures -------------------------------------------------
 //
 // Dessinee a la main, et non par la bibliotheque. Trois graphiques de largeurs
@@ -383,7 +463,22 @@ function dessinerBandes() {
   const gx = droite + GOUTTIERE_AIR;                 // debut de la gouttiere
   const gLarge = Math.max(120, large - gx - 12);
 
-  const rang = (haut - 2 * MARGE_BANDES - GROUPES.length * TITRE_GROUPE) / MESURES.length;
+  // Ce qui est masque ne laisse pas un trou : il rend sa place. Huit couloirs
+  // dans 316 px font 32 px chacun, quatre en font 65 — c'est la que l'extinction
+  // sert vraiment. Un groupe dont tout est eteint perd aussi son bandeau.
+  const groupes = GROUPES
+    .map((g) => ({ nom: g.nom, mesures: g.mesures.filter((m) => visible(m.champ)) }))
+    .filter((g) => g.mesures.length);
+  const combien = groupes.reduce((n, g) => n + g.mesures.length, 0);
+  if (!combien) {
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = "#4d5666";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("toutes les mesures sont masquées", 14, haut / 2);
+    return;
+  }
+  const rang = (haut - 2 * MARGE_BANDES - groupes.length * TITRE_GROUPE) / combien;
   if (rang < 12) return;
 
   const ts = gPrix.timeScale();
@@ -399,7 +494,7 @@ function dessinerBandes() {
 
   let y = MARGE_BANDES;
   let rangs = 0;
-  for (const groupe of GROUPES) {
+  for (const groupe of groupes) {
     // Le bandeau du groupe : un filet sur toute la largeur, le nom dans la
     // gouttiere. Le nom dans le trace croiserait les courbes.
     ctx.strokeStyle = "#212836";
@@ -749,9 +844,13 @@ function survoler(instant, page) {
     // Les huit mesures, groupees comme dans la bande et dans les memes couleurs :
     // c'est ce qui rattache chaque ligne de la bulle a son couloir sans avoir a
     // le dire.
+    // Ce qui est masqué l'est aussi ici : éteindre le thêta pour désencombrer et
+    // le retrouver dans la bulle n'aurait aucun sens.
     for (const groupe of GROUPES) {
+      const vues = groupe.mesures.filter((m) => visible(m.champ));
+      if (!vues.length) continue;
       html += '<div class="sep"></div>';
-      for (const m of groupe.mesures) {
+      for (const m of vues) {
         const v = n[m.champ];
         html += ligne(m.nom, v == null ? "—" : m.format(v), m.couleur);
       }
@@ -925,8 +1024,14 @@ function peindreRegime() {
   if (toile.width !== l || toile.height !== h) { toile.width = l; toile.height = h; }
   const ctx = toile.getContext("2d");
   ctx.clearRect(0, 0, l, h);
-  if (!regimeCourant.length) return;
+  // Le voile de la zone sans cotation se peint dans tous les cas : il ne dit pas
+  // le régime, il dit que le sous-jacent ne traite pas. L'éteindre avec le fond
+  // ferait disparaître un fait pour cause de préférence d'affichage.
+  if (regimeCourant.length && visible("regime")) peindreBandesRegime(ctx, l, h);
+  peindreVoile(ctx, l, h);
+}
 
+function peindreBandesRegime(ctx, l, h) {
   const pic = Math.max.apply(null, regimeCourant.map((p) => Math.abs(p.gex))) || 1;
   // Les niveaux sont ordonnes : on peint la bande entre chaque paire.
   const points = regimeCourant
@@ -946,10 +1051,12 @@ function peindreRegime() {
       : "rgba(239, 83, 80, " + force + ")";
     ctx.fillRect(0, a.y, l, Math.max(1, b.y - a.y));
   }
+}
 
-  // La zone sans transaction, voilee ici aussi. Il n'y a aucun chandelier pour
-  // la couvrir, donc le voile se voit — et le fond de regime cesse d'y suggerer
-  // un marche qui vit alors que le sous-jacent ne traite pas.
+// La zone sans transaction, voilee ici aussi. Il n'y a aucun chandelier pour la
+// couvrir, donc le voile se voit — et le fond de regime cesse d'y suggerer un
+// marche qui vit alors que le sous-jacent ne traite pas.
+function peindreVoile(ctx, l, h) {
   const fin = barresCourantes.length ? barresCourantes[barresCourantes.length - 1].time : null;
   const xFin = fin == null ? null : gPrix.timeScale().timeToCoordinate(versEcran(fin));
   const bord = bordDuTrace();
@@ -1139,6 +1246,7 @@ async function rafraichir() {
   }
 }
 
+appliquerCouches();
 rafraichir();
 setInterval(rafraichir, RAFRAICHISSEMENT);
 </script>

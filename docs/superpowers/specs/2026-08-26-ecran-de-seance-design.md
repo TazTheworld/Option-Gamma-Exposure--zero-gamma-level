@@ -229,6 +229,26 @@ Les boutons viennent de ce que la série **contient**, pas d'une liste écrite d
 la page : les deux divergeraient, et l'écran proposerait des horizons dont aucune
 trace n'existe.
 
+**Le panneau des couches.** Quatorze choses se dessinent, et toutes ne servent pas
+en même temps : les murs par open interest encombrent quand on suit le zero gamma,
+le thêta n'intéresse personne quand on lit le flux. Chacune s'éteint depuis un
+panneau en haut à gauche du prix, qui sert du même coup de légende.
+
+Le gain le plus fort est dans la bande : masquer une mesure lui reprend sa
+**place** et la donne aux autres. Huit couloirs dans 316 px font 32 px chacun,
+cinq en font 55 — mesuré. Un groupe dont tout est éteint perd aussi son bandeau.
+Sans cela, éteindre ne laisserait qu'un trou.
+
+Deux règles rendent le réglage compatible avec « rien en silence », que la
+conception opposait d'abord à tout réglage. Le panneau **liste toujours tout**,
+barré et grisé pour ce qui est masqué, jamais retiré. Et son en-tête annonce le
+compte même replié, en couleur d'alerte. Une capture d'écran porte donc toujours
+ce qui manque.
+
+Le voile de la zone sans cotation échappe à l'extinction : il ne dit pas le
+régime, il dit que le sous-jacent ne traite pas. Une préférence d'affichage ne
+doit pas effacer un fait.
+
 **Rien en silence.** Le différé de quinze minutes est écrit à l'écran, pas
 supposé connu. Un relevé qui date, une série vide parce que le marché ne cote pas,
 un collecteur arrêté : tout cela se dit.
