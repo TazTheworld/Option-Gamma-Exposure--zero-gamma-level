@@ -154,6 +154,18 @@ pub fn fusionner(socle: &Chaine, vif: &Chaine, spot: f64) -> Result<Chaine, Chai
                 if nouveau.gamma > 0.0 {
                     ancien.gamma = nouveau.gamma;
                 }
+                // Le volume, lui, se rafraîchit — contrairement à l'open
+                // interest, qu'IB ne publie qu'une fois par jour après
+                // règlement. Le volume est CUMULATIF sur la séance : celui du
+                // socle date du balayage, et un mur par volume figé à l'heure du
+                // balayage serait faux dès midi, ce qui lui retirerait tout ce
+                // qui le distingue d'un mur par open interest.
+                //
+                // Le maximum et non l'écrasement : le volume ne peut que croître
+                // dans la journée, et un contrat dont le tick n'est pas encore
+                // arrivé rend zéro. Prendre le plus grand ne peut donc rien
+                // perdre, là où écraser reculerait.
+                ancien.volume = ancien.volume.max(nouveau.volume);
             }
             fondue
         })
@@ -381,6 +393,67 @@ mod tests {
         let f = fusionner(&socle, &vif, 29_300.0).unwrap();
         assert_eq!(f.lignes().len(), socle.lignes().len());
         assert!(f.lignes().iter().all(|l| l.strike != 99_999.0));
+    }
+
+    /// Le volume se rafraîchit depuis le vif, contrairement à l'open interest.
+    ///
+    /// L'open interest n'est publié qu'une fois par jour : le garder du socle est
+    /// juste. Le volume est cumulatif sur la séance — figé à l'heure du balayage,
+    /// il serait faux dès midi, et un mur par volume n'aurait plus rien qui le
+    /// distingue d'un mur par open interest.
+    #[test]
+    fn le_volume_se_rafraichit_mais_pas_l_open_interest() {
+        let ligne = |volume: f64, oi: f64| Ligne {
+            echeance: EcheanceNy(instant("2026-08-27 16:00:00")),
+            strike: 29_300.0,
+            call: Cote { iv: 0.2, gamma: 1e-5, open_interest: oi, volume, ..Default::default() },
+            put: Cote::default(),
+        };
+        let socle = Chaine::nouvelle(
+            vec![ligne(40.0, 500.0)],
+            29_300.0,
+            InstantReleve(instant("2026-08-27 05:00:00")),
+        )
+        .unwrap();
+        let vif = Chaine::nouvelle(
+            vec![ligne(310.0, 0.0)],
+            29_300.0,
+            InstantReleve(instant("2026-08-27 12:00:00")),
+        )
+        .unwrap();
+
+        let f = fusionner(&socle, &vif, 29_300.0).unwrap();
+        assert_eq!(f.lignes()[0].call.volume, 310.0, "le volume doit suivre le vif");
+        assert_eq!(
+            f.lignes()[0].call.open_interest, 500.0,
+            "l'open interest reste celui du socle"
+        );
+    }
+
+    /// Un tick de volume pas encore arrivé rend zéro. Écraser ferait reculer un
+    /// compteur qui ne peut que croître ; on prend donc le plus grand.
+    #[test]
+    fn un_volume_absent_du_vif_ne_fait_pas_reculer_le_compteur() {
+        let ligne = |volume: f64| Ligne {
+            echeance: EcheanceNy(instant("2026-08-27 16:00:00")),
+            strike: 29_300.0,
+            call: Cote { iv: 0.2, gamma: 1e-5, volume, ..Default::default() },
+            put: Cote::default(),
+        };
+        let socle = Chaine::nouvelle(
+            vec![ligne(310.0)],
+            29_300.0,
+            InstantReleve(instant("2026-08-27 05:00:00")),
+        )
+        .unwrap();
+        let vif = Chaine::nouvelle(
+            vec![ligne(0.0)],
+            29_300.0,
+            InstantReleve(instant("2026-08-27 12:00:00")),
+        )
+        .unwrap();
+        let f = fusionner(&socle, &vif, 29_300.0).unwrap();
+        assert_eq!(f.lignes()[0].call.volume, 310.0);
     }
 
     fn vif_avec_strike_inconnu() -> Vec<Ligne> {

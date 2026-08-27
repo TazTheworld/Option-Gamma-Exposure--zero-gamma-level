@@ -291,6 +291,13 @@ mod tests {
             assert!((a.call.open_interest - b.call.open_interest).abs() < 1e-9);
             assert!((a.put.theta - b.put.theta).abs() < 1e-12);
             assert!((a.put.delta - b.put.delta).abs() < 1e-12);
+            // Le volume passe par `CallVol` et `PutVol`, colonnes héritées du
+            // CBOE longtemps écrites à zéro. Sans cette vérification, un
+            // câblage manquant côté écriture OU côté lecture rendrait un volume
+            // nul partout — et se lirait comme « la source ne le sert pas ».
+            assert!((a.call.volume - b.call.volume).abs() < 1e-9, "volume call perdu");
+            assert!((a.put.volume - b.put.volume).abs() < 1e-9, "volume put perdu");
+            assert!(b.call.volume > 0.0, "la chaîne d'essai doit en porter");
         }
         let _ = std::fs::remove_dir_all(&d);
     }
