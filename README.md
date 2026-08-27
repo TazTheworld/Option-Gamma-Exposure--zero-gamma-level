@@ -200,6 +200,12 @@ finissent par diverger — l'écran montrerait alors autre chose que le lecteur.
 Il n'écoute que sur `127.0.0.1` : ces relevés sont à toi. La bibliothèque de graphiques
 est servie depuis le disque, pas depuis un CDN, pour que l'écran marche sans réseau.
 
+Le point d'interrogation à côté du titre ouvre `/doc` : **chaque terme de l'écran expliqué
+depuis le début**, sans supposer aucune connaissance préalable — ce qu'est une option, à
+quoi sert un teneur de marché, pourquoi sa couverture calme ou emballe le marché, et ce que
+l'écran refuse de dire. Servie depuis le binaire, donc lisible sans réseau et même collecte
+arrêtée.
+
 > L'horodatage du dernier relevé est affiché **en permanence**, et vieillit visiblement
 > quand le collecteur s'arrête. Un écran qui a l'air vivant alors qu'il est figé est pire
 > qu'un écran vide.

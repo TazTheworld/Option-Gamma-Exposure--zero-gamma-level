@@ -595,6 +595,15 @@ async fn page() -> impl IntoResponse {
     Html(include_str!("../static/index.html"))
 }
 
+/// La documentation, servie à côté de l'écran.
+///
+/// Dans le binaire comme le reste : elle doit s'ouvrir sans réseau, y compris
+/// quand la collecte est à l'arrêt. Un écran dont on ne comprend aucun mot n'est
+/// pas un écran, et le vocabulaire des options n'a rien d'évident.
+async fn documentation() -> impl IntoResponse {
+    Html(include_str!("../static/doc.html"))
+}
+
 /// La bibliothèque de graphiques, servie depuis le disque.
 ///
 /// Pas depuis un réseau de diffusion : l'écran doit fonctionner sans réseau,
@@ -620,6 +629,7 @@ async fn main() -> ExitCode {
 
     let routes = Router::new()
         .route("/", get(page))
+        .route("/doc", get(documentation))
         .route("/lightweight-charts.js", get(graphiques))
         .route("/style.css", get(style))
         .route("/api/barres", get(barres))

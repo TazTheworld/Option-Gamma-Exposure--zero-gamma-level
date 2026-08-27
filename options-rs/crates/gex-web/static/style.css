@@ -372,3 +372,21 @@ footer {
 }
 .regime.positif { color: var(--hausse); }
 .regime.negatif { color: var(--baisse); }
+
+/* Le bouton vers la documentation.
+   Un aplat et un mot, pas un point d'interrogation discret : un écran dont on ne
+   comprend aucun terme n'est pas un écran, et l'aide doit se trouver sans qu'on
+   la cherche. Rouge, et sans risque de confusion — aucune courbe ne ressemble à
+   un aplat posé dans l'en-tête. */
+.doc {
+  padding: 0.18rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: var(--baisse);
+  border-radius: 3px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.doc:hover { background: #ff6b68; }

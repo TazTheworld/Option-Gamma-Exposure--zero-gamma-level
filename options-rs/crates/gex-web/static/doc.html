@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Comment lire l'écran — GEX</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#x1F4D6;</text></svg>">
+<style>
+/* Une page de LECTURE, pas un tableau de bord. L'écran de séance est dense
+   parce qu'on le surveille ; celle-ci est aérée parce qu'on la lit. */
+:root {
+  --fond: #0e1117;
+  --fond-bloc: #151a23;
+  --bordure: #232a36;
+  --texte: #d4dae3;
+  --texte-faible: #8b95a5;
+  --hausse: #26a69a;
+  --baisse: #ef5350;
+  --accent: #e0a458;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--fond);
+  color: var(--texte);
+  font: 16px/1.7 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 2.5rem 1.5rem 6rem;
+}
+main { max-width: 46rem; margin: 0 auto; }
+
+.retour {
+  display: inline-block;
+  margin-bottom: 2rem;
+  color: var(--texte-faible);
+  text-decoration: none;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--bordure);
+  padding-bottom: 0.15rem;
+}
+.retour:hover { color: var(--texte); border-color: var(--texte-faible); }
+
+h1 { font-size: 1.9rem; line-height: 1.25; margin-bottom: 0.6rem; letter-spacing: -0.01em; }
+.chapeau { color: var(--texte-faible); font-size: 1.05rem; margin-bottom: 2.5rem; }
+
+h2 {
+  font-size: 1.3rem;
+  margin: 3.5rem 0 0.4rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--bordure);
+  letter-spacing: -0.01em;
+}
+h2 .numero { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 0.5rem; }
+h3 { font-size: 1.02rem; margin: 2rem 0 0.3rem; color: var(--texte); }
+p { margin-bottom: 0.9rem; }
+strong { color: #fff; font-weight: 600; }
+
+/* Le résumé d'une section, avant le développement. Qui ne lit qu'une ligne doit
+   repartir avec la bonne. */
+.resume {
+  border-left: 2px solid var(--accent);
+  padding: 0.1rem 0 0.1rem 1rem;
+  margin: 0.8rem 0 1.6rem;
+  color: var(--texte-faible);
+  font-size: 0.98rem;
+}
+
+.image {
+  background: var(--fond-bloc);
+  border: 1px solid var(--bordure);
+  border-radius: 4px;
+  padding: 1rem 1.2rem;
+  margin: 1.4rem 0;
+}
+.image .titre {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--texte-faible);
+  margin-bottom: 0.5rem;
+}
+.image p:last-child { margin-bottom: 0; }
+
+/* Un terme de l'écran, avec sa pastille de couleur : on le retrouve à l'œil. */
+.terme { margin: 1.5rem 0; }
+.terme .nom { font-weight: 700; display: inline-flex; align-items: center; gap: 0.45rem; }
+.terme .nom i {
+  width: 14px; height: 3px; display: inline-block; border-radius: 1px; flex: none;
+}
+.terme .nom .pave { height: 11px; width: 11px; border-radius: 2px; }
+.terme .unite { color: var(--texte-faible); font-size: 0.85rem; margin-left: 0.5rem; }
+.terme p { margin: 0.25rem 0 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: 0.94rem; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--bordure); }
+th { color: var(--texte-faible); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+
+.avertit {
+  background: rgba(217, 119, 87, 0.09);
+  border: 1px solid rgba(217, 119, 87, 0.35);
+  border-radius: 4px;
+  padding: 1rem 1.2rem;
+  margin: 1.6rem 0;
+}
+.avertit .titre { display: block; color: #e0956f; font-weight: 700; margin-bottom: 0.4rem; }
+.avertit p:last-child { margin-bottom: 0; }
+
+.positif { color: var(--hausse); }
+.negatif { color: var(--baisse); }
+ul { margin: 0.6rem 0 1.1rem 1.2rem; }
+li { margin-bottom: 0.4rem; }
+code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--fond-bloc);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+footer {
+  margin-top: 4rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--bordure);
+  color: var(--texte-faible);
+  font-size: 0.85rem;
+}
+</style>
+</head>
+<body>
+<main>
+
+<a class="retour" href="/">← revenir à l'écran</a>
+
+<h1>Comment lire l'écran</h1>
+<p class="chapeau">
+  Tout ce que cet écran affiche, expliqué depuis le début. Aucune connaissance
+  préalable n'est supposée : on commence par ce qu'est une option, on finit par
+  ce que l'écran refuse de dire.
+</p>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">1</span>Une option, c'est quoi</h2>
+<p class="resume">
+  Un ticket qui donne le <strong>droit</strong> d'acheter ou de vendre à un prix
+  fixé d'avance, jusqu'à une date. Pas l'obligation : le droit.
+</p>
+
+<p>
+  Imagine que tu veuilles acheter un vélo qui coûte 300 €. Tu n'es pas sûr. Le
+  vendeur te propose un marché : tu lui donnes 10 € aujourd'hui, et en échange tu
+  pourras acheter le vélo à 300 € quand tu veux, jusqu'à la fin du mois. Même si
+  entre-temps son prix monte à 400 €.
+</p>
+<p>
+  Ces 10 €, c'est le prix de l'option. Les 300 €, c'est le <strong>strike</strong>
+  — le prix fixé d'avance. La fin du mois, c'est l'<strong>échéance</strong>.
+</p>
+<p>
+  Si le vélo monte à 400 €, ton ticket vaut de l'or : tu achètes à 300 ce qui en
+  vaut 400. S'il descend à 250 €, tu jettes ton ticket et tu perds tes 10 €. Tu
+  n'es jamais obligé de l'utiliser.
+</p>
+
+<div class="image">
+  <span class="titre">Les deux sortes de tickets</span>
+  <p>
+    Un <strong>call</strong> donne le droit d'<strong>acheter</strong> au prix
+    fixé. On l'achète quand on pense que ça va monter.
+  </p>
+  <p>
+    Un <strong>put</strong> donne le droit de <strong>vendre</strong> au prix
+    fixé. On l'achète quand on pense que ça va baisser, ou pour se protéger.
+  </p>
+</div>
+
+<h3>Les mots qui reviennent</h3>
+<table>
+  <tr><th>Mot</th><th>Ce que c'est</th></tr>
+  <tr><td>Strike</td><td>Le prix fixé d'avance sur le ticket.</td></tr>
+  <tr><td>Échéance</td><td>La date après laquelle le ticket ne vaut plus rien.</td></tr>
+  <tr><td>DTE</td><td>« Days To Expiration » — combien de jours restent. <code>0DTE</code> = expire aujourd'hui.</td></tr>
+  <tr><td>Sous-jacent</td><td>La chose sur laquelle porte le ticket. Ici, l'indice NQ (le Nasdaq).</td></tr>
+  <tr><td>Spot</td><td>Le prix du sous-jacent maintenant.</td></tr>
+  <tr><td>Open interest</td><td>Combien de tickets existent en tout, à ce strike. Ça s'accumule sur des semaines.</td></tr>
+  <tr><td>Volume</td><td>Combien de tickets ont changé de mains <em>aujourd'hui</em>. Ça repart de zéro chaque jour.</td></tr>
+</table>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">2</span>Qui vend les tickets, et pourquoi ça compte</h2>
+<p class="resume">
+  Le vendeur ne veut pas parier. Pour rester neutre il achète et vend le vrai
+  produit en permanence — et <strong>ce sont ces achats et ces ventes qui font
+  bouger le marché</strong>. Tout l'écran parle de ça.
+</p>
+
+<p>
+  Celui qui vend les tickets s'appelle un <strong>teneur de marché</strong>. Son
+  métier n'est pas de deviner si ça va monter. Son métier est de vendre des
+  tickets à tout le monde et de gagner sa petite marge à chaque fois, sans
+  jamais prendre de pari sur la direction.
+</p>
+<p>
+  Mais s'il t'a vendu un call et que le prix monte, il perd de l'argent. Alors il
+  se protège : il achète un peu du vrai produit, pour que ce qu'il gagne dessus
+  compense ce qu'il perd sur le ticket. Ça s'appelle se <strong>couvrir</strong>.
+</p>
+
+<div class="image">
+  <span class="titre">Le point important</span>
+  <p>
+    Sa couverture n'est jamais finie. Chaque fois que le prix bouge, il doit
+    racheter un peu ou revendre un peu pour rester neutre.
+  </p>
+  <p>
+    Et comme il a vendu des tickets à la terre entière, ces petits ajustements
+    représentent des <strong>milliards</strong>. Ils poussent le marché. Savoir
+    dans quel sens ils poussent, c'est exactement ce que cet écran calcule.
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">3</span>Les greeks : cinq questions sur un ticket</h2>
+<p class="resume">
+  Des lettres grecques qui répondent chacune à une question simple : si telle
+  chose change, mon ticket bouge de combien&nbsp;?
+</p>
+
+<div class="terme">
+  <span class="nom">Delta</span><span class="unite">la pente</span>
+  <p>
+    Si le prix monte de 1 €, mon ticket monte de combien ? Un delta de 0,5 veut
+    dire : de 50 centimes. C'est la <strong>pente</strong>.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom">Gamma</span><span class="unite">le changement de pente</span>
+  <p>
+    Et de combien la pente elle-même change quand le prix bouge ? En voiture, le
+    delta serait ta <strong>vitesse</strong> et le gamma ton
+    <strong>accélération</strong>. C'est le plus important de tous, et on va voir
+    pourquoi juste après.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom">Thêta</span><span class="unite">la glace qui fond</span>
+  <p>
+    Ce que le simple passage d'une journée retire à la valeur du ticket. Un
+    ticket qui expire dans une semaine vaut plus que le même à un jour de la fin :
+    il reste plus de temps pour que quelque chose arrive.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom">Vega</span><span class="unite">la nervosité</span>
+  <p>
+    Quand le marché devient nerveux, tous les tickets valent plus cher — parce que
+    n'importe quoi peut arriver, donc le droit d'acheter à prix fixé devient plus
+    précieux. Le vega mesure de combien.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom">Charm et Vanna</span><span class="unite">deux dérives du delta</span>
+  <p>
+    Le <strong>charm</strong> dit comment la pente change quand un jour passe,
+    sans que le prix bouge. Le <strong>vanna</strong> dit comment elle change
+    quand la nervosité change.
+  </p>
+  <p>
+    Ils comptent parce qu'ils forcent le teneur de marché à traiter
+    <em>même quand rien ne bouge</em>. Le temps passe tout seul.
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">4</span>Le cœur : long gamma et short gamma</h2>
+<p class="resume">
+  Selon le sens de sa position, la couverture du teneur de marché
+  <strong>calme</strong> le marché ou l'<strong>emballe</strong>. C'est l'idée la
+  plus importante de tout l'écran.
+</p>
+
+<p>
+  Reprends le teneur de marché qui se couvre à chaque mouvement. Il y a deux
+  situations, et elles sont exactement opposées.
+</p>
+
+<div class="image">
+  <span class="titre"><span class="positif">Long gamma</span> — la couverture calme</span>
+  <p>
+    Quand le prix monte, il doit <strong>vendre</strong> pour rester neutre.
+    Quand il baisse, il doit <strong>acheter</strong>.
+  </p>
+  <p>
+    Il vend dans la hausse et achète dans la baisse : il freine le mouvement à
+    chaque fois. Le marché a tendance à rester sur place, à faire de petites
+    vagues, à revenir vers son point de départ.
+  </p>
+</div>
+
+<div class="image">
+  <span class="titre"><span class="negatif">Short gamma</span> — la couverture emballe</span>
+  <p>
+    Quand le prix monte, il doit <strong>acheter</strong>. Quand il baisse, il
+    doit <strong>vendre</strong>.
+  </p>
+  <p>
+    Il achète dans la hausse et vend dans la baisse : il pousse dans le sens du
+    mouvement. Un petit mouvement en déclenche un plus grand, qui en déclenche un
+    plus grand encore. C'est ce que les gens appellent un
+    <strong>squeeze</strong>.
+  </p>
+</div>
+
+<p>
+  L'écran affiche ces deux mots en haut, à côté du GEX, et il peint le fond du
+  graphique de la même couleur : <span class="positif">vert</span> là où la
+  couverture calmerait, <span class="negatif">rouge</span> là où elle emballerait.
+</p>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">5</span>Les trois expositions : DEX, GEX, VEX</h2>
+<p class="resume">
+  Les greeks d'<em>un</em> ticket ne servent à rien. Additionnés sur les millions
+  de tickets qui existent, ils deviennent des montants en dollars — et c'est
+  ça qui bouge.
+</p>
+
+<p>
+  « Exposition » veut simplement dire : le greek multiplié par le nombre de
+  tickets, pour tous les strikes, transformé en dollars.
+</p>
+
+<table>
+  <tr><th>Nom</th><th>Le greek</th><th>Ce que ça dit</th></tr>
+  <tr><td>DEX</td><td>delta</td><td>De quel côté le vendeur penche, en dollars.</td></tr>
+  <tr><td>GEX</td><td>gamma</td><td>Combien il doit traiter à chaque 1 % de mouvement.</td></tr>
+  <tr><td>VEX</td><td>vega</td><td>Ce qu'un point de nervosité en plus lui coûte.</td></tr>
+</table>
+
+<h3>La différence qui compte : position ou flux</h3>
+<p>
+  Le <strong>DEX</strong> et le <strong>VEX</strong> sont des états. Ils disent
+  où le vendeur en est. Un delta ne bouge pas tout seul : tant qu'il ne change
+  pas, personne n'a besoin de traiter.
+</p>
+<p>
+  Le <strong>GEX</strong>, le <strong>charm</strong> et le <strong>vanna</strong>
+  sont des <em>dérivées</em> du delta — les trois façons dont il se met à bouger :
+  le prix change, le temps passe, la nervosité change. Ce sont eux qui
+  <strong>obligent</strong> à acheter ou vendre.
+</p>
+<p>
+  C'est pour ça que l'écran les sépare en deux groupes en bas : « ce que la
+  couverture oblige à faire » et « ce que le book est ». Le thêta est le seul des
+  six à n'obliger à rien : il dit ce que ne rien faire coûte.
+</p>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">6</span>Les niveaux tracés sur le prix</h2>
+<p class="resume">
+  Des prix particuliers, chacun répondant à une question différente. Ils ne se
+  valent pas, et c'est quand plusieurs désignent le même endroit qu'ils comptent.
+</p>
+
+<div class="terme">
+  <span class="nom"><i style="background:#e0a458"></i>Zero gamma</span>
+  <p>
+    Le prix où la couverture change de camp. Au-dessus elle calme, en dessous
+    elle emballe (ou l'inverse). C'est la frontière entre les deux mondes du
+    chapitre 4.
+  </p>
+  <p>
+    Il peut y en avoir plusieurs : l'écran retient le plus proche du prix actuel
+    et marque les autres « bascule ». S'il y en a trois, la réalité n'est pas un
+    simple « au-dessus / en dessous ».
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i style="background:#26a69a"></i><i style="background:#ef5350"></i>Murs (call wall, put wall)</span>
+  <p>
+    Les endroits où il y a une grosse concentration de tickets. Ils agissent
+    souvent comme un plafond au-dessus et un plancher en dessous : quand le prix
+    s'en approche, la couverture qui s'y déclenche a tendance à le repousser.
+  </p>
+  <p>
+    Il y en a <strong>trois familles</strong>, qui ne disent pas la même chose :
+  </p>
+  <ul>
+    <li><strong>par gamma</strong> — là où la couverture est la plus sensible ;</li>
+    <li><strong>par open interest</strong> — là où il y a le plus de tickets, accumulés depuis des semaines ;</li>
+    <li><strong>par volume</strong> — là où quelqu'un vient de prendre position <em>aujourd'hui</em>.</li>
+  </ul>
+  <p>
+    La dernière est la plus vive : elle naît et meurt dans la journée. Quand les
+    trois désignent le même prix, le niveau est bien plus crédible que quand
+    elles se contredisent.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i style="background:#3ddc97"></i><i style="background:#ff6b6b"></i>Long gamma / short gamma (les niveaux)</span>
+  <p>
+    Les deux strikes où le gamma <strong>net</strong> est le plus concentré, calls
+    et puts mélangés, sans regarder de quel côté du prix ils tombent.
+  </p>
+  <p>
+    Ce ne sont pas les murs : un mur ne regarde qu'un côté à la fois. Un strike
+    peut être un gros mur call sans être le long gamma majeur, si ses puts
+    annulent ses calls.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i style="background:#c2b280"></i>Max pain</span>
+  <p>
+    Le prix auquel, si le marché fermait maintenant, l'ensemble des tickets en
+    circulation vaudrait le <strong>moins</strong>. Autrement dit : le prix le
+    plus douloureux pour ceux qui les détiennent, et le plus confortable pour
+    ceux qui les ont vendus.
+  </p>
+  <p>
+    Beaucoup de gens croient que le prix est attiré par ce niveau. Ce n'est
+    <strong>pas démontré</strong>, et rien dans cet écran ne le vérifie. C'est
+    une description de là où sont les tickets, rien de plus.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i style="background:#3f4d63"></i>La bande « 2/3 »</span>
+  <p>
+    Deux traits au-dessus et en dessous du prix. Le marché, à travers le prix
+    qu'il met sur les options, estime qu'il y a environ <strong>deux chances sur
+    trois</strong> que le prix reste entre les deux d'ici la prochaine échéance.
+  </p>
+  <p>
+    Ce n'est pas une prévision : c'est ce que les gens ont accepté de
+    <em>payer</em>. Les statisticiens appellent ça « un écart-type ».
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">7</span>Ce que l'écran peint</h2>
+
+<div class="terme">
+  <span class="nom"><i class="pave" style="background:rgba(38,166,154,.5)"></i><i class="pave" style="background:rgba(239,83,80,.5)"></i>Le fond de régime</span>
+  <p>
+    Le graphique est teinté par hauteur. À chaque prix possible, la couleur
+    répond à : « si le prix allait <em>là</em>, la couverture calmerait-elle ou
+    emballerait-elle ? » Vert = elle calme. Rouge = elle emballe.
+  </p>
+  <p>
+    Ce n'est pas un niveau, c'est une <strong>carte</strong>. Elle dit ce qui
+    arriverait, pas ce qui va arriver.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i class="pave" style="background:rgba(111,196,224,.6)"></i><i class="pave" style="background:rgba(224,150,111,.6)"></i>Le carburant</span>
+  <p>
+    Le fond dit <em>de quel côté</em>. Le carburant dit <strong>de combien</strong> :
+    les dollars que les teneurs de marché seraient forcés d'acheter ou de vendre,
+    en chemin, si le prix allait jusqu'à ce niveau.
+  </p>
+  <p>
+    Il vaut zéro au prix actuel — on n'a encore rien parcouru — et grandit à
+    mesure qu'on s'en éloigne. Bleu : ils devraient acheter pour aller là.
+    Orange : ils devraient vendre. Survole une hauteur du graphique et la bulle
+    te donne le chiffre exact.
+  </p>
+  <p>
+    C'est la vraie mesure de ce que les gens appellent le carburant d'un squeeze.
+    Il remplace le fond de régime quand tu l'allumes, parce que les deux
+    répondent à la même question et se mélangeraient.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom">Le profil par strike (colonne de droite)</span>
+  <p>
+    Une barre par strike, posée exactement à sa hauteur sur l'axe des prix. Verte
+    à droite, rouge à gauche, selon le sens. Elle montre d'un coup d'œil où le
+    gamma se concentre <em>par rapport à l'endroit où le prix se trouve</em>.
+  </p>
+</div>
+
+<div class="terme">
+  <span class="nom"><i class="pave" style="background:rgba(14,17,23,.85);outline:1px dashed #3d4658"></i>La zone voilée</span>
+  <p>
+    À droite, une zone assombrie. Elle veut dire : <strong>le sous-jacent ne
+    traite plus</strong>, mais les mesures d'options continuent d'être écrites.
+  </p>
+  <p>
+    Ça arrive tous les jours : le marché à terme ferme une heure, à 17 h à New
+    York. Une bougie naît d'une transaction ; une mesure d'options s'écrit à
+    l'horloge. Sans ce voile, on croirait que « les options sont en avance sur le
+    prix ».
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">8</span>Les réglages</h2>
+
+<h3>L'horizon : 0DTE · 1j · 7j · 30j</h3>
+<p>
+  Quelles échéances entrent dans le calcul. Ce n'est pas un détail : sur le même
+  relevé, le GEX peut valoir 72 M$ en ne comptant que le lendemain et 234 M$ en
+  comptant tout. Sur certains marchés, il change carrément de <strong>signe</strong>
+  — donc la couverture calme dans une lecture et emballe dans l'autre.
+</p>
+<p>
+  <strong>0DTE</strong> ne garde que les tickets qui expirent aujourd'hui. Ils
+  sont les plus nerveux : à quelques heures de la fin, leur gamma explose.
+</p>
+
+<h3>Le pas des chandeliers : 1m à 1J</h3>
+<p>
+  La durée que représente une bougie. Une bougie de 5 minutes regroupe cinq
+  bougies d'une minute : ouverture de la première, clôture de la dernière, le plus
+  haut et le plus bas de l'ensemble.
+</p>
+<p>
+  La bougie journalière est découpée à <strong>17 h à New York</strong> et non à
+  minuit, parce que c'est là que la séance du marché à terme commence et finit.
+</p>
+
+<h3>Les couches</h3>
+<p>
+  Le panneau en haut à gauche du graphique éteint ce qui encombre. Ce qui est
+  masqué reste écrit dans la liste, barré — pour qu'un écran sans put wall ne se
+  lise jamais comme « il n'y a pas de put wall ».
+</p>
+
+<!-- ==================================================================== -->
+<h2><span class="numero">9</span>Ce que cet écran ne dit pas</h2>
+
+<div class="avertit">
+  <span class="titre">Ce n'est pas une prévision</span>
+  <p>
+    Rien ici ne dit où le prix va aller. Tout décrit le <em>terrain</em> : où la
+    couverture pèse, dans quel sens, et combien elle coûterait. Un GEX négatif dit
+    « ça amplifiera si quelque chose arrive », jamais « quelque chose va
+    arriver ». Il faut toujours un déclencheur extérieur.
+  </p>
+</div>
+
+<div class="avertit">
+  <span class="titre">Le signe du GEX est une hypothèse, pas une mesure</span>
+  <p>
+    Tout le calcul suppose que les teneurs de marché sont acheteurs des calls et
+    vendeurs des puts. C'est la convention de la littérature, et elle est
+    probablement vraie la plupart du temps — mais elle n'est
+    <strong>pas mesurée</strong> ici. Si elle est fausse sur un produit donné, le
+    vert et le rouge sont inversés.
+  </p>
+</div>
+
+<div class="avertit">
+  <span class="titre">Les données ont environ quinze minutes de retard</span>
+  <p>
+    Ce n'est pas du temps réel. L'heure du dernier relevé est affichée en
+    permanence en haut à droite, et elle vieillit visiblement si la collecte
+    s'arrête — un écran qui a l'air vivant alors qu'il est figé serait pire qu'un
+    écran vide.
+  </p>
+</div>
+
+<div class="avertit">
+  <span class="titre">L'historique commence quand la collecte commence</span>
+  <p>
+    Les courbes du bas ne remontent pas dans le passé. Le nombre de tickets
+    ouverts n'est pas téléchargeable après coup — aucune source gratuite ne le
+    fournit —, donc chaque minute doit être enregistrée au moment où elle
+    existe. Un nouveau produit part de zéro.
+  </p>
+</div>
+
+<footer>
+  Cet écran est un outil de <strong>lecture</strong>. Il ne passe aucun ordre,
+  n'en a pas la capacité, et ne conseille rien.
+  <br>
+  <a class="retour" href="/" style="margin-top:1rem">← revenir à l'écran</a>
+</footer>
+
+</main>
+</body>
+</html>
