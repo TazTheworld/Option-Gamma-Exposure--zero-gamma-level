@@ -21,7 +21,7 @@ use axum::routing::get;
 use clap::Parser;
 use gex_core::analyse::{Analyse, Parametres, analyser, greeks_muets};
 use gex_core::contrat::multiplicateur;
-use gex_store::series::{chemin_barres, chemin_niveaux};
+use gex_store::series::{Pas, chemin_barres, chemin_niveaux};
 use gex_store::{chemin_courant, lire_releve};
 use serde::Serialize;
 
@@ -150,12 +150,37 @@ struct Maintenant {
     max_pain: Option<f64>,
 }
 
-/// L'horizon demandé par l'écran.
-#[derive(serde::Deserialize, Debug, Clone, Copy, Default)]
-struct Horizon {
+/// Ce que l'écran demande : un horizon d'échéance, un pas de chandelier.
+#[derive(serde::Deserialize, Debug, Clone, Default)]
+struct Demande {
     /// Jours d'échéance au maximum. Absent : celui de la ligne de commande.
     /// `-1` : toutes les échéances.
     dte_max: Option<i64>,
+    /// Le pas des chandeliers : `1m`, `15m`, `4h`, `1J`. Absent ou illisible :
+    /// la minute, qui est la granularité réellement collectée.
+    pas: Option<String>,
+}
+
+impl Demande {
+    /// Le pas retenu. Un texte illisible retombe sur la minute plutôt que de
+    /// refuser la requête : l'écran continuerait de fonctionner, simplement à la
+    /// granularité brute — et c'est le pas RETENU qui repart, donc le bouton
+    /// allumé sera le bon.
+    fn pas(&self) -> Pas {
+        self.pas
+            .as_deref()
+            .and_then(Pas::depuis)
+            .unwrap_or(Pas::Minutes(1))
+    }
+}
+
+/// Le pas écrit comme l'écran l'envoie.
+fn nom_pas(pas: Pas) -> String {
+    match pas {
+        Pas::Seance => "1J".to_string(),
+        Pas::Minutes(n) if n % 60 == 0 && n >= 60 => format!("{}h", n / 60),
+        Pas::Minutes(n) => format!("{n}m"),
+    }
 }
 
 /// Le GEX à un niveau de prix hypothétique.
@@ -267,10 +292,31 @@ fn avertissement(analyse: &Analyse, cote: bool) -> Option<String> {
     })
 }
 
-async fn barres(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse, (StatusCode, String)> {
+/// La série des chandeliers, à un pas.
+#[derive(Serialize)]
+struct SerieBarres {
+    /// Le pas effectivement appliqué, tel que l'écran l'écrit.
+    pas: String,
+    /// La minute de la dernière transaction, avant tout regroupement.
+    ///
+    /// Pas le début du dernier seau : à la séance, il tomberait à 21 h la veille
+    /// et l'en-tête annoncerait une transaction vieille de vingt heures. Ce que
+    /// l'horloge doit dire, c'est quand le sous-jacent a traité pour la dernière
+    /// fois.
+    derniere_transaction: Option<i64>,
+    points: Vec<Barre>,
+}
+
+async fn barres(
+    State(args): State<Arc<Arguments>>,
+    axum::extract::Query(demande): axum::extract::Query<Demande>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let lues = gex_store::series::lire_barres(&chemin_barres(&args.dir, &args.produit))
         .map_err(erreur)?;
-    let sortie: Vec<Barre> = lues
+    let derniere_transaction = lues.last().map(|b| b.instant.and_utc().timestamp());
+
+    let pas = demande.pas();
+    let points: Vec<Barre> = gex_store::series::agreger_barres(&lues, pas)
         .iter()
         .map(|b| Barre {
             time: b.instant.and_utc().timestamp(),
@@ -280,7 +326,11 @@ async fn barres(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             close: b.close,
         })
         .collect();
-    Ok(axum::Json(sortie))
+    Ok(axum::Json(SerieBarres {
+        pas: nom_pas(pas),
+        derniere_transaction,
+        points,
+    }))
 }
 
 /// La série des niveaux, à un horizon.
@@ -295,13 +345,15 @@ struct SerieNiveaux {
     horizons: Vec<i64>,
     /// L'horizon effectivement servi. `None` quand le fichier n'en nomme aucun.
     horizon: Option<i64>,
+    /// Le pas appliqué, le même que celui des chandeliers.
+    pas: String,
     /// Les points de cet horizon.
     points: Vec<Niveau>,
 }
 
 async fn niveaux(
     State(args): State<Arc<Arguments>>,
-    axum::extract::Query(demande): axum::extract::Query<Horizon>,
+    axum::extract::Query(demande): axum::extract::Query<Demande>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let lus = gex_store::series::lire_niveaux(&chemin_niveaux(&args.dir, &args.produit))
         .map_err(erreur)?;
@@ -318,9 +370,19 @@ async fn niveaux(
     // apparaît, les points muets sont écartés : les mêler à ceux d'un horizon
     // nommé ferait lire deux mesures différentes comme une seule courbe.
     let lus: Vec<_> = match horizon {
-        None => lus.iter().collect(),
-        Some(h) => lus.iter().filter(|p| p.dte_max == Some(h as f64)).collect(),
+        None => lus.to_vec(),
+        Some(h) => lus
+            .iter()
+            .filter(|p| p.dte_max == Some(h as f64))
+            .copied()
+            .collect(),
     };
+
+    // Le MÊME pas que les chandeliers, par la même fonction : les deux séries
+    // doivent tomber sur les mêmes horodatages, sinon la bande du bas ne
+    // s'aligne plus sur le prix — et l'alignement est toute sa raison d'être.
+    let pas = demande.pas();
+    let lus = gex_store::series::agreger_niveaux(&lus, pas);
 
     let points: Vec<Niveau> = lus
         .iter()
@@ -344,7 +406,7 @@ async fn niveaux(
             dte_max: p.dte_max,
         })
         .collect();
-    Ok(axum::Json(SerieNiveaux { horizons, horizon, points }))
+    Ok(axum::Json(SerieNiveaux { horizons, horizon, pas: nom_pas(pas), points }))
 }
 
 /// Le profil par strike de l'instant présent.
@@ -354,7 +416,7 @@ async fn niveaux(
 /// niveaux ne le porte pas.
 async fn profil(
     State(args): State<Arc<Arguments>>,
-    axum::extract::Query(demande): axum::extract::Query<Horizon>,
+    axum::extract::Query(demande): axum::extract::Query<Demande>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     // L'horizon vient de l'écran, mais le serveur décide. `-1` veut dire toutes
     // les échéances ; une valeur absurde est ramenée dans les bornes plutôt que

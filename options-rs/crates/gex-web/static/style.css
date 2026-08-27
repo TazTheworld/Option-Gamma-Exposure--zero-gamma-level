@@ -135,11 +135,43 @@ main {
    Replié il ne coûte qu'une ligne ; ouvert il couvre un coin du graphique, ce qui
    est acceptable le temps d'un clic. L'en-tête reste visible dans les deux cas et
    annonce le compte de ce qui est masqué : une capture ne peut pas mentir. */
-#couches {
+/* La barre d'outils du graphique : le pas des chandeliers, puis les couches.
+   Sur le graphique et non dans l'en-tête, qui porte déjà l'horizon et sept
+   mesures — c'est aussi là que l'œil va les chercher. */
+#outils {
   position: absolute;
   top: 0.35rem;
   left: 0.6rem;
   z-index: 6;
+  font-size: 0.68rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+#pas-boutons {
+  display: flex;
+  background: rgba(14, 17, 23, 0.72);
+  border-radius: 3px;
+}
+#pas-boutons button {
+  font: inherit;
+  padding: 0.12rem 0.36rem;
+  color: var(--texte-faible);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+#pas-boutons button:hover { color: var(--texte); }
+#pas-boutons button.actif {
+  color: var(--fond);
+  background: var(--texte-faible);
+  font-weight: 700;
+}
+
+#couches {
+  position: relative;
   font-size: 0.68rem;
 }
 #couches-entete {
@@ -161,6 +193,9 @@ main {
 #couches-liste { display: none; }
 #couches.ouvert #couches-liste {
   display: block;
+  position: absolute;
+  top: 100%;
+  left: 0;
   margin-top: 0.2rem;
   padding: 0.25rem;
   background: rgba(21, 26, 35, 0.96);

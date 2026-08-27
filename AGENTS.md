@@ -280,6 +280,46 @@ disent. Dans la série, ces trois-là sont des `Option<f64>` et non des `f64` co
 voisins, pour la même raison : un fichier écrit avant leur ajout n'en a aucune trace, et
 les relire à zéro dessinerait une ligne plate sur toute la séance précédente.
 
+**Le pas des chandeliers est un regroupement, pas une nouvelle collecte.** Le collecteur ne
+stocke que la minute ; `agreger_barres` et `agreger_niveaux` en déduisent le reste.
+Redemander à IB des barres de cinq minutes rendrait exactement la même chose contre une
+requête de plus et un quota entamé.
+
+Trois choses que les tests fixent :
+
+- **Le seau se calcule sur le TEMPS, jamais sur le rang.** Grouper cinq barres consécutives
+  paraît équivalent et ne l'est pas : il manque des minutes dès que le marché ne traite
+  pas, et chaque trou décalerait tous les seaux suivants.
+- **La frontière est celle de la séance, pas minuit UTC.** `debut_de_seance` la place à 17 h
+  à New York, donc elle suit le changement d'heure — 21 h UTC l'été, 22 h l'hiver. Un
+  chandelier journalier coupé à minuit UTC tomberait en plein après-midi américain : son
+  ouverture ne serait pas l'ouverture, et il mélangerait la fin d'une séance et le début de
+  la suivante. Pour les pas d'une heure ou moins la différence est nulle, la bascule tombant
+  sur une heure ronde ; pour 4h et 1J elle décide de tout.
+- **Les deux séries partagent leurs seaux**, par construction : c'est la même fonction. Si
+  elles divergeaient, la bande du bas cesserait de s'aligner sur le prix — et l'alignement
+  est toute sa raison d'être.
+
+**Le cadrage se compte en bougies, pas en durée.** Il se calait sur la durée couverte par
+les niveaux, ce qui marchait tant que cette trace couvrait des heures : dès qu'elle repart
+de zéro, vingt minutes de niveaux donnaient vingt bougies étalées sur douze cents pixels,
+soit soixante pixels par chandelier — et le même calcul en journalier demandait de montrer
+moins d'une bougie. Une durée ne veut rien dire tant qu'on ne sait pas quel pas on regarde ;
+un nombre de bougies vaut pour la minute comme pour la séance. Entre 120 et 400, borné par
+ce que la série contient.
+
+Et l'espacement est **posé**, pas déduit d'une plage. `maxBarSpacing` existe dans les
+options de `lightweight-charts` et n'y change rien — mesuré en 4.2.3, forcer un espacement
+de 300 rend bien 300. Sans plafond, trois bougies journalières s'étiraient sur toute la
+largeur à 427 px chacune : le graphique avait l'air cassé alors qu'il disait seulement
+« je n'ai que trois jours ». `setVisibleRange` ne s'appliquant qu'à l'image suivante,
+relire l'espacement pour le corriger après coup demanderait d'attendre une frame ; le
+calculer d'avance n'attend rien.
+
+L'horloge de l'en-tête garde la **dernière transaction non regroupée**. Le début du dernier
+seau tomberait à 21 h la veille en journalier, et elle annoncerait une transaction vieille
+de vingt heures.
+
 **Une couche éteinte reste listée, barrée.** Le panneau des couches ne retire jamais une
 entrée : une couche absente de la liste se lirait « il n'y a pas de put wall » au lieu de
 « tu l'as éteinte ». Et son en-tête annonce le compte même replié — `couches 9/14 ·

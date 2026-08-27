@@ -229,6 +229,20 @@ Les boutons viennent de ce que la série **contient**, pas d'une liste écrite d
 la page : les deux divergeraient, et l'écran proposerait des horizons dont aucune
 trace n'existe.
 
+**Le pas des chandeliers**, dans la même barre d'outils : `1m` à `1J`. Le
+collecteur ne stocke que la minute et tout le reste s'en déduit par regroupement,
+côté serveur, par la même fonction pour les chandeliers et pour les huit mesures.
+Si les deux séries ne tombaient pas sur les mêmes horodatages, la bande cesserait
+d'être alignée sur le prix — un test le vérifie pour chaque pas.
+
+La frontière des seaux est celle de la **séance**, pas minuit UTC. NQ se traite de
+18 h à 17 h à New York : un chandelier journalier coupé à minuit tomberait en
+plein après-midi américain, son ouverture ne serait pas l'ouverture, et il
+mélangerait la fin d'une séance et le début de la suivante. Pour une heure ou
+moins la différence est nulle ; pour 4h et 1J elle décide de tout. Et la bascule
+suit l'heure de New York, donc le changement d'heure : un décalage fixe ferait
+glisser tous les journaliers d'une heure deux fois l'an.
+
 **Le panneau des couches.** Quatorze choses se dessinent, et toutes ne servent pas
 en même temps : les murs par open interest encombrent quand on suit le zero gamma,
 le thêta n'intéresse personne quand on lit le flux. Chacune s'éteint depuis un

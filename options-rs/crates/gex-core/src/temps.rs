@@ -11,7 +11,7 @@
 //! précisément la sorte d'erreur qu'on ne voit pas passer — `EcheanceNy` et
 //! `InstantReleve` existent pour que le compilateur la refuse.
 
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Offset, TimeZone, Weekday};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Weekday};
 use chrono_tz::America::New_York;
 
 /// Jours de bourse dans une année, convention Perfiliev.
@@ -95,6 +95,39 @@ impl Convention {
             Convention::Bourse => JOURS_BOURSE,
         }
     }
+}
+
+/// L'heure de New York à laquelle une séance CME se termine et la suivante
+/// commence.
+pub const BASCULE_SEANCE: u32 = 17;
+
+/// Le début de la séance qui contient cet instant.
+///
+/// Une séance de future ne commence pas à minuit UTC. NQ se traite de 18 h à
+/// 17 h à New York, avec une heure d'arrêt technique : un chandelier journalier
+/// borné à minuit UTC couperait donc la séance en plein après-midi américain.
+/// Son ouverture ne serait pas l'ouverture et sa clôture ne serait pas la
+/// clôture — il mélangerait la fin d'une séance et le début de la suivante.
+///
+/// La bascule suit l'heure de New York, donc le changement d'heure : 21 h UTC
+/// l'été, 22 h l'hiver. Prendre un décalage fixe ferait glisser tous les
+/// chandeliers journaliers d'une heure deux fois l'an.
+///
+/// Le retour en UTC passe par [`EcheanceNy::en_utc`], qui tranche déjà les deux
+/// cas tordus du changement d'heure.
+pub fn debut_de_seance(instant: NaiveDateTime) -> NaiveDateTime {
+    let local = New_York.from_utc_datetime(&instant).naive_local();
+    let jour = if local.hour() < BASCULE_SEANCE {
+        // Avant 17 h à New York, on est encore dans la séance ouverte la veille.
+        local.date().pred_opt().unwrap_or(local.date())
+    } else {
+        local.date()
+    };
+    EcheanceNy(
+        jour.and_hms_opt(BASCULE_SEANCE, 0, 0)
+            .expect("17 h existe tous les jours"),
+    )
+    .en_utc()
 }
 
 /// Temps restant en années.
@@ -270,5 +303,49 @@ mod tests {
         );
         assert!(t > 0.0);
         assert!((t * JOURS_CALENDAIRES * 24.0 * 3600.0 - PLANCHER_SECONDES).abs() < 1e-6);
+    }
+
+    /// La séance bascule à 17 h New York, soit 21 h UTC en heure d'été.
+    ///
+    /// Un chandelier journalier borné à minuit UTC couperait la séance en plein
+    /// après-midi américain : son ouverture ne serait pas l'ouverture.
+    #[test]
+    fn la_seance_bascule_a_dix_sept_heures_new_york() {
+        let seance = |s: &str| {
+            debut_de_seance(NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap())
+        };
+        let attendu = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+
+        // Été : 17 h New York = 21 h UTC.
+        assert_eq!(seance("2026-08-26 20:59:00"), attendu("2026-08-25 21:00:00"));
+        assert_eq!(seance("2026-08-26 21:00:00"), attendu("2026-08-26 21:00:00"));
+        assert_eq!(seance("2026-08-27 10:00:00"), attendu("2026-08-26 21:00:00"));
+    }
+
+    /// L'hiver la bascule tombe à 22 h UTC. Un décalage fixe ferait glisser tous
+    /// les chandeliers journaliers d'une heure deux fois l'an.
+    #[test]
+    fn la_bascule_suit_le_changement_d_heure() {
+        let seance = |s: &str| {
+            debut_de_seance(NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap())
+        };
+        let attendu = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+
+        assert_eq!(seance("2026-01-15 21:30:00"), attendu("2026-01-14 22:00:00"));
+        assert_eq!(seance("2026-01-15 22:00:00"), attendu("2026-01-15 22:00:00"));
+        // Et l'été, une heure plus tôt en UTC pour la même heure locale.
+        assert_eq!(seance("2026-07-15 21:00:00"), attendu("2026-07-15 21:00:00"));
+    }
+
+    /// Minuit UTC tombe au MILIEU d'une séance, jamais à sa frontière : c'est
+    /// tout le sujet.
+    #[test]
+    fn minuit_utc_n_est_pas_une_frontiere_de_seance() {
+        let minuit = NaiveDateTime::parse_from_str("2026-08-27 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert_ne!(debut_de_seance(minuit), minuit);
+        assert_eq!(
+            debut_de_seance(minuit),
+            NaiveDateTime::parse_from_str("2026-08-26 21:00:00", "%Y-%m-%d %H:%M:%S").unwrap()
+        );
     }
 }

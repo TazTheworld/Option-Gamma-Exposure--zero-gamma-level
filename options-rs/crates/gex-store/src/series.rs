@@ -150,6 +150,116 @@ pub fn borne_de_retention(maintenant: NaiveDateTime, jours: i64) -> NaiveDateTim
     maintenant - Duration::days(jours.max(0))
 }
 
+/// Le pas de temps d'un chandelier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pas {
+    /// Un multiple de la minute.
+    Minutes(i64),
+    /// Une séance CME entière, bornée à 17 h à New York.
+    Seance,
+}
+
+impl Pas {
+    /// Le pas écrit comme l'écran l'envoie : `1m`, `15m`, `4h`, `1J`.
+    ///
+    /// Un texte inconnu ne rend pas la minute par défaut : il rend `None`, et
+    /// l'appelant décide. Retomber en silence sur la minute ferait passer une
+    /// faute de frappe pour un choix.
+    pub fn depuis(texte: &str) -> Option<Pas> {
+        let texte = texte.trim();
+        if texte.eq_ignore_ascii_case("1j") || texte.eq_ignore_ascii_case("1d") {
+            return Some(Pas::Seance);
+        }
+        let (nombre, unite) = texte.split_at(texte.len().saturating_sub(1));
+        let n: i64 = nombre.parse().ok()?;
+        if n <= 0 {
+            return None;
+        }
+        match unite.to_ascii_lowercase().as_str() {
+            "m" => Some(Pas::Minutes(n)),
+            "h" => Some(Pas::Minutes(n * 60)),
+            _ => None,
+        }
+    }
+
+    /// Sa durée en secondes. Une séance vaut vingt-quatre heures : c'est le pas
+    /// entre deux ouvertures, pas la durée cotée.
+    pub fn secondes(self) -> i64 {
+        match self {
+            Pas::Minutes(n) => n.max(1) * 60,
+            Pas::Seance => 86_400,
+        }
+    }
+}
+
+/// Le début du seau qui contient cet instant.
+///
+/// **Aligné sur la séance, pas sur l'époque.** Une séance de future commence à
+/// 17 h à New York : découper des seaux depuis minuit UTC ferait tomber les
+/// frontières en plein après-midi américain. Pour les pas d'une heure ou moins la
+/// différence est nulle — la bascule tombe sur une heure ronde — mais pour quatre
+/// heures et pour la journée elle décide de tout.
+///
+/// Et le seau se calcule sur le TEMPS, jamais sur le rang de la barre. Grouper
+/// cinq barres consécutives paraît équivalent et ne l'est pas : il manque des
+/// minutes dès que le marché ne traite pas, et chaque trou décalerait tous les
+/// seaux suivants.
+pub fn seau(instant: NaiveDateTime, pas: Pas) -> NaiveDateTime {
+    let debut = gex_core::temps::debut_de_seance(instant);
+    match pas {
+        Pas::Seance => debut,
+        Pas::Minutes(n) => {
+            let n = n.max(1);
+            let ecoule = (instant - debut).num_minutes();
+            debut + Duration::minutes(ecoule - ecoule.rem_euclid(n))
+        }
+    }
+}
+
+/// Regroupe des barres d'une minute en chandeliers plus longs.
+///
+/// Ouverture de la première, clôture de la dernière, extrêmes des extrêmes,
+/// volumes additionnés. Les barres doivent être triées — elles le sont, `recoller`
+/// s'en charge.
+pub fn agreger_barres(barres: &[Barre], pas: Pas) -> Vec<Barre> {
+    let mut sortie: Vec<Barre> = Vec::new();
+    for b in barres {
+        let debut = seau(b.instant, pas);
+        match sortie.last_mut() {
+            Some(courant) if courant.instant == debut => {
+                courant.high = courant.high.max(b.high);
+                courant.low = courant.low.min(b.low);
+                courant.close = b.close;
+                courant.volume += b.volume;
+            }
+            _ => sortie.push(Barre { instant: debut, ..*b }),
+        }
+    }
+    sortie
+}
+
+/// Regroupe des points de niveaux au même pas que les chandeliers.
+///
+/// Le **dernier** point du seau l'emporte, et non une moyenne : un zero gamma
+/// moyen n'est le zero gamma d'aucun instant, et un mur moyenné tomberait entre
+/// deux strikes qui n'existent pas. C'est aussi ce que fait la clôture d'un
+/// chandelier — l'état à la fin du seau.
+///
+/// L'horodatage devient celui du seau, pour que les deux séries tombent au même
+/// pixel : c'est toute la raison d'être de l'agrégation côté serveur.
+pub fn agreger_niveaux(points: &[PointNiveaux], pas: Pas) -> Vec<PointNiveaux> {
+    let mut sortie: Vec<PointNiveaux> = Vec::new();
+    for p in points {
+        let debut = seau(p.instant, pas);
+        let range = PointNiveaux { instant: debut, ..*p };
+        match sortie.last_mut() {
+            Some(courant) if courant.instant == debut => *courant = range,
+            _ => sortie.push(range),
+        }
+    }
+    sortie
+}
+
 /// Recolle des barres nouvelles sur des anciennes.
 ///
 /// IB renvoie la **dernière barre plusieurs fois** pendant qu'elle se forme : la
@@ -535,6 +645,129 @@ mod tests {
         assert_eq!(recollees.len(), 4);
         assert!(recollees.windows(2).all(|p| p[0].instant < p[1].instant));
         assert_eq!(recollees[1].close, 29_215.0, "la version fraîche l'emporte");
+    }
+
+    // ---=== l'agrégation ===---
+
+    /// Le pas se lit tel que l'écran l'envoie, et un texte inconnu se refuse
+    /// plutôt que de retomber en silence sur la minute.
+    #[test]
+    fn le_pas_se_lit_ou_se_refuse() {
+        assert_eq!(Pas::depuis("1m"), Some(Pas::Minutes(1)));
+        assert_eq!(Pas::depuis("15m"), Some(Pas::Minutes(15)));
+        assert_eq!(Pas::depuis("4h"), Some(Pas::Minutes(240)));
+        assert_eq!(Pas::depuis("1J"), Some(Pas::Seance));
+        assert_eq!(Pas::depuis("1d"), Some(Pas::Seance));
+        assert_eq!(Pas::depuis("3s"), None);
+        assert_eq!(Pas::depuis("0m"), None);
+        assert_eq!(Pas::depuis(""), None);
+    }
+
+    /// Ouverture de la première, clôture de la dernière, extrêmes des extrêmes.
+    #[test]
+    fn cinq_minutes_font_un_chandelier() {
+        let cinq: Vec<Barre> = (0..5)
+            .map(|i| Barre {
+                instant: instant(&format!("2026-08-26 14:0{i}:00")),
+                open: 100.0 + i as f64,
+                high: 110.0 + i as f64,
+                low: 90.0 - i as f64,
+                close: 105.0 + i as f64,
+                volume: 10.0,
+            })
+            .collect();
+        let a = agreger_barres(&cinq, Pas::Minutes(5));
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].instant, instant("2026-08-26 14:00:00"));
+        assert_eq!(a[0].open, 100.0, "l'ouverture est celle de la première");
+        assert_eq!(a[0].close, 109.0, "la clôture est celle de la dernière");
+        assert_eq!(a[0].high, 114.0);
+        assert_eq!(a[0].low, 86.0);
+        assert_eq!(a[0].volume, 50.0);
+    }
+
+    /// Le seau se calcule sur le TEMPS, jamais sur le rang. Il manque des minutes
+    /// dès que le marché ne traite pas, et chaque trou décalerait sinon tous les
+    /// seaux suivants.
+    #[test]
+    fn un_trou_ne_decale_pas_les_seaux() {
+        let barres = vec![
+            barre("2026-08-26 14:00:00", 100.0),
+            barre("2026-08-26 14:01:00", 101.0),
+            // 14:02, 14:03 et 14:04 manquent.
+            barre("2026-08-26 14:05:00", 105.0),
+            barre("2026-08-26 14:06:00", 106.0),
+        ];
+        let a = agreger_barres(&barres, Pas::Minutes(5));
+        assert_eq!(a.len(), 2, "deux seaux, pas un seul de quatre barres");
+        assert_eq!(a[0].instant, instant("2026-08-26 14:00:00"));
+        assert_eq!(a[1].instant, instant("2026-08-26 14:05:00"));
+    }
+
+    /// À la minute, l'agrégation ne change rien du tout.
+    #[test]
+    fn la_minute_rend_la_serie_intacte() {
+        let barres = vec![
+            barre("2026-08-26 14:00:00", 100.0),
+            barre("2026-08-26 14:01:00", 101.0),
+        ];
+        assert_eq!(agreger_barres(&barres, Pas::Minutes(1)), barres);
+    }
+
+    /// Le chandelier journalier est borné par la SÉANCE, pas par minuit UTC.
+    ///
+    /// 20:59 appartient encore à la séance ouverte la veille à 21 h ; 21:00 ouvre
+    /// la suivante. Un découpage à minuit UTC les aurait mis dans le même seau.
+    #[test]
+    fn le_journalier_suit_la_seance_et_non_minuit_utc() {
+        let barres = vec![
+            barre("2026-08-26 20:59:00", 100.0),
+            barre("2026-08-26 21:00:00", 200.0),
+            barre("2026-08-27 00:00:00", 300.0),
+            barre("2026-08-27 20:00:00", 400.0),
+        ];
+        let a = agreger_barres(&barres, Pas::Seance);
+        assert_eq!(a.len(), 2, "deux séances");
+        assert_eq!(a[0].instant, instant("2026-08-25 21:00:00"));
+        assert_eq!(a[0].close, 100.0);
+        assert_eq!(a[1].instant, instant("2026-08-26 21:00:00"));
+        // `barre` pose l'ouverture cinq points sous la clôture : 195 est bien
+        // l'ouverture de la barre de 21:00, donc celle de la séance.
+        assert_eq!(a[1].open, 195.0, "la séance ouvre à 21 h UTC, pas à minuit");
+        assert_eq!(a[1].close, 400.0);
+    }
+
+    /// Le dernier point du seau l'emporte, jamais une moyenne : un mur moyenné
+    /// tomberait entre deux strikes qui n'existent pas.
+    #[test]
+    fn les_niveaux_gardent_le_dernier_point_du_seau() {
+        let mut tot = point("2026-08-26 14:01:00", Some(29_100.0));
+        tot.call_wall = Some(29_800.0);
+        let mut tard = point("2026-08-26 14:04:00", Some(29_400.0));
+        tard.call_wall = Some(29_900.0);
+        let hors = point("2026-08-26 14:06:00", Some(29_500.0));
+
+        let a = agreger_niveaux(&[tot, tard, hors], Pas::Minutes(5));
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].instant, instant("2026-08-26 14:00:00"));
+        assert_eq!(a[0].zero_gamma, Some(29_400.0), "le dernier du seau");
+        assert_eq!(a[0].call_wall, Some(29_900.0));
+        assert_eq!(a[1].instant, instant("2026-08-26 14:05:00"));
+    }
+
+    /// Les deux séries doivent tomber sur les MÊMES horodatages, sans quoi
+    /// l'alignement au pixel près de l'écran s'effondre.
+    #[test]
+    fn barres_et_niveaux_partagent_leurs_seaux() {
+        let b = barre("2026-08-26 14:07:00", 100.0);
+        let p = point("2026-08-26 14:07:00", Some(29_100.0));
+        for pas in [Pas::Minutes(5), Pas::Minutes(15), Pas::Minutes(240), Pas::Seance] {
+            assert_eq!(
+                agreger_barres(&[b], pas)[0].instant,
+                agreger_niveaux(&[p], pas)[0].instant,
+                "seaux divergents pour {pas:?}"
+            );
+        }
     }
 
     // ---=== la rétention ===---

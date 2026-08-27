@@ -128,6 +128,18 @@ huit courbes, à n'importe quel zoom. C'est ce qui permet de descendre du regard
 prix vers ce que le GEX a fait au même instant — la seule raison d'empiler des panneaux.
 Les étiquettes vivent dans la gouttière de droite, jamais par-dessus les courbes.
 
+**Le pas des chandeliers** se choisit dans la même barre d'outils : `1m · 5m · 15m · 30m ·
+1h · 4h · 1J`. Le collecteur ne stocke que la minute ; tout le reste s'en déduit par
+regroupement côté serveur, par la **même fonction** pour les chandeliers et pour les huit
+mesures — sans quoi les deux séries ne tomberaient plus sur les mêmes horodatages et la
+bande cesserait d'être alignée sur le prix.
+
+> Le regroupement est borné par la **séance**, pas par minuit UTC. NQ se traite de 18 h à
+> 17 h à New York : un chandelier journalier coupé à minuit tomberait en plein après-midi
+> américain, son ouverture ne serait pas l'ouverture et sa clôture mélangerait deux
+> séances. La bascule suit l'heure de New York, donc le changement d'heure — 21 h UTC
+> l'été, 22 h l'hiver.
+
 **Le panneau des couches**, en haut à gauche du prix, éteint ce qui encombre : le fond de
 régime, le zero gamma, les murs, le max pain, la bande ±1σ, et chacune des huit mesures.
 C'est aussi la légende — pastille, nom, allumé ou non.

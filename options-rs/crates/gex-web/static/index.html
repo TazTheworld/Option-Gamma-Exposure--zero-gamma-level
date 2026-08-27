@@ -52,9 +52,14 @@
          retiree de la liste se lirait « il n'y a pas de put wall » alors qu'elle
          dit « tu l'as eteinte ». Replie, l'en-tete annonce quand meme le compte
          de ce qui manque : une capture d'ecran ne peut donc pas mentir. -->
-    <div id="couches">
-      <button id="couches-entete" type="button"></button>
-      <div id="couches-liste"></div>
+    <div id="outils">
+      <!-- Le pas des chandeliers, la ou TradingView le met : sur le graphique,
+           pas dans l'en-tete, qui porte deja l'horizon et sept mesures. -->
+      <span id="pas-boutons"></span>
+      <div id="couches">
+        <button id="couches-entete" type="button"></button>
+        <div id="couches-liste"></div>
+      </div>
     </div>
   </section>
   <section class="panneau" id="profil">
@@ -343,6 +348,61 @@ const COUCHES = [
   ...MESURES.map((m) => ({ cle: m.champ, nom: m.nom, couleurs: [m.couleur], bande: true })),
 ];
 
+// --- Le pas des chandeliers -----------------------------------------------
+//
+// Le collecteur ne stocke QUE la minute : tout le reste s'en deduit par
+// regroupement, cote serveur, par la meme fonction pour les barres et pour les
+// niveaux. Redemander a IB des barres de cinq minutes donnerait exactement le
+// meme resultat contre une requete de plus et un quota entame.
+//
+// Le regroupement est aligne sur la SEANCE, pas sur minuit UTC : NQ se traite de
+// 18 h a 17 h a New York, et un chandelier journalier borne a minuit couperait la
+// seance en plein apres-midi americain. Pour une heure ou moins la difference est
+// nulle ; pour 4h et 1J elle decide de tout.
+const PAS = ["1m", "5m", "15m", "30m", "1h", "4h", "1J"];
+const CLE_PAS = "gex-pas";
+let pasChoisi = "1m";
+try {
+  const garde = localStorage.getItem(CLE_PAS);
+  if (PAS.includes(garde)) pasChoisi = garde;
+} catch (e) { /* sans stockage, on repart de la minute */ }
+
+function construirePas() {
+  const boite = document.getElementById("pas-boutons");
+  boite.innerHTML = PAS
+    .map((p) => '<button type="button" data-pas="' + p + '">' + p + "</button>")
+    .join("");
+  for (const b of boite.querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      if (b.dataset.pas === pasChoisi) return;
+      pasChoisi = b.dataset.pas;
+      try { localStorage.setItem(CLE_PAS, pasChoisi); } catch (e) { /* tant pis */ }
+      marquerPas();
+      // Changer de pas change TOUS les horodatages : les series ne sont plus
+      // les memes et la vue calee sur les anciennes n'a plus de sens. On laisse
+      // le cadrage se refaire, comme au premier affichage.
+      suivi.clear();
+      premierRendu = true;
+      rafraichir();
+    });
+  }
+  marquerPas();
+}
+
+function marquerPas() {
+  for (const b of document.querySelectorAll("#pas-boutons button")) {
+    b.classList.toggle("actif", b.dataset.pas === pasChoisi);
+  }
+}
+
+/// La duree d'un chandelier en secondes, pour savoir quel point de niveaux
+/// correspond a celui qu'on survole.
+function pasEnSecondes() {
+  if (pasChoisi === "1J") return 86400;
+  const n = parseInt(pasChoisi, 10);
+  return pasChoisi.endsWith("h") ? n * 3600 : n * 60;
+}
+
 const CLE_COUCHES = "gex-couches-masquees";
 let masquees = new Set();
 try {
@@ -416,7 +476,8 @@ const GOUTTIERE_AIR = 14;    // ecart entre la fin du trace et le texte
 
 let niveauxCourants = [];
 let barresCourantes = [];
-let instantSurvole = null;   // l'instant sous la souris, ou null
+let derniereTransaction = null;   // la minute du dernier echange, non regroupee
+let instantSurvole = null;        // l'instant sous la souris, ou null
 
 /// La droite du trace, en pixels : la ou l'echelle des prix commence.
 function bordDuTrace() {
@@ -435,9 +496,11 @@ function niveauA(instant) {
       meilleur = p;
     }
   }
-  // Au-dela de cinq minutes ce n'est plus « le point d'ici », c'est un autre
-  // moment : mieux vaut ne rien montrer que montrer a cote.
-  return meilleur && Math.abs(meilleur.time - instant) <= 300 ? meilleur : null;
+  // Au-dela d'un chandelier ce n'est plus « le point d'ici », c'est un autre
+  // moment : mieux vaut ne rien montrer que montrer a cote. La tolerance suit
+  // donc le pas — cinq minutes suffisaient a la minute, pas a la seance.
+  const marge = Math.max(300, pasEnSecondes());
+  return meilleur && Math.abs(meilleur.time - instant) <= marge ? meilleur : null;
 }
 
 function dessinerBandes() {
@@ -1081,7 +1144,7 @@ function fraicheur(etat) {
   if (!etat.releve) { noeud.textContent = "aucun relevé"; noeud.classList.add("perime"); return; }
   const age = Math.round(Date.now() / 1000 - etat.releve);
   const heure = (t) => new Date(t * 1000).toLocaleTimeString("fr-FR");
-  const fin = barresCourantes.length ? barresCourantes[barresCourantes.length - 1].time : null;
+  const fin = derniereTransaction;
   const retard = fin == null ? null : Math.round((etat.releve - fin) / 60);
 
   let texte = "relevé " + heure(etat.releve) + " · il y a " + age + " s · " + etat.strikes + " strikes";
@@ -1141,30 +1204,65 @@ function poser(cle, serie, points) {
 
 let premierRendu = true;
 
-// Au premier affichage, cadrer sur ce que la série des niveaux couvre — c'est le
-// sujet de l'écran. `fitContent()` montrait les trente jours de barres, où une
-// heure de niveaux tient dans quelques pixels : les niveaux avaient l'air absents
-// du graphique alors qu'ils y étaient tracés.
+// Le cadrage se compte en BOUGIES, pas en durée.
+//
+// Il se calait d'abord sur la durée couverte par les niveaux — le sujet de
+// l'écran —, ce qui marchait tant que cette trace couvrait des heures. Dès
+// qu'elle repart de zéro, vingt minutes de niveaux donnaient vingt bougies
+// étalées sur douze cents pixels : soixante pixels par chandelier. Et le même
+// calcul en journalier demandait de montrer moins d'une bougie.
+//
+// Une durée ne veut rien dire tant qu'on ne sait pas quel pas on regarde. Un
+// nombre de bougies, si : c'est lui qui décide de la densité à l'écran, et il
+// vaut pour la minute comme pour la séance.
+const BOUGIES_MINIMUM = 120;      // en deçà, chaque chandelier devient un pavé
+const BOUGIES_MAXIMUM = 400;      // au-delà, ils tiennent dans moins de trois pixels
+const ESPACEMENT_MAXIMUM = 26;    // largeur plafond d'un chandelier, en pixels
+
 function cadrer(barres, niveaux) {
-  const fin = barres[barres.length - 1].time;
-  const depuis = niveaux.length
-    ? niveaux[0].time - Math.max(fin - niveaux[0].time, 1800) * 0.3
-    : fin - 6 * 3600;
-  gPrix.timeScale().setVisibleRange({
-    from: versEcran(Math.max(Math.round(depuis), barres[0].time)),
-    to: versEcran(fin),
-  });
+  // Les niveaux restent le sujet : on cherche à les couvrir. Mais entre deux
+  // bornes, parce qu'une trace de vingt minutes ne justifie pas d'écraser le
+  // prix, et qu'une trace d'une séance entière ne se lit plus au pixel.
+  const couvrant = niveaux.length
+    ? barres.filter((b) => b.time >= niveaux[0].time).length
+    : BOUGIES_MINIMUM;
+  const combien = Math.min(
+    barres.length,
+    Math.max(BOUGIES_MINIMUM, Math.min(BOUGIES_MAXIMUM, couvrant)),
+  );
+
+  // On pose l'ESPACEMENT, pas la plage. Deux raisons.
+  //
+  // Le plafond d'abord : faute d'historique, trois bougies journalières
+  // s'étiraient sur douze cents pixels, soit 427 px chacune — le graphique avait
+  // l'air cassé alors qu'il disait seulement « je n'ai que trois jours ».
+  // Plafonnées, elles gardent leur largeur normale et laissent le vide à gauche,
+  // ce qui EST l'information. `maxBarSpacing` existe dans les options de la
+  // bibliothèque et n'y change rien : mesuré en 4.2.3, forcer un espacement de
+  // 300 rend bien 300.
+  //
+  // Et `setVisibleRange` ne s'applique qu'à l'image suivante : relire
+  // l'espacement pour le corriger après coup demanderait d'attendre une frame.
+  // Le calculer ici n'attend rien.
+  const largeur = Math.max(200, bordDuTrace());
+  const espacement = Math.min(ESPACEMENT_MAXIMUM, largeur / (combien + MARGE_DROITE));
+  gPrix.timeScale().applyOptions({ barSpacing: espacement });
   gPrix.timeScale().scrollToRealTime();
 }
 
 async function rafraichir() {
   try {
-    const suffixe = horizonChoisi === null ? "" : "?dte_max=" + horizonChoisi;
-    const [barres, serieNiveaux, profil] = await Promise.all([
-      json("/api/barres"),
-      json("/api/niveaux" + suffixe),
-      json("/api/profil" + suffixe),
+    const horizon = horizonChoisi === null ? "" : "&dte_max=" + horizonChoisi;
+    const [serieBarres, serieNiveaux, profil] = await Promise.all([
+      json("/api/barres?pas=" + pasChoisi),
+      json("/api/niveaux?pas=" + pasChoisi + horizon),
+      json("/api/profil?" + horizon.slice(1)),
     ]);
+    const barres = serieBarres.points;
+    // La derniere TRANSACTION, avant tout regroupement : le debut du dernier
+    // seau tomberait a 21 h la veille en journalier, et l'horloge annoncerait une
+    // transaction vieille de vingt heures.
+    derniereTransaction = serieBarres.derniere_transaction;
     // Les boutons viennent de ce que la SERIE contient, pas d'une liste ecrite
     // ici : les deux divergeraient, et l'ecran proposerait des horizons dont
     // aucune trace n'existe. Et c'est l'horizon RETENU par le serveur qui allume
@@ -1246,6 +1344,7 @@ async function rafraichir() {
   }
 }
 
+construirePas();
 appliquerCouches();
 rafraichir();
 setInterval(rafraichir, RAFRAICHISSEMENT);
