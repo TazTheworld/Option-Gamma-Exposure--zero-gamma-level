@@ -82,6 +82,7 @@ pub fn build_chain(
         cote.vega = v.vega.unwrap_or(0.0);
         cote.theta = v.theta.unwrap_or(0.0);
         cote.open_interest = v.open_interest.unwrap_or(0.0);
+        cote.volume = v.volume.unwrap_or(0.0);
     }
 
     let mut lignes: Vec<Ligne> = par_strike.into_values().collect();
@@ -197,6 +198,7 @@ mod tests {
             vega: Some(7.125_241_309_278_863),
             theta: Some(-58.467_787_225_682_514),
             open_interest: Some(56.0),
+            volume: Some(31.0),
             sous_jacent: Some(29_233.75),
         }
     }

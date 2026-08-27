@@ -268,6 +268,51 @@ Quand le spot bouge, l'IV suit-elle le strike ou la monnaie ? Les deux hypothès
 la réalité. Le défaut, `sticky-strike`, est celui de la littérature ;
 `sticky-moneyness` remodèle les ailes du profil sans déplacer un zero gamma proche du spot.
 
+## Trois paires de murs, et deux gammas majeurs
+
+Un **mur** répond à « où la couverture est-elle la plus sensible », et il se calcule d'un
+seul côté : le gamma call au-dessus du spot, le gamma put en dessous. Il y en a trois
+paires, qui ne disent pas la même chose :
+
+- **par gamma** — où la couverture est la plus sensible ;
+- **par open interest** — où il y a le plus de contrats, accumulés depuis des semaines ;
+- **par volume du jour** — où quelqu'un vient de prendre position.
+
+La troisième est la plus réactive : un mur par volume naît et meurt dans la journée là où
+un mur par open interest met des jours à bouger. C'est leur **accord** qui rend un niveau
+crédible.
+
+Le **long gamma** et le **short gamma** répondent à une autre question encore : les deux
+strikes où le gamma **net** est le plus concentré, calls et puts confondus, sans regarder
+de quel côté du spot ils tombent. Un strike peut être un mur call sans être le gamma long
+majeur, si ses puts annulent ses calls. Mesuré sur une séance : le long gamma coïncidait
+avec le call wall à 30 000, mais le short gamma tombait à 28 500 quand le put wall était à
+29 500.
+
+## Le carburant : de combien, pas seulement de quel côté
+
+Le fond de régime dit, à chaque niveau de prix, si la couverture **amortirait ou
+amplifierait**. Il ne dit pas de combien. Le carburant le dit : les dollars que les teneurs
+de marché seraient forcés d'acheter ou de vendre, en chemin, pour rester neutres si le spot
+allait là.
+
+Le GEX vaut des dollars de delta par mouvement de 1 %, donc `d(delta$)/d(ln S) = 100 × GEX`.
+Le carburant est l'intégrale de cette dérivée entre le spot et chaque niveau — nul au spot
+par construction, il s'accumule en s'éloignant. Positif, les teneurs de marché devraient
+**acheter** pour y aller ; et acheter dans un marché qui monte est exactement ce qui
+entretient un mouvement.
+
+C'est une couche à part sur l'écran, à activer dans le panneau : elle prend la place du
+fond de régime, les deux répondant à la même question par niveau de prix. Survole une
+hauteur du graphique et la bulle donne le chiffre — la teinte montre la carte, la bulle la
+chiffre.
+
+> **Ce n'est pas une prévision.** Rien ne dit que le prix ira à ce niveau ; ça dit ce qu'il
+> en coûterait au book s'il y allait. Et le signe même du GEX reste un postulat — la
+> convention « dealers longs les calls, courts les puts » n'est pas mesurée. Si elle est
+> fausse sur un produit, la carte est du mauvais côté. `gex --valider` est le seul endroit
+> qui pourra trancher, et il refuse de conclure sous vingt observations.
+
 ## Zero gamma : quel croisement ?
 
 Le profil peut repasser par zéro plusieurs fois dès que les ailes sont bruyantes. C'est le

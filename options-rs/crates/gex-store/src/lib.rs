@@ -86,21 +86,26 @@ impl From<ChaineInvalide> for ErreurReleve {
 }
 
 /// Les colonnes d'un côté, dans l'ordre où [`Cote`] les attend.
-const CHAMPS_CALL: [&str; 6] = [
+const CHAMPS_CALL: [&str; 7] = [
     "CallIV",
     "CallGamma",
     "CallDelta",
     "CallOpenInt",
     "CallVega",
     "CallTheta",
+    // Héritée du CBOE, présente dans le format depuis toujours et écrite à zéro
+    // faute d'être collectée. Un relevé archivé avant qu'IB ne la serve la rend
+    // donc nulle, ce que `colonne_ou_zeros` fait déjà pour une colonne absente.
+    "CallVol",
 ];
-const CHAMPS_PUT: [&str; 6] = [
+const CHAMPS_PUT: [&str; 7] = [
     "PutIV",
     "PutGamma",
     "PutDelta",
     "PutOpenInt",
     "PutVega",
     "PutTheta",
+    "PutVol",
 ];
 
 /// Un vecteur de flottants, ou des zéros si la colonne n'existe pas.
@@ -202,6 +207,7 @@ pub fn lire_releve(chemin: impl AsRef<Path>) -> Result<Chaine, ErreurReleve> {
                     open_interest: call[3][i],
                     vega: call[4][i],
                     theta: call[5][i],
+                    volume: call[6][i],
                 },
                 put: Cote {
                     iv: put[0][i],
@@ -210,6 +216,7 @@ pub fn lire_releve(chemin: impl AsRef<Path>) -> Result<Chaine, ErreurReleve> {
                     open_interest: put[3][i],
                     vega: put[4][i],
                     theta: put[5][i],
+                    volume: put[6][i],
                 },
             });
         }

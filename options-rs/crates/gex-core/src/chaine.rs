@@ -27,6 +27,13 @@ pub struct Cote {
     pub vega: f64,
     /// Theta publié. Zéro quand absent.
     pub theta: f64,
+    /// Volume traité **aujourd'hui**, en contrats.
+    ///
+    /// À ne pas confondre avec l'open interest, qui compte les positions
+    /// accumulées depuis des semaines. Le volume dit où quelqu'un vient de
+    /// prendre position ; il est bien plus réactif, et les deux divergent
+    /// souvent. C'est cette divergence qui porte l'information.
+    pub volume: f64,
 }
 
 impl Cote {
@@ -44,6 +51,7 @@ impl Cote {
             &mut self.open_interest,
             &mut self.vega,
             &mut self.theta,
+            &mut self.volume,
         ] {
             if !champ.is_finite() {
                 *champ = 0.0;

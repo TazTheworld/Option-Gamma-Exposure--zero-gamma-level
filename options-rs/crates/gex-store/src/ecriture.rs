@@ -94,6 +94,11 @@ fn en_lot(chaine: &Chaine) -> Result<RecordBatch, ErreurReleve> {
                 "CallOpenInt" => l.call.open_interest,
                 "CallVega" => l.call.vega,
                 "CallTheta" => l.call.theta,
+                // `CallVol` et `PutVol` existent dans le format depuis le CBOE et
+                // s'écrivaient à zéro faute d'être collectées. Elles portent le
+                // volume du jour : aucune colonne à ajouter, juste à remplir.
+                "CallVol" => l.call.volume,
+                "PutVol" => l.put.volume,
                 "PutIV" => l.put.iv,
                 "PutGamma" => l.put.gamma,
                 "PutDelta" => l.put.delta,
@@ -238,6 +243,7 @@ mod tests {
                     open_interest: 300.0,
                     vega: 7.125,
                     theta: -58.47,
+                    volume: 120.0,
                 },
                 put: Cote {
                     iv: 0.24,
@@ -246,6 +252,7 @@ mod tests {
                     open_interest: 900.0,
                     vega: 7.0,
                     theta: -55.0,
+                    volume: 240.0,
                 },
             })
             .collect();

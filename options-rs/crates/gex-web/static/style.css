@@ -360,3 +360,15 @@ footer {
 .legende { display: flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 .pastille { width: 9px; height: 2px; display: inline-block; }
 .pastille.pave { height: 8px; }
+
+/* Le régime nommé, à côté du chiffre dont il découle. « Long gamma » et « short
+   gamma » sont le vocabulaire courant ; « la couverture amortit » est une
+   périphrase qui oblige à connaître la convention de signe pour la traduire. */
+.regime {
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: help;
+}
+.regime.positif { color: var(--hausse); }
+.regime.negatif { color: var(--baisse); }

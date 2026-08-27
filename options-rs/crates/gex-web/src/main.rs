@@ -79,6 +79,10 @@ struct Niveau {
     /// le lecteur en ligne de commande les montre côte à côte pour cette raison.
     call_wall_oi: Option<f64>,
     put_wall_oi: Option<f64>,
+    /// Les murs vus par le VOLUME du jour : ou quelqu'un vient de prendre
+    /// position, par opposition aux positions accumulees depuis des semaines.
+    call_wall_vol: Option<f64>,
+    put_wall_vol: Option<f64>,
     /// La volatilité implicite à la monnaie, et la pente du smile.
     ///
     /// Ni l'une ni l'autre n'est un prix : elles vont dans leur propre bande, pas
@@ -148,6 +152,18 @@ struct Maintenant {
     call_wall: Option<f64>,
     put_wall: Option<f64>,
     max_pain: Option<f64>,
+    /// Les deux strikes où le gamma **net** est le plus concentré.
+    ///
+    /// Ce ne sont pas les murs : un mur est calculé d'un seul côté — le gamma
+    /// call au-dessus du spot, le put en dessous — et contraint par la position
+    /// du prix. Ceux-ci prennent le net d'un strike, calls et puts confondus,
+    /// sans regarder de quel côté il tombe. Ils coïncident souvent et pas
+    /// toujours, et c'est quand ils divergent qu'il y a quelque chose à lire.
+    long_gamma: Option<f64>,
+    short_gamma: Option<f64>,
+    /// Les murs par volume du jour.
+    call_wall_vol: Option<f64>,
+    put_wall_vol: Option<f64>,
 }
 
 /// Ce que l'écran demande : un horizon d'échéance, un pas de chandelier.
@@ -192,6 +208,13 @@ fn nom_pas(pas: Pas) -> String {
 struct PointProfil {
     niveau: f64,
     gex: f64,
+    /// Les dollars que la couverture forcerait à traiter pour aller de ce spot à
+    /// ce niveau. Positif : les teneurs de marché devraient acheter.
+    ///
+    /// Le GEX dit si ça amortit ou amplifie ; celui-ci dit de combien. C'est ce
+    /// que les gens appellent le carburant d'un squeeze — et ce n'est toujours
+    /// pas une prévision : rien ne dit que le prix ira là.
+    carburant: f64,
 }
 
 #[derive(Serialize)]
@@ -277,6 +300,19 @@ fn avertissement(analyse: &Analyse, cote: bool) -> Option<String> {
     if !cote {
         return Some("Aucun open interest dans le relevé : le marché ne cote pas.".to_string());
     }
+    // Le volume des options n'arrive que si la souscription a demandé le tick
+    // générique 100. S'il manque, les murs par volume sont simplement absents du
+    // graphique — rien ne distinguerait « personne n'a traité » de « la source ne
+    // le sert pas ». Un marché ouvert où AUCUN strike n'a traité n'existe pas.
+    if analyse.par_strike.iter().all(|s| s.call_vol + s.put_vol == 0.0) {
+        return Some(format!(
+            "Aucun volume sur les {} strikes du relevé : la source ne sert pas le volume \
+             des options. Les murs par volume restent vides — ce n'est pas une séance sans \
+             échange, c'est une donnée absente.",
+            analyse.par_strike.len(),
+        ));
+    }
+
     let muets = greeks_muets(analyse);
     (!muets.is_empty()).then(|| {
         let pluriel = muets.len() > 1;
@@ -397,6 +433,8 @@ async fn niveaux(
             put_wall: p.put_wall,
             call_wall_oi: p.call_wall_oi,
             put_wall_oi: p.put_wall_oi,
+            call_wall_vol: p.call_wall_vol,
+            put_wall_vol: p.put_wall_vol,
             iv_atm: p.iv_atm,
             skew: p.skew,
             max_pain: p.max_pain,
@@ -528,9 +566,11 @@ async fn profil(
             .niveaux
             .iter()
             .zip(analyse.profil.iter())
-            .map(|(niveau, gex)| PointProfil {
+            .zip(analyse.carburant.iter())
+            .map(|((niveau, gex), carburant)| PointProfil {
                 niveau: *niveau,
                 gex: *gex,
+                carburant: *carburant,
             })
             .collect(),
         attendu: analyse.attendu,
@@ -542,6 +582,10 @@ async fn profil(
             call_wall: analyse.murs.call,
             put_wall: analyse.murs.put,
             max_pain: analyse.max_pain,
+            long_gamma: analyse.gamma_majeur.long,
+            short_gamma: analyse.gamma_majeur.court,
+            call_wall_vol: analyse.murs.call_vol,
+            put_wall_vol: analyse.murs.put_vol,
         }),
         horizon,
     }))

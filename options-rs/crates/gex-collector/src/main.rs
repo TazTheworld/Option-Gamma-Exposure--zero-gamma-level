@@ -600,6 +600,8 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                             put_wall: a.murs.put,
                             call_wall_oi: a.murs.call_oi,
                             put_wall_oi: a.murs.put_oi,
+                            call_wall_vol: a.murs.call_vol,
+                            put_wall_vol: a.murs.put_vol,
                             iv_atm: a.iv_atm,
                             skew: a.skew,
                             max_pain: a.max_pain,

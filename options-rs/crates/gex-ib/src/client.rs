@@ -40,7 +40,16 @@ pub const CLIENT_ID_DEFAUT: i32 = 17;
 /// documentation d'IB ne dit lequel il retient pour une option SUR future : on
 /// demande les deux, ce qui ne coûte **aucune ligne supplémentaire** — c'est la
 /// même souscription.
-pub const TICKS_GENERIQUES: [&str; 2] = ["101", "588"];
+///
+/// `100` porte le VOLUME des options, ticks 29 et 30. Sans lui, ces ticks
+/// n'arrivent jamais et les murs par volume restent vides **sans un mot** : la
+/// souscription réussit, les autres ticks arrivent, et rien ne signale qu'une
+/// famille entière manque. C'est exactement le genre d'absence silencieuse que ce
+/// dépôt traque.
+///
+/// Les trois voyagent dans la même souscription et ne consomment donc qu'une
+/// seule des cent lignes du quota.
+pub const TICKS_GENERIQUES: [&str; 3] = ["100", "101", "588"];
 
 /// Délai de garde par lot, en secondes.
 ///
@@ -472,6 +481,12 @@ pub struct Valeurs {
     pub theta: Option<f64>,
     /// Open interest du contrat.
     pub open_interest: Option<f64>,
+    /// Volume traité aujourd'hui sur le contrat.
+    ///
+    /// Autre chose que l'open interest : celui-ci compte les positions
+    /// accumulées, celui-là ce qui vient de se traiter. Les deux divergent
+    /// souvent, et c'est la divergence qui informe.
+    pub volume: Option<f64>,
     /// Prix du sous-jacent, servi gratuitement dans chaque tick d'option.
     pub sous_jacent: Option<f64>,
 }
@@ -533,6 +548,22 @@ impl Valeurs {
                 if pour_nous {
                     self.open_interest = Some(s.size);
                 }
+                // Le volume du jour, ticks 29 et 30. Même piège que l'open
+                // interest, et il a déjà coûté cher : IB envoie les DEUX codes
+                // pour chaque contrat, celui qui ne le concerne pas à zéro. Le
+                // retenir sans regarder le côté mettait tous les calls à zéro
+                // sans que rien ne le signale.
+                let volume_pour_nous = match s.tick_type {
+                    TickType::OptionCallVolume => sens == Sens::Call,
+                    TickType::OptionPutVolume => sens == Sens::Put,
+                    // Le volume tout court d'un contrat d'option n'est pas
+                    // ambigu : il n'a qu'un côté.
+                    TickType::Volume => true,
+                    _ => false,
+                };
+                if volume_pour_nous {
+                    self.volume = Some(s.size);
+                }
             }
             _ => {}
         }
@@ -586,7 +617,10 @@ mod tests {
     /// de savoir lequel IB retient pour une option sur future.
     #[test]
     fn les_deux_ticks_generiques_sont_demandes() {
-        assert_eq!(TICKS_GENERIQUES, ["101", "588"]);
+        // 100 : volume des options. 101 : leur open interest. 588 : celui des
+        // futures. Sans le 100, les ticks 29 et 30 n'arrivent jamais et les murs
+        // par volume restent vides sans un mot.
+        assert_eq!(TICKS_GENERIQUES, ["100", "101", "588"]);
     }
 
     /// La séquence réelle d'IB, relevée sur NQ 29200 le 26 août : les deux ticks
@@ -610,6 +644,47 @@ mod tests {
         put.absorber(&taille(TickType::OptionCallOpenInterest, 0.0), Sens::Put);
         put.absorber(&taille(TickType::OptionPutOpenInterest, 92.0), Sens::Put);
         assert_eq!(put.open_interest, Some(92.0));
+    }
+
+    /// Le volume tombe dans le même piège, et il a déjà coûté cher une fois :
+    /// IB envoie les deux codes pour chaque contrat, celui qui ne le concerne
+    /// pas à zéro. Sans le côté, tous les calls seraient à zéro sans un mot.
+    #[test]
+    fn le_zero_de_l_autre_cote_n_ecrase_pas_le_volume() {
+        let taille = |tick_type, size| {
+            TickTypes::Size(ibapi::market_data::realtime::TickSize { tick_type, size })
+        };
+
+        let mut call = Valeurs::default();
+        call.absorber(&taille(TickType::OptionCallVolume, 31.0), Sens::Call);
+        call.absorber(&taille(TickType::OptionPutVolume, 0.0), Sens::Call);
+        assert_eq!(call.volume, Some(31.0));
+
+        let mut put = Valeurs::default();
+        put.absorber(&taille(TickType::OptionCallVolume, 0.0), Sens::Put);
+        put.absorber(&taille(TickType::OptionPutVolume, 74.0), Sens::Put);
+        assert_eq!(put.volume, Some(74.0));
+    }
+
+    /// Le volume et l'open interest ne se contaminent pas : ce sont deux
+    /// grandeurs différentes, servies par deux paires de codes différentes.
+    #[test]
+    fn le_volume_et_l_open_interest_ne_se_melangent_pas() {
+        let taille = |tick_type, size| {
+            TickTypes::Size(ibapi::market_data::realtime::TickSize { tick_type, size })
+        };
+        let mut v = Valeurs::default();
+        v.absorber(&taille(TickType::OptionCallOpenInterest, 53.0), Sens::Call);
+        v.absorber(&taille(TickType::OptionCallVolume, 31.0), Sens::Call);
+        assert_eq!(v.open_interest, Some(53.0));
+        assert_eq!(v.volume, Some(31.0));
+    }
+
+    /// Les codes des deux paires, tels qu'IB les numérote.
+    #[test]
+    fn les_codes_de_volume_sont_ceux_d_ib() {
+        assert_eq!(TickType::OptionCallVolume as i32, 29);
+        assert_eq!(TickType::OptionPutVolume as i32, 30);
     }
 
     /// Un open interest réellement nul doit rester nul : filtrer les zéros aurait

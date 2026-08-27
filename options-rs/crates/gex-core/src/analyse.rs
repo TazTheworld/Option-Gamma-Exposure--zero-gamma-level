@@ -132,6 +132,10 @@ pub struct AgregatStrike {
     pub call_oi: f64,
     /// Open interest des puts.
     pub put_oi: f64,
+    /// Volume traité aujourd'hui, côté call.
+    pub call_vol: f64,
+    /// Volume traité aujourd'hui, côté put.
+    pub put_vol: f64,
 }
 
 /// Les quatre murs.
@@ -145,6 +149,72 @@ pub struct Murs {
     pub call_oi: Option<f64>,
     /// Plus gros open interest put sous le spot.
     pub put_oi: Option<f64>,
+    /// Plus gros VOLUME call au-dessus du spot, et put sous le spot.
+    ///
+    /// Une troisième paire, et pas un doublon des deux autres. L'open interest
+    /// compte les positions accumulées depuis des semaines ; le volume dit où
+    /// quelqu'un vient de prendre position **aujourd'hui**. Un mur par volume
+    /// apparaît et disparaît dans la journée là où un mur par open interest met
+    /// des jours à bouger — et c'est quand les deux désignent le même strike que
+    /// le niveau est le plus crédible.
+    /// Plus gros volume call au-dessus du spot.
+    pub call_vol: Option<f64>,
+    /// Plus gros volume put sous le spot.
+    pub put_vol: Option<f64>,
+}
+
+/// Les deux strikes où le gamma **net** est le plus concentré.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct GammaMajeur {
+    /// Le strike au GEX net le plus positif : la plus forte concentration de
+    /// gamma long, donc l'endroit où la couverture freine le plus.
+    pub long: Option<f64>,
+    /// Le strike au GEX net le plus négatif : là où elle amplifierait le plus.
+    pub court: Option<f64>,
+}
+
+/// Les deux strikes où le gamma net est le plus concentré, dans un sens et dans
+/// l'autre.
+///
+/// **À ne pas confondre avec les murs**, qui répondent à une autre question. Un
+/// mur est calculé d'un seul CÔTÉ — le gamma call au-dessus du spot, le gamma put
+/// en dessous — et contraint par la position du prix. Ceux-ci prennent le GEX
+/// **net** de chaque strike, calls et puts confondus, sans regarder de quel côté
+/// du spot il tombe. Un strike peut donc être un mur call sans être le gamma long
+/// majeur, si ses puts annulent ses calls.
+///
+/// Même demi-plage que les murs : au-delà, les strikes ronds à très gros open
+/// interest des échéances lointaines l'emporteraient sans produire de flux à
+/// court terme.
+pub fn gamma_majeur(par_strike: &[AgregatStrike], spot: f64, params: &Parametres) -> GammaMajeur {
+    let dans_la_plage = |a: &&AgregatStrike| {
+        spot > 0.0 && ((a.strike - spot) / spot).abs() <= params.plage_murs
+    };
+    let extreme = |plus_grand: bool| {
+        par_strike
+            .iter()
+            .filter(dans_la_plage)
+            .filter(|a| a.gex != 0.0 && a.gex.is_finite())
+            .max_by(|a, b| {
+                if plus_grand {
+                    a.gex.total_cmp(&b.gex)
+                } else {
+                    b.gex.total_cmp(&a.gex)
+                }
+            })
+            .map(|a| a.strike)
+    };
+    GammaMajeur {
+        // Un extremum du mauvais signe ne serait pas ce qu'on cherche : sans
+        // aucun strike à gamma net positif, il n'y a pas de gamma long majeur, et
+        // rendre « le moins négatif » le ferait passer pour un aimant.
+        long: extreme(true).filter(|s| {
+            par_strike.iter().any(|a| a.strike == *s && a.gex > 0.0)
+        }),
+        court: extreme(false).filter(|s| {
+            par_strike.iter().any(|a| a.strike == *s && a.gex < 0.0)
+        }),
+    }
 }
 
 /// Les deux estimateurs du GEX, et leur écart.
@@ -184,6 +254,11 @@ pub struct Analyse {
     pub niveaux: Vec<f64>,
     /// Le profil de gamma, toutes échéances.
     pub profil: Vec<f64>,
+    /// Le flux de couverture qu'un mouvement du spot vers chaque niveau impose,
+    /// en dollars. Positif : les teneurs de marché doivent acheter pour y aller.
+    ///
+    /// Parallèle à [`Analyse::niveaux`], et nul au spot par construction.
+    pub carburant: Vec<f64>,
     /// GEX total.
     pub gex: f64,
     /// Charm total.
@@ -208,6 +283,11 @@ pub struct Analyse {
     pub croisements: Vec<f64>,
     /// Les murs.
     pub murs: Murs,
+    /// Les deux strikes où le gamma net est le plus concentré.
+    ///
+    /// Distincts des murs : ceux-ci prennent le GEX **net** d'un strike, calls et
+    /// puts confondus, sans contrainte de côté par rapport au spot.
+    pub gamma_majeur: GammaMajeur,
     /// L'écart entre les deux estimateurs de gamma.
     pub ecart_gamma: Option<EcartGamma>,
     /// Le poids des 0-1 DTE.
@@ -389,6 +469,8 @@ pub fn par_strike(lignes: &[LigneExposee]) -> Vec<AgregatStrike> {
                 dernier.gex += l.gex;
                 dernier.call_oi += l.ligne.call.open_interest;
                 dernier.put_oi += l.ligne.put.open_interest;
+                dernier.call_vol += l.ligne.call.volume;
+                dernier.put_vol += l.ligne.put.volume;
             }
             _ => agreges.push(AgregatStrike {
                 strike,
@@ -397,6 +479,8 @@ pub fn par_strike(lignes: &[LigneExposee]) -> Vec<AgregatStrike> {
                 gex: l.gex,
                 call_oi: l.ligne.call.open_interest,
                 put_oi: l.ligne.put.open_interest,
+                call_vol: l.ligne.call.volume,
+                put_vol: l.ligne.put.volume,
             }),
         }
     }
@@ -474,6 +558,22 @@ pub fn murs(par_strike: &[AgregatStrike], spot: f64, params: &Parametres) -> Mur
                 .iter()
                 .filter(|a| dans(params.plage_murs_oi, a) && a.strike <= spot)
                 .map(|a| (a.strike, a.put_oi)),
+            true,
+        ),
+        // Même demi-plage que l'open interest : ces concentrations-là sont, elles
+        // aussi, plus lointaines que les murs gamma.
+        call_vol: extremum(
+            par_strike
+                .iter()
+                .filter(|a| dans(params.plage_murs_oi, a) && a.strike >= spot)
+                .map(|a| (a.strike, a.call_vol)),
+            true,
+        ),
+        put_vol: extremum(
+            par_strike
+                .iter()
+                .filter(|a| dans(params.plage_murs_oi, a) && a.strike <= spot)
+                .map(|a| (a.strike, a.put_vol)),
             true,
         ),
     }
@@ -726,6 +826,66 @@ pub fn zero_gamma(croisements: &[f64], spot: f64) -> Option<f64> {
         })
 }
 
+/// Le flux de couverture qu'un mouvement du spot vers chaque niveau **impose**.
+///
+/// Le profil de gamma dit, à chaque niveau, si la couverture amortit ou amplifie.
+/// Il ne dit pas **de combien**. Ceci le dit : combien de dollars les teneurs de
+/// marché devraient acheter ou vendre, en chemin, pour rester neutres si le spot
+/// allait là. C'est ce que les gens appellent le carburant d'un squeeze.
+///
+/// Le GEX vaut des dollars de delta par mouvement de 1 %, donc
+/// `d(delta$)/d(ln S) = 100 × GEX(S)`. Le delta accumulé entre le spot et un
+/// niveau est l'intégrale de cette dérivée, prise ici par trapèzes sur `ln S` — la
+/// grille des niveaux est linéaire en prix, pas en log, et intégrer sur le prix
+/// donnerait un résultat faux d'un facteur `S`.
+///
+/// **Le signe est celui du flux, pas celui du delta.** Les teneurs de marché
+/// traitent à l'inverse de leur delta pour rester neutres : d'où le moins. Un
+/// résultat positif veut donc dire qu'ils doivent ACHETER pour aller là — et
+/// acheter dans un marché qui monte est exactement ce qui entretient un
+/// mouvement. Négatif, ils doivent vendre.
+///
+/// Ce n'est pas une prévision : rien ici ne dit que le prix ira à ce niveau. Ça
+/// dit ce qu'il en coûterait au book s'il y allait.
+pub fn carburant(niveaux: &[f64], profil: &[f64], spot: f64) -> Vec<f64> {
+    if niveaux.len() != profil.len() || niveaux.len() < 2 || spot <= 0.0 {
+        return vec![0.0; niveaux.len()];
+    }
+    // Le delta cumulé depuis le premier niveau, par trapèzes sur ln(S).
+    let mut cumul = vec![0.0; niveaux.len()];
+    for i in 1..niveaux.len() {
+        let (a, b) = (niveaux[i - 1], niveaux[i]);
+        if a <= 0.0 || b <= 0.0 {
+            cumul[i] = cumul[i - 1];
+            continue;
+        }
+        cumul[i] = cumul[i - 1] + 100.0 * 0.5 * (profil[i - 1] + profil[i]) * (b / a).ln();
+    }
+    // L'origine est le SPOT : c'est de là qu'un mouvement part, et le carburant
+    // y vaut donc zéro. Sans ce recalage, le chiffre dépendrait du bord de la
+    // fenêtre d'analyse, qui n'est le lieu de rien.
+    let origine = interpoler(niveaux, &cumul, spot);
+    cumul.iter().map(|c| -(c - origine)).collect()
+}
+
+/// Valeur d'une série tabulée à une abscisse quelconque, par interpolation
+/// linéaire. Hors bornes, la valeur du bord — extrapoler inventerait du profil.
+fn interpoler(x: &[f64], y: &[f64], cible: f64) -> f64 {
+    if cible <= x[0] {
+        return y[0];
+    }
+    if cible >= x[x.len() - 1] {
+        return y[y.len() - 1];
+    }
+    for i in 1..x.len() {
+        if x[i] >= cible {
+            let part = (cible - x[i - 1]) / (x[i] - x[i - 1]);
+            return y[i - 1] + part * (y[i] - y[i - 1]);
+        }
+    }
+    y[y.len() - 1]
+}
+
 /// Part du GEX et du charm portée par les échéances à 0-1 jour.
 ///
 /// Le gamma publié et celui recalculé s'accordent au-delà de quelques jours mais
@@ -804,6 +964,7 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
         theta: lignes.iter().map(|l| l.theta).sum(),
         zero_gamma: zero_gamma(&croisements, spot),
         murs: murs(&agreges, spot, params),
+        gamma_majeur: gamma_majeur(&agreges, spot, params),
         ecart_gamma: ecart_gamma(&lignes),
         part_courtes: part_courtes(&lignes, 1),
         // Sur l'échéance la plus proche : c'est elle qui porte l'essentiel du
@@ -818,6 +979,7 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
         max_pain: proche.and_then(|e| max_pain(&lignes, e, spot)),
         par_strike: agreges,
         lignes,
+        carburant: carburant(&niveaux, &profil, spot),
         niveaux,
         profil,
         croisements,
@@ -902,6 +1064,7 @@ mod tests {
                         open_interest: oi_c,
                         vega: 12.0,
                         theta: 0.0,
+                        volume: 0.0,
                     },
                     put: Cote {
                         iv: iv + 0.005,
@@ -910,6 +1073,7 @@ mod tests {
                         open_interest: oi_p,
                         vega: 11.0,
                         theta: 0.0,
+                        volume: 0.0,
                     },
                 });
                 k += 100.0;
@@ -1115,6 +1279,120 @@ mod tests {
     /// Un strike et ses deux open interest : `(strike, call, put)`.
     type StrikeOi = (f64, f64, f64);
 
+    /// Le gamma majeur prend le GEX NET d'un strike, sans regarder de quel côté
+    /// du spot il tombe. C'est ce qui le distingue des murs.
+    #[test]
+    fn le_gamma_majeur_prend_le_net_et_ignore_le_cote() {
+        let a = analyser(&chaine_essai(), &params()).unwrap();
+        let g = a.gamma_majeur;
+        let long = g.long.expect("un gamma long majeur");
+        let court = g.court.expect("un gamma court majeur");
+
+        // Ce sont bien les extrêmes du GEX net parmi les strikes de la plage.
+        let dans = |s: f64| ((s - SPOT) / SPOT).abs() <= params().plage_murs;
+        let pic = a
+            .par_strike
+            .iter()
+            .filter(|x| dans(x.strike))
+            .map(|x| x.gex)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let creux = a
+            .par_strike
+            .iter()
+            .filter(|x| dans(x.strike))
+            .map(|x| x.gex)
+            .fold(f64::INFINITY, f64::min);
+        let gex_de = |s: f64| a.par_strike.iter().find(|x| x.strike == s).unwrap().gex;
+        assert_eq!(gex_de(long), pic);
+        assert_eq!(gex_de(court), creux);
+        assert!(gex_de(long) > 0.0 && gex_de(court) < 0.0);
+    }
+
+    /// Sans aucun strike à gamma net positif, il n'y a pas de gamma long majeur.
+    /// Rendre « le moins négatif » le ferait passer pour un aimant.
+    #[test]
+    fn sans_gamma_net_positif_pas_de_gamma_long_majeur() {
+        let strikes: Vec<AgregatStrike> = [29_000.0, 29_100.0, 29_200.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, strike)| AgregatStrike {
+                strike,
+                gex: -1e6 * (i as f64 + 1.0),
+                ..Default::default()
+            })
+            .collect();
+        let g = gamma_majeur(&strikes, 29_100.0, &params());
+        assert_eq!(g.long, None, "aucun gamma net positif");
+        assert_eq!(g.court, Some(29_200.0), "le plus négatif");
+    }
+
+    /// Le carburant vaut zéro au spot : c'est de là qu'un mouvement part, et il
+    /// n'a encore rien coûté.
+    #[test]
+    fn le_carburant_est_nul_au_point_de_depart() {
+        let niveaux: Vec<f64> = (0..11).map(|i| 29_000.0 + 100.0 * i as f64).collect();
+        let profil = [-100e6; 11];
+        let c = carburant(&niveaux, &profil, 29_500.0);
+        assert!(c[5].abs() < 1e-6, "carburant au spot : {}", c[5]);
+    }
+
+    /// L'unité se vérifie contre la définition du GEX : « dollars de delta par
+    /// mouvement de 1 % ». À GEX constant de -100 M$, monter de 1 % doit forcer
+    /// environ 100 M$ d'achats — pas 1 M$, pas 10 Md$.
+    ///
+    /// C'est le test qui attrape une erreur de facteur, la seule qui ne se voit
+    /// pas à l'écran : la carte aurait la bonne forme et les mauvais chiffres.
+    #[test]
+    fn un_pour_cent_a_cent_millions_force_cent_millions() {
+        // Une grille fine autour du spot, pour que le trapèze soit exact.
+        let spot = 29_000.0;
+        let niveaux: Vec<f64> = (0..=200).map(|i| spot * (1.0 + 0.0001 * i as f64)).collect();
+        let profil = vec![-100e6; niveaux.len()];
+        let c = carburant(&niveaux, &profil, spot);
+        // Le niveau à +1 % est le centième pas.
+        let a_un_pour_cent = c[100];
+        assert!(
+            (a_un_pour_cent / 100e6 - 1.0).abs() < 0.01,
+            "à +1 % le carburant vaut {a_un_pour_cent:e}, attendu ~1e8"
+        );
+    }
+
+    /// En gamma NÉGATIF, monter force à acheter et descendre force à vendre :
+    /// des deux côtés la couverture pousse dans le sens du mouvement. C'est la
+    /// définition même du régime amplificateur, et le signe doit le porter.
+    #[test]
+    fn en_gamma_negatif_la_couverture_pousse_dans_le_sens_du_mouvement() {
+        let spot = 29_000.0;
+        let niveaux: Vec<f64> = (0..21).map(|i| spot - 1_000.0 + 100.0 * i as f64).collect();
+        let c = carburant(&niveaux, &[-100e6; 21], spot);
+        assert!(c[20] > 0.0, "monter doit forcer des ACHATS : {}", c[20]);
+        assert!(c[0] < 0.0, "descendre doit forcer des VENTES : {}", c[0]);
+
+        // Et en gamma positif, l'inverse exactement : la couverture s'oppose.
+        let d = carburant(&niveaux, &[100e6; 21], spot);
+        assert!(d[20] < 0.0, "monter doit forcer des ventes : {}", d[20]);
+        assert!(d[0] > 0.0, "descendre doit forcer des achats : {}", d[0]);
+    }
+
+    /// Un profil nul ne coûte rien nulle part.
+    #[test]
+    fn sans_gamma_aucun_carburant() {
+        let niveaux: Vec<f64> = (0..11).map(|i| 29_000.0 + 100.0 * i as f64).collect();
+        let c = carburant(&niveaux, &[0.0; 11], 29_500.0);
+        assert!(c.iter().all(|x| x.abs() < 1e-9));
+    }
+
+    /// Le carburant grandit avec la distance : il s'accumule en chemin.
+    #[test]
+    fn le_carburant_s_accumule_avec_la_distance() {
+        let spot = 29_000.0;
+        let niveaux: Vec<f64> = (0..21).map(|i| spot + 100.0 * i as f64).collect();
+        let c = carburant(&niveaux, &[-100e6; 21], spot);
+        for i in 1..21 {
+            assert!(c[i] > c[i - 1], "le carburant recule au rang {i}");
+        }
+    }
+
     /// Une chaîne réduite à ce qui compte pour le max pain : des strikes, des
     /// open interest, et rien d'autre qui puisse influencer le résultat.
     fn chaine_oi(par_echeance: &[(&str, Vec<StrikeOi>)], spot: f64) -> Chaine {
@@ -1126,6 +1404,7 @@ mod tests {
             open_interest: oi,
             vega: 10.0,
             theta: 0.0,
+            volume: 0.0,
         };
         let lignes: Vec<Ligne> = par_echeance
             .iter()
@@ -1305,6 +1584,7 @@ mod tests {
                 open_interest: oi_c,
                 vega: vega_c,
                 theta: theta_c,
+                volume: 0.0,
             },
             put: Cote {
                 iv: 0.20,
@@ -1313,6 +1593,7 @@ mod tests {
                 open_interest: oi_p,
                 vega: vega_p,
                 theta: theta_p,
+                volume: 0.0,
             },
         };
         Chaine::nouvelle(vec![ligne], SPOT, releve).unwrap()

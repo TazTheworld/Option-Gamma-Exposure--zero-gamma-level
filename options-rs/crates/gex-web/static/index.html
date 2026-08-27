@@ -26,11 +26,21 @@
     <span class="note" id="horizon-note"></span>
   </div>
   <div class="mesure"><span class="etiquette">spot</span><span class="valeur" id="spot">—</span></div>
-  <div class="mesure"><span class="etiquette">GEX</span><span class="valeur" id="gex">—</span></div>
+  <!-- Le regime porte son NOM, a cote du chiffre dont il decoule. L'ecran disait
+       « la couverture amortit » et « le fond est rouge » sans jamais ecrire les
+       deux mots que tout le monde emploie — il fallait connaitre la convention
+       de signe pour traduire. -->
+  <div class="mesure"><span class="etiquette">GEX</span><span class="valeur" id="gex">—</span><span class="regime" id="regime-mot"></span></div>
   <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
   <div class="mesure"><span class="etiquette">call wall</span><span class="valeur" id="cw">—</span></div>
   <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
   <div class="mesure"><span class="etiquette">max pain</span><span class="valeur" id="mp">—</span></div>
+  <!-- Les deux strikes ou le gamma NET est le plus concentre. Ce ne sont pas les
+       murs : un mur se calcule d'un seul cote et sous contrainte de position par
+       rapport au spot. Ils coincident souvent, et c'est quand ils divergent
+       qu'il y a quelque chose a lire. -->
+  <div class="mesure"><span class="etiquette">long gamma</span><span class="valeur" id="lg">—</span></div>
+  <div class="mesure"><span class="etiquette">short gamma</span><span class="valeur" id="sg">—</span></div>
   <div class="mesure"><span class="etiquette">mouvement pricé</span><span class="valeur" id="sigma">—</span></div>
   <!-- Deux horloges, parce qu'il y a deux sources et qu'elles ne s'arretent pas
        ensemble. Les chandeliers naissent d'une TRANSACTION ; les niveaux
@@ -90,6 +100,7 @@
 <footer>
   <span class="legende"><i class="pastille pave" style="background:rgba(14,17,23,.75);outline:1px dashed #3d4658"></i> zone voilée : les niveaux s'écrivent, le sous-jacent ne traite pas</span>
   <span class="legende" title="Le collecteur écrit un point par horizon : les tracés suivent le bouton. Ces traits pleins ne servent que dans l'intervalle où la série n'a pas encore de point à l'horizon demandé.">traits pleins étiquetés « 1j », « 0DTE »… : l'horizon choisi n'a pas encore de tracé</span>
+  <span class="legende" title="Les dollars que la couverture forcerait à traiter pour aller du spot à ce niveau. Nul au spot, il s'accumule en chemin. Ce n'est pas une prévision : rien ne dit que le prix ira là — c'est ce qu'il en coûterait s'il y allait."><i class="pastille pave" style="background:rgba(111,196,224,.55)"></i><i class="pastille pave" style="background:rgba(224,150,111,.55)"></i> carburant : aller là forcerait des achats / des ventes — survole pour le chiffre</span>
   <span>chaque mesure a sa propre échelle : elles ne se comparent pas entre elles</span>
   <span>survole n'importe où — prix ou bande : le trait traverse tout, la bulle donne l'instant entier</span>
   <span>données différées d'environ 15 minutes — ce n'est pas du temps réel</span>
@@ -189,6 +200,12 @@ function tracerBande(spot, attendu) {
 
 const ligneCwOi = gPrix.addLineSeries({ color: "#1d7268", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 const lignePwOi = gPrix.addLineSeries({ color: "#a13c39", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+// Les murs par VOLUME du jour : la ou quelqu'un vient de prendre position,
+// par opposition aux positions accumulees depuis des semaines. Troisieme paire,
+// et pas un doublon — un mur par volume nait et meurt dans la journee la ou un
+// mur par open interest met des jours a bouger.
+const ligneCwVol = gPrix.addLineSeries({ color: "#8f7fd0", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+const lignePwVol = gPrix.addLineSeries({ color: "#d07f9f", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
 // Le max pain : le strike ou l'ensemble des options de l'echeance la plus proche
 // vaut le moins au reglement. Il repond encore a une autre question que les murs
@@ -251,6 +268,30 @@ function tracerMaintenant(m, memeHorizon, horizon) {
   poser(m.call_wall, "murs", "#26a69a", "call wall");
   poser(m.put_wall, "murs", "#ef5350", "put wall");
   poser(m.max_pain, "maxpain", "#c2b280", "max pain");
+  poser(m.call_wall_vol, "mursvol", "#8f7fd0", "call wall vol");
+  poser(m.put_wall_vol, "mursvol", "#d07f9f", "put wall vol");
+}
+
+// Les deux strikes ou le gamma NET est le plus concentre.
+//
+// Ils ne viennent pas de la serie mais du releve courant : le collecteur ne les
+// enregistre pas, donc ils n'ont pas de trace. En lignes de prix, comme la bande
+// implicite et pour la meme raison — ils ne valent que pour maintenant.
+let traitsGammaMajeur = [];
+
+function tracerGammaMajeur(m) {
+  for (const l of traitsGammaMajeur) chandeliers.removePriceLine(l);
+  traitsGammaMajeur = [];
+  if (!m || !visible("gammamajeur")) return;
+  const poser = (valeur, couleur, titre) => {
+    if (valeur == null) return;
+    traitsGammaMajeur.push(chandeliers.createPriceLine({
+      price: valeur, color: couleur, lineWidth: 2, lineStyle: 1,
+      axisLabelVisible: true, title: titre,
+    }));
+  };
+  poser(m.long_gamma, "#3ddc97", "long gamma");
+  poser(m.short_gamma, "#ff6b6b", "short gamma");
 }
 
 function tracerCroisements(croisements, retenu) {
@@ -340,10 +381,18 @@ const MESURES = GROUPES.flatMap((g) => g.mesures);
 // gain est le plus fort — sans cela, eteindre ne laisserait qu'un trou.
 const COUCHES = [
   { cle: "regime", nom: "fond de régime", couleurs: ["rgba(38,166,154,.5)", "rgba(239,83,80,.5)"], pave: true },
+  // Peint SUR la meme toile que le fond, et donc a sa place quand il est allume.
+  // Les deux repondent a la meme question par niveau de prix — l'un par le signe
+  // du gamma, l'autre par les dollars qu'un mouvement forcerait — et les
+  // superposer donnerait une bouillie dont on ne saurait plus lire ni l'un ni
+  // l'autre.
+  { cle: "carburant", nom: "carburant — au lieu du fond", couleurs: ["rgba(111,196,224,.55)", "rgba(224,150,111,.55)"], pave: true, defautMasque: true },
   { cle: "zg", nom: "zero gamma & bascules", couleurs: ["#e0a458"] },
   { cle: "murs", nom: "murs gamma", couleurs: ["#26a69a", "#ef5350"] },
   { cle: "mursoi", nom: "murs par open interest", couleurs: ["#1d7268", "#a13c39"] },
+  { cle: "mursvol", nom: "murs par volume du jour", couleurs: ["#8f7fd0", "#d07f9f"] },
   { cle: "maxpain", nom: "max pain", couleurs: ["#c2b280"] },
+  { cle: "gammamajeur", nom: "long / short gamma", couleurs: ["#3ddc97", "#ff6b6b"] },
   { cle: "sigma", nom: "bande ±1σ implicite", couleurs: ["#3f4d63"] },
   ...MESURES.map((m) => ({ cle: m.champ, nom: m.nom, couleurs: [m.couleur], bande: true })),
 ];
@@ -412,12 +461,34 @@ try {
   // s'ouvrir : tout est visible, ce qui est le pire cas acceptable.
 }
 
+// Une couche NOUVELLE qui remplacerait un affichage existant ne s'allume pas
+// toute seule. Le carburant prend la place du fond de regime : l'ajouter allume
+// aurait change l'ecran de quelqu'un sans qu'il l'ait demande, et il aurait
+// cherche ou son fond etait passe.
+//
+// On retient donc les couches deja VUES. Celles qui apparaissent ensuite et qui
+// portent `defautMasque` arrivent eteintes ; le panneau les liste barrees, donc
+// elles ne sont pas cachees pour autant.
+const CLE_CONNUES = "gex-couches-connues";
+try {
+  const connues = new Set(JSON.parse(localStorage.getItem(CLE_CONNUES) || "[]"));
+  for (const c of COUCHES) {
+    if (c.defautMasque && !connues.has(c.cle)) masquees.add(c.cle);
+  }
+  localStorage.setItem(CLE_CONNUES, JSON.stringify(COUCHES.map((c) => c.cle)));
+} catch (e) {
+  // Sans stockage, aucune couche n'est « deja vue » : les opt-in restent
+  // eteintes a chaque ouverture, ce qui est le bon defaut.
+  for (const c of COUCHES) if (c.defautMasque) masquees.add(c.cle);
+}
+
 const visible = (cle) => !masquees.has(cle);
 
 function appliquerCouches() {
   ligneZg.applyOptions({ visible: visible("zg") });
   for (const s of [ligneCw, lignePw]) s.applyOptions({ visible: visible("murs") });
   for (const s of [ligneCwOi, lignePwOi]) s.applyOptions({ visible: visible("mursoi") });
+  for (const s of [ligneCwVol, lignePwVol]) s.applyOptions({ visible: visible("mursvol") });
   ligneMaxPain.applyOptions({ visible: visible("maxpain") });
   try {
     localStorage.setItem(CLE_COUCHES, JSON.stringify([...masquees]));
@@ -871,7 +942,9 @@ function noterHorizon(serie) {
 const bulle = document.getElementById("bulle");
 const parInstant = new Map();   // instant -> barre
 
-function survoler(instant, page) {
+// `niveau` et non `prix` : `prix` est deja la fonction qui met en forme un
+// nombre, et l'ombrer ici casserait toutes les lignes de la bulle.
+function survoler(instant, page, niveau) {
   if (instant == null) { quitterSurvol(); return; }
   instantSurvole = instant;
   derniereEmpreinte = "";   // forcer le redessin du guide
@@ -896,6 +969,30 @@ function survoler(instant, page) {
     // Pas de barre a cette minute : le sous-jacent n'a pas traite. C'est
     // l'explication du decalage, elle se dit la ou on la cherche.
     html += '<div class="rien">aucune transaction à cette minute</div>';
+  }
+  // Le carburant se lit par NIVEAU DE PRIX, pas par instant : il n'a donc de
+  // sens que si la souris designe une hauteur, c'est-a-dire sur le graphique du
+  // prix. Il rend la teinte du fond chiffree — sans lui, on voit qu'une zone est
+  // chargee sans jamais savoir de combien.
+  // Le profil se lit par NIVEAU DE PRIX, pas par instant : il n'a donc de sens
+  // que si la souris designe une hauteur, c'est-a-dire sur le graphique du prix.
+  // Et le regime EN CE POINT n'est pas celui d'aujourd'hui : c'est celui qui
+  // s'appliquerait si le prix y allait, ce qui est toute la question.
+  const ici = profilA(niveau);
+  if (ici) {
+    html += '<div class="sep"></div>'
+          + ligne(
+              "à " + prix(niveau),
+              nomRegime(ici.gex),
+              ici.gex >= 0 ? "#26a69a" : "#ef5350",
+            );
+    if (visible("carburant")) {
+      html += ligne(
+        "carburant",
+        (ici.carburant >= 0 ? "achats " : "ventes ") + dollars(Math.abs(ici.carburant)),
+        ici.carburant >= 0 ? "#6fc4e0" : "#e0966f",
+      );
+    }
   }
   if (n) {
     html += '<div class="sep"></div>'
@@ -948,7 +1045,13 @@ gPrix.subscribeCrosshairMove((p) => {
   if (enSurvol) return;
   if (!p || !p.time || !p.point) { quitterSurvol(); return; }
   const boite = document.getElementById("prix").getBoundingClientRect();
-  survoler(depuisEcran(p.time), { x: boite.left + p.point.x, y: boite.top + p.point.y });
+  // La HAUTEUR du curseur donne un niveau de prix, et le carburant se lit par
+  // niveau. C'est ce qui rend la teinte du fond chiffree.
+  survoler(
+    depuisEcran(p.time),
+    { x: boite.left + p.point.x, y: boite.top + p.point.y },
+    chandeliers.coordinateToPrice(p.point.y),
+  );
 });
 
 // La bande n'est pas un graphique de la bibliotheque : elle traduit elle-meme
@@ -1090,9 +1193,79 @@ function peindreRegime() {
   // Le voile de la zone sans cotation se peint dans tous les cas : il ne dit pas
   // le régime, il dit que le sous-jacent ne traite pas. L'éteindre avec le fond
   // ferait disparaître un fait pour cause de préférence d'affichage.
-  if (regimeCourant.length && visible("regime")) peindreBandesRegime(ctx, l, h);
+  // Le carburant prend la place du fond quand il est allume : les deux peignent
+  // la meme toile par niveau de prix, et les superposer les rendrait illisibles
+  // tous les deux.
+  if (regimeCourant.length && visible("carburant")) peindreCarburant(ctx, l, h);
+  else if (regimeCourant.length && visible("regime")) peindreBandesRegime(ctx, l, h);
   peindreVoile(ctx, l, h);
 }
+
+// Le carburant : les dollars que la couverture forcerait a traiter pour aller du
+// spot a chaque niveau.
+//
+// Le fond de regime dit « ici ca amplifie » ; celui-ci dit « aller la forcerait
+// trois milliards d'achats ». Nul au spot par construction, il s'accumule en
+// s'eloignant — la teinte s'efface donc autour du prix et se renforce au loin,
+// ce qui est exactement la forme de l'information.
+//
+// Bleu : les teneurs de marche devraient ACHETER pour y aller, donc la couverture
+// pousserait le prix dans ce sens. Orange : ils devraient vendre. Ce ne sont pas
+// les couleurs du regime, a dessein : la meme teinte pour deux sens differents
+// ferait lire l'un pour l'autre.
+function peindreCarburant(ctx, l, h) {
+  const points = regimeCourant
+    .map((p) => ({ v: p.carburant, y: chandeliers.priceToCoordinate(p.niveau) }))
+    .filter((p) => p.y != null && p.y >= -2 && p.y <= h + 2)
+    .sort((a, b) => a.y - b.y);
+  if (points.length < 2) return;
+  // La teinte se normalise sur ce qui est VISIBLE. Le profil couvre ±4 % du
+  // spot quand la fenetre n'en montre souvent qu'un : normaliser sur le pic
+  // global laissait la zone regardee a quelques pour cent de l'echelle, donc
+  // quasiment transparente. Zoomer revele alors vraiment quelque chose.
+  const pic = Math.max.apply(null, points.map((p) => Math.abs(p.v))) || 1;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    // Pas de teinte de fond ici, contrairement au regime : zero veut dire « rien
+    // n'est force », et doit donc se voir comme rien.
+    const force = Math.min(1, Math.abs(a.v) / pic) * 0.32;
+    ctx.fillStyle = a.v >= 0
+      ? "rgba(111, 196, 224, " + force + ")"
+      : "rgba(224, 150, 111, " + force + ")";
+    ctx.fillRect(0, a.y, l, Math.max(1, points[i + 1].y - a.y));
+  }
+}
+
+/// Le carburant au niveau de prix pointe, interpole entre deux points de grille.
+function profilA(prix) {
+  if (prix == null || regimeCourant.length < 2) return null;
+  const tries = regimeCourant.slice().sort((a, b) => a.niveau - b.niveau);
+  if (prix < tries[0].niveau || prix > tries[tries.length - 1].niveau) return null;
+  for (let i = 1; i < tries.length; i++) {
+    if (tries[i].niveau >= prix) {
+      const a = tries[i - 1];
+      const b = tries[i];
+      const part = (prix - a.niveau) / (b.niveau - a.niveau);
+      return {
+        gex: a.gex + part * (b.gex - a.gex),
+        carburant: a.carburant + part * (b.carburant - a.carburant),
+      };
+    }
+  }
+  return null;
+}
+
+// Le nom du regime, et rien d'autre. « Long gamma » et « short gamma » sont le
+// vocabulaire courant ; « la couverture amortit » est une periphrase qui oblige a
+// connaitre la convention de signe pour la traduire.
+//
+// Le signe vient de la convention du depot : les dealers sont longs les calls et
+// courts les puts. Elle est un POSTULAT et non une mesure — si elle est fausse
+// sur un produit, ces deux mots sont inverses. C'est dit dans le README et dans
+// « ce qui reste a faire ».
+const nomRegime = (gex) =>
+  gex == null ? "" : gex >= 0 ? "long gamma" : "short gamma";
 
 function peindreBandesRegime(ctx, l, h) {
   const pic = Math.max.apply(null, regimeCourant.map((p) => Math.abs(p.gex))) || 1;
@@ -1289,6 +1462,8 @@ async function rafraichir() {
     poser("pw", lignePw, serie("put_wall"));
     poser("cwoi", ligneCwOi, serie("call_wall_oi"));
     poser("pwoi", lignePwOi, serie("put_wall_oi"));
+    poser("cwvol", ligneCwVol, serie("call_wall_vol"));
+    poser("pwvol", lignePwVol, serie("put_wall_vol"));
     poser("maxpain", ligneMaxPain, serie("max_pain"));
 
     // La bande dessine les huit mesures elle-meme : elle a besoin des series
@@ -1312,14 +1487,25 @@ async function rafraichir() {
     // l'en-tete alors que le GEX passe de 234 a 72 M$.
     const m = profil.maintenant;
     ecrire("gex", dollars(m?.gex), m?.gex);
+    // Le régime nommé, à côté du chiffre dont il découle.
+    const mot = document.getElementById("regime-mot");
+    mot.textContent = nomRegime(m?.gex);
+    mot.className = "regime" + (m?.gex == null ? "" : m.gex >= 0 ? " positif" : " negatif");
+    mot.title = m?.gex == null ? ""
+      : m.gex >= 0
+        ? "Les teneurs de marché sont nets longs gamma : ils vendent quand ça monte et achètent quand ça baisse. Leur couverture amortit les mouvements."
+        : "Les teneurs de marché sont nets courts gamma : ils achètent quand ça monte et vendent quand ça baisse. Leur couverture amplifie les mouvements.";
     ecrire("cw", prix(m?.call_wall));
     ecrire("pw", prix(m?.put_wall));
     ecrire("mp", prix(m?.max_pain));
+    ecrire("lg", prix(m?.long_gamma));
+    ecrire("sg", prix(m?.short_gamma));
 
     profilCourant = profil.strikes;
     regimeCourant = profil.regime;
     tracerBande(profil.etat.spot, profil.attendu);
     tracerMaintenant(m, memeHorizon, horizonChoisi);
+    tracerGammaMajeur(m);
 
     // Le compte des AUTRES bascules, a cote du niveau retenu : sans lui, un
     // regime qui croise trois fois se lit comme un regime qui croise une fois.

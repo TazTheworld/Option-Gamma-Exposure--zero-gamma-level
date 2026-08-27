@@ -300,6 +300,46 @@ Trois choses que les tests fixent :
   elles divergeaient, la bande du bas cesserait de s'aligner sur le prix — et l'alignement
   est toute sa raison d'être.
 
+**Le volume des options demande le tick générique `100`.** Sans lui, les ticks 29 et 30
+n'arrivent **jamais** : la souscription réussit, les autres ticks arrivent, et rien ne
+signale qu'une famille entière manque — les murs par volume seraient restés vides en
+silence. Les trois codes (`100` volume, `101` open interest des options, `588` celui des
+futures) voyagent dans la même souscription et ne consomment qu'une des cent lignes.
+
+Et le volume tombe dans **exactement le même piège** que l'open interest, celui qui avait
+mis tous les calls à zéro : IB envoie les deux codes pour chaque contrat, celui qui ne le
+concerne pas à zéro. Le traitement côté-sensible est le même, et deux tests le fixent.
+
+Aucune colonne n'a été ajoutée au format : `CallVol` et `PutVol` existaient depuis le CBOE
+et s'écrivaient à zéro faute d'être collectées. Un relevé archivé avant leur remplissage les
+rend nulles, ce que `colonne_ou_zeros` fait déjà pour une colonne absente.
+
+**Le gamma majeur n'est pas un mur.** Un mur se calcule d'un seul côté — le gamma call
+au-dessus du spot, le put en dessous — et sous contrainte de position par rapport au prix.
+`gamma_majeur` prend le GEX **net** d'un strike, calls et puts confondus, sans regarder de
+quel côté il tombe. Un strike peut donc être un mur call sans être le gamma long majeur, si
+ses puts annulent ses calls. Un extremum du mauvais signe est écarté : sans aucun strike à
+gamma net positif il n'y a pas de gamma long majeur, et rendre « le moins négatif » le
+ferait passer pour un aimant.
+
+**Le carburant s'intègre sur `ln S`, pas sur `S`.** Le GEX vaut des dollars de delta par
+mouvement de 1 %, donc `d(delta$)/d(ln S) = 100 × GEX`. La grille des niveaux est linéaire
+en prix : intégrer dessus rendrait un résultat faux d'un facteur `S`, avec la bonne forme et
+les mauvais chiffres — l'erreur qui ne se voit pas à l'écran. Un test l'attrape en
+confrontant le résultat à la définition même du GEX : à −100 M$ constants, monter de 1 %
+doit forcer environ 100 M$ d'achats, pas 1 M$ ni 10 Md$.
+
+Deux autres choses que les tests fixent : l'origine est le **spot** — sans ce recalage le
+chiffre dépendrait du bord de la fenêtre d'analyse, qui n'est le lieu de rien — et le signe
+est celui du **flux**, pas du delta. Les teneurs de marché traitent à l'inverse de leur
+delta pour rester neutres ; positif veut donc dire qu'ils doivent acheter.
+
+**Une couche nouvelle ne s'allume pas toute seule** quand elle en remplace une autre. Le
+carburant prend la place du fond de régime : l'ajouter allumé aurait changé l'écran de
+quelqu'un sans qu'il l'ait demandé, et il aurait cherché où son fond était passé. Les
+couches déjà vues sont retenues dans le navigateur ; celles qui apparaissent ensuite avec
+`defautMasque` arrivent éteintes — listées barrées, donc pas cachées pour autant.
+
 **Le cadrage se compte en bougies, pas en durée.** Il se calait sur la durée couverte par
 les niveaux, ce qui marchait tant que cette trace couvrait des heures : dès qu'elle repart
 de zéro, vingt minutes de niveaux donnaient vingt bougies étalées sur douze cents pixels,

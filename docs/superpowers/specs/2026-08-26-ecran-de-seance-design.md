@@ -229,6 +229,43 @@ Les boutons viennent de ce que la série **contient**, pas d'une liste écrite d
 la page : les deux divergeraient, et l'écran proposerait des horizons dont aucune
 trace n'existe.
 
+**Une troisième paire de murs, et deux gammas majeurs.** Les murs par gamma
+disent où la couverture est la plus sensible, ceux par open interest où il y a le
+plus de contrats. Manquait ce qui s'est traité **aujourd'hui** : un mur par volume
+naît et meurt dans la journée là où un mur par open interest met des jours à
+bouger. Aucune colonne n'a été ajoutée pour l'obtenir — `CallVol` et `PutVol`
+existaient dans le format depuis le CBOE et s'écrivaient à zéro faute d'être
+collectées.
+
+Le long et le short gamma répondent encore à autre chose : les deux strikes où le
+gamma **net** est le plus concentré, sans contrainte de côté. Un strike peut être
+un mur call sans être le gamma long majeur, si ses puts annulent ses calls.
+
+**Le carburant.** Le fond de régime dit, par niveau de prix, si la couverture
+amortirait ou amplifierait. Il ne dit pas de combien — et « de combien » est
+précisément ce qu'on cherche quand on parle de squeeze. Le carburant l'ajoute :
+les dollars que les teneurs de marché seraient forcés de traiter, en chemin, pour
+rester neutres si le spot allait là.
+
+Il se déduit entièrement du profil déjà calculé, sans donnée nouvelle : le GEX
+étant des dollars de delta par mouvement de 1 %, son intégrale sur `ln S` entre le
+spot et un niveau donne le delta accumulé, et son opposé le flux de couverture.
+
+Peint comme le fond, et **à sa place** : les deux répondent à la même question par
+niveau de prix, et les superposer donnerait une bouillie. Nul au spot par
+construction, il s'efface donc autour du prix et se renforce au loin — ce qui est
+la forme de l'information. La teinte se normalise sur ce qui est visible, sinon la
+fenêtre regardée resterait à quelques pour cent de l'échelle du profil complet.
+
+La teinte montre la carte, la bulle la chiffre : survoler une hauteur du graphique
+donne le nombre exact à ce niveau. Sans cela on verrait qu'une zone est chargée
+sans jamais savoir de combien.
+
+Ce que l'écran n'affirme pas, et ne peut pas : que le prix ira là. Le signe même
+du GEX reste un postulat — la convention « dealers longs les calls, courts les
+puts » n'est pas mesurée. `gex --valider` est le seul endroit du dépôt qui pourra
+trancher.
+
 **Le pas des chandeliers**, dans la même barre d'outils : `1m` à `1J`. Le
 collecteur ne stocke que la minute et tout le reste s'en déduit par regroupement,
 côté serveur, par la même fonction pour les chandeliers et pour les huit mesures.

@@ -98,6 +98,16 @@ pub struct PointNiveaux {
     pub call_wall_oi: Option<f64>,
     /// Mur put en open interest brut.
     pub put_wall_oi: Option<f64>,
+    /// Les murs vus par le VOLUME du jour.
+    ///
+    /// Troisième paire, et pas un doublon : l'open interest compte les positions
+    /// accumulées depuis des semaines, le volume ce qui vient de se traiter. Un
+    /// mur par volume apparaît et disparaît dans la journée là où un mur par open
+    /// interest met des jours à bouger.
+    /// Mur call par le volume du jour.
+    pub call_wall_vol: Option<f64>,
+    /// Mur put par le volume du jour.
+    pub put_wall_vol: Option<f64>,
     /// La volatilité implicite à la monnaie, sur l'échéance la plus proche.
     ///
     /// Elle n'est pas un prix et ne se trace pas sur l'axe du sous-jacent. Elle
@@ -394,6 +404,8 @@ pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), Erreu
             ("vega", peut_etre(|p| p.vega)),
             ("theta", peut_etre(|p| p.theta)),
             ("dte_max", peut_etre(|p| p.dte_max)),
+            ("call_wall_vol", peut_etre(|p| p.call_wall_vol)),
+            ("put_wall_vol", peut_etre(|p| p.put_wall_vol)),
         ],
     )?;
     ecrire_atomique(&lot, cible)
@@ -490,6 +502,8 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             "vega",
             "theta",
             "dte_max",
+            "call_wall_vol",
+            "put_wall_vol",
         ],
     )?;
     Ok(instants
@@ -515,6 +529,8 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             vega: c[13][i],
             theta: c[14][i],
             dte_max: c[15][i],
+            call_wall_vol: c[16][i],
+            put_wall_vol: c[17][i],
         })
         .collect())
 }
@@ -556,6 +572,8 @@ mod tests {
             vega: Some(-962_400.0),
             theta: Some(-1_204_000.0),
             dte_max: Some(30.0),
+            call_wall_vol: Some(29_650.0),
+            put_wall_vol: Some(29_050.0),
             put_wall_oi: Some(29_000.0),
         }
     }
