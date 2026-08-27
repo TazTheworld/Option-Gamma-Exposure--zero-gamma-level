@@ -38,8 +38,12 @@ Total GEX  : -326.74 millions $ / mouvement de 1%
 Zero Gamma : 29,275.48
 Call Wall  :    29,800.00 (gamma)      29,800.00 (open interest)
 Put Wall   :    29,000.00 (gamma)      28,500.00 (open interest)
+Max Pain   :    29,270.00 (échéance la plus proche)
 Charm      : -713.89 millions $ de delta / jour
 Vanna      : +40.01 millions $ de delta / point de vol
+Delta      : +4.87 milliards $ de sous-jacent
+Vega       : -96.78 milliers $ / point de vol
+Thêta      : -158.57 milliers $ / jour
 
 Attention : les échéances à 0-1 jour portent 76% du GEX, 84% du charm. Leurs greeks
 sont instables sur des données différées — compare avec --dte-min 2 avant de conclure.
@@ -102,18 +106,26 @@ Sept nombres dans un terminal sont exacts et illisibles d'un coup d'œil : un ze
 29 275 ne dit rien tant qu'on ne voit pas où le prix se tient par rapport à lui, ni depuis
 quand il dérive. L'écran met les niveaux **sur** le prix.
 
-Sur le prix : le **zero gamma** avec sa trace, les **murs** — ceux du gamma et ceux de
-l'open interest, qui répondent à deux questions différentes et divergent souvent —, la
-bande **±1σ implicite** d'ici l'échéance, et le **régime peint en fond** : vert là où la
-couverture amortirait, rouge là où elle amplifierait. Ce fond n'est pas un niveau, c'est
-une carte — il dit ce qui arriverait *si* le prix allait là.
+Sur le prix : le **zero gamma** avec sa trace et **les autres bascules** du régime, les
+**murs** — ceux du gamma et ceux de l'open interest, qui répondent à deux questions
+différentes et divergent souvent —, le **max pain**, la bande **±1σ implicite** d'ici
+l'échéance, et le **régime peint en fond** : vert là où la couverture amortirait, rouge là
+où elle amplifierait. Ce fond n'est pas un niveau, c'est une carte — il dit ce qui
+arriverait *si* le prix allait là.
 
 À droite, le **GEX par strike**, en barres posées à la hauteur exacte de leur strike sur
 l'axe des prix : quand le cours bouge, le profil bouge avec.
 
-En bas, les séries temporelles, **chacune dans sa bande** : GEX, charm, vanna, puis IV ATM
-et skew. Elles ne partagent pas d'axe — ce sont cinq unités différentes, et un croisement
-entre deux d'entre elles ne voudrait rien dire.
+En bas, les séries temporelles, **chacune dans sa bande**, groupées par ce qu'elles
+disent : le **flux** que la couverture impose (GEX, charm, vanna), la **position** du book
+(delta, vega, thêta), et la **volatilité** (IV ATM, skew). Elles ne partagent pas d'axe —
+ce sont huit unités différentes, et un croisement entre deux d'entre elles ne voudrait rien
+dire.
+
+> Flux et position ne sont pas la même chose. Le GEX, le charm et le vanna disent ce que
+> les teneurs de marché doivent **acheter ou vendre** ; le delta, le vega et le thêta
+> disent ce que leur position **est**. Le thêta en particulier n'engendre aucun flux de
+> couverture : il ne dit pas quoi faire, il dit ce que ne rien faire coûte.
 
 Il **ne calcule rien** : il lit les trois fichiers du collecteur et les traduit. Refaire
 l'analyse à chaque requête dupliquerait le moteur dans un second chemin, et deux chemins
@@ -177,12 +189,36 @@ la réalité. Le défaut, `sticky-strike`, est celui de la littérature ;
 
 Le profil peut repasser par zéro plusieurs fois dès que les ailes sont bruyantes. C'est le
 croisement **le plus proche du spot** qui est retenu — celui qui délimite le régime où le
-marché se trouve effectivement. Les autres sont signalés :
+marché se trouve effectivement. Les autres sont **nommés**, pas seulement comptés :
 
 ```
-Attention : le profil croise zéro 2 fois (également en 7,412.30). Le niveau retenu est
-le plus proche du spot ; le régime n'est pas une simple bascule au-dessus / en dessous.
+Attention : le profil croise zéro 2 fois — 29,196.62 / 36,508.00. Le niveau retenu est
+le plus proche du spot (29,196.62) ;
+le régime n'est pas une simple bascule au-dessus / en dessous.
 ```
+
+Sur l'écran de séance, les autres bascules sont tracées en trait fin sous le zero gamma
+retenu. Ce sont les croisements du profil **peint en fond**, donc les endroits exacts où
+le dégradé change de couleur : les traits nomment ce que le fond montre déjà.
+
+## Max pain
+
+Le strike où l'ensemble des options en circulation vaudrait le moins **au règlement** :
+pour chaque strike candidat `K`, on somme la valeur intrinsèque de tous les contrats
+ouverts si le sous-jacent réglait là, et on garde le minimum.
+
+Il est calculé **sur une seule échéance**, la plus proche. La valeur intrinsèque ne se
+cristallise qu'au règlement, et deux échéances règlent deux jours différents : les
+additionner supposerait que le prix est le même les deux jours.
+
+C'est une **description de l'open interest**, au même titre que les murs — pas une
+prévision. La théorie du « pinning » autour du max pain reste contestée, et **rien dans ce
+dépôt ne la vérifie** : `gex --valider` confronte trois affirmations aux séances observées,
+et celle-ci n'en fait pas partie.
+
+> Ne pas le confondre avec le zero gamma. Le zero gamma vient des **greeks** et bouge quand
+> le prix bouge ; le max pain vient de l'**open interest seul** et ne bouge que quand
+> quelqu'un ouvre ou ferme des positions.
 
 ## Le modèle tient-il ?
 

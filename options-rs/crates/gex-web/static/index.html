@@ -18,6 +18,8 @@
   <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
   <div class="mesure"><span class="etiquette">call wall</span><span class="valeur" id="cw">—</span></div>
   <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
+  <div class="mesure"><span class="etiquette">max pain</span><span class="valeur" id="mp">—</span></div>
+  <div class="mesure"><span class="etiquette">mouvement pricé</span><span class="valeur" id="sigma">—</span></div>
   <div class="fraicheur" id="fraicheur">—</div>
 </header>
 
@@ -38,22 +40,38 @@
     <div class="piste" id="p-charm" style="top:38%"></div>
     <div class="piste" id="p-vanna" style="top:70%"></div>
   </section>
-  <section class="panneau" id="vol">
-    <div class="piste" id="p-iv" style="top:10%"></div>
-    <div class="piste" id="p-skew" style="top:58%"></div>
-  </section>
+  <!-- Deux panneaux cote a cote plutot que deux rangees de plus : trois bandes
+       supplementaires ne valaient pas cent dix pixels de graphique de prix. Un
+       demi-panneau montre la meme plage de temps, comprimee — et c'est la
+       DERIVE qu'on y lit, pas une date. -->
+  <div class="rangee">
+    <section class="panneau" id="book">
+      <span class="titre">position du book</span>
+      <div class="piste" id="p-delta" style="top:6%"></div>
+      <div class="piste" id="p-vega" style="top:38%"></div>
+      <div class="piste" id="p-theta" style="top:70%"></div>
+    </section>
+    <section class="panneau" id="vol">
+      <span class="titre">volatilité</span>
+      <div class="piste" id="p-iv" style="top:10%"></div>
+      <div class="piste" id="p-skew" style="top:58%"></div>
+    </section>
+  </div>
 </main>
 
 <footer>
   <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
+  <span class="legende" title="Le gamma total change de signe plusieurs fois dès que les ailes sont chargées. Ces traits marquent les autres passages, là où le fond change aussi de couleur."><i class="pastille" style="background:#8a6d3f"></i> les autres bascules du régime</span>
+  <span class="legende" title="Le strike où l'ensemble des options de l'échéance la plus proche vaudrait le moins au règlement. Une description de l'open interest — pas une cible, rien ici ne mesure que le prix y va."><i class="pastille" style="background:#c2b280"></i> max pain — les options de l'échéance proche y valent le moins au règlement</span>
   <span class="legende"><i class="pastille" style="background:#26a69a"></i> call wall · GEX call</span>
   <span class="legende"><i class="pastille" style="background:#ef5350"></i> put wall · GEX put</span>
   <span class="legende"><i class="pastille" style="background:#1d7268"></i><i class="pastille" style="background:#a13c39"></i> murs par open interest</span>
-  <span class="legende"><i class="pastille" style="background:#3f4d63"></i> ±1σ implicite d'ici l'échéance (IV·√T)</span>
+  <span class="legende"><i class="pastille" style="background:#3f4d63"></i> la bande où le marché price 2 chances sur 3 d'ici l'échéance (spot ± IV·√T)</span>
   <span class="legende"><i class="pastille pave" style="background:rgba(38,166,154,.35)"></i><i class="pastille pave" style="background:rgba(239,83,80,.35)"></i> fond : la couverture amortit / amplifie à ce niveau</span>
   <span class="legende"><i class="pastille" style="background:#6b8cae"></i> charm</span>
   <span class="legende"><i class="pastille" style="background:#9a7fb8"></i> vanna</span>
-  <span>trois unités différentes, trois bandes séparées : elles ne se comparent pas entre elles</span>
+  <span class="legende" title="Ce que le book EST, et non ce qu'il oblige à faire. Le thêta en particulier n'engendre aucun flux de couverture : il dit ce que ne rien faire coûte."><i class="pastille" style="background:#5fb3d9"></i><i class="pastille" style="background:#c98fd6"></i><i class="pastille" style="background:#cfc26b"></i> delta · vega · thêta — la position, pas le flux</span>
+  <span>chaque unité dans sa bande : elles ne se comparent pas entre elles</span>
   <span>données différées d'environ 15 minutes — ce n'est pas du temps réel</span>
 </footer>
 
@@ -129,39 +147,111 @@ function tracerBande(spot, attendu) {
     price: prix, color: "#3f4d63", lineWidth: 1, lineStyle: 3,
     axisLabelVisible: true, title: titre,
   });
-  bandeHaute = trait(spot + attendu, "+1σ");
-  bandeBasse = trait(spot - attendu, "-1σ");
+  // « ±1σ » est du jargon. L'ecran dit ce que la borne signifie : le marche
+  // price environ deux chances sur trois de rester dedans d'ici l'echeance.
+  const points = Math.round(attendu);
+  bandeHaute = trait(spot + attendu, "2/3 · +" + points);
+  bandeBasse = trait(spot - attendu, "2/3 · −" + points);
 }
 
 const ligneCwOi = gPrix.addLineSeries({ color: "#1d7268", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 const lignePwOi = gPrix.addLineSeries({ color: "#a13c39", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
-const gTotaux = LightweightCharts.createChart(document.getElementById("totaux"), {
-  ...commun,
-  timeScale: { ...commun.timeScale, visible: false },
-  rightPriceScale: { visible: false },
-});
-// Les totaux n'ont qu'un point par minute cotee, les barres en ont des milliers :
-// synchroniser deux axes par INDICE revient alors a aligner le centieme point de
-// l'un sur le centieme de l'autre, qui ne sont pas au meme instant. La vue
-// partait ainsi sur la nuit precedente. Cette serie ne trace rien : elle donne
-// aux totaux exactement les memes instants qu'au prix, et l'indice redevient
-// comparable.
-const squelette = gTotaux.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
-let squeletteVol = null;   // cree avec gVol, plus bas
-
-// Trois bandes qui ne se touchent pas, et NON trois courbes sur un axe commun.
+// Le max pain : le strike ou l'ensemble des options de l'echeance la plus proche
+// vaut le moins au reglement. Il repond encore a une autre question que les murs
+// et que la bande implicite — « ou le reglement couterait-il le moins a ceux qui
+// ont VENDU ces options ».
 //
-// Les trois grandeurs n'ont pas la meme unite : le GEX est en dollars par
+// Ce n'est pas une prevision, et l'ecran ne le presente pas comme telle : rien
+// dans ce depot ne mesure que le prix va au max pain. C'est une description de
+// l'open interest, au meme titre que les murs.
+//
+// En escalier et hors echelle, pour les memes raisons que les murs : c'est un
+// STRIKE, il saute, et il peut se tenir loin du prix.
+const ligneMaxPain = gPrix.addLineSeries({ color: "#c2b280", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+
+// Tous les croisements du profil, pas seulement celui qu'on retient.
+//
+// `croisements` est une LISTE : le gamma total change de signe plusieurs fois
+// des que les ailes sont chargees. N'en montrer qu'un se lit comme une bascule
+// unique — au-dessus la couverture amortit, en dessous elle amplifie — et c'est
+// faux quand il y en a trois.
+//
+// Ce sont les croisements du profil PEINT, donc les endroits exacts ou le fond
+// change de couleur : ces traits nomment ce que le degrade montre deja. En
+// lignes de prix comme la bande implicite, et pour la meme raison — ils valent
+// pour maintenant, le book ayant change depuis.
+//
+// Le retenu n'est pas redessine ici : la ligne orange le porte deja, avec sa
+// trace, qui est ce qui compte pour lui.
+let traitsCroisements = [];
+
+function tracerCroisements(croisements, retenu) {
+  for (const l of traitsCroisements) chandeliers.removePriceLine(l);
+  traitsCroisements = [];
+  if (!croisements) return 0;
+  const autres = croisements.filter((c) => retenu == null || Math.abs(c - retenu) > 1e-6);
+  for (const c of autres) {
+    traitsCroisements.push(chandeliers.createPriceLine({
+      price: c, color: "#8a6d3f", lineWidth: 1, lineStyle: 3,
+      axisLabelVisible: true, title: "bascule",
+    }));
+  }
+  return autres.length;
+}
+
+// Un panneau du bas : pas d'axe des temps — celui du prix vaut pour tous —, pas
+// d'echelle de prix, puisque chaque bande a la sienne.
+//
+// Et pas de zoom ni de deplacement : ces panneaux SUIVENT le prix, ils ne le
+// conduisent pas. Ce n'est pas un confort, c'est ce qui empeche un bug mesure.
+// Un panneau de 800 px ne peut pas afficher 2 736 barres : l'espacement minimal
+// de la bibliotheque est d'un demi-pixel, donc il plafonne a 1 600 et RABOTE
+// toute plage plus large. Quand il pouvait repondre a la synchronisation, il
+// renvoyait ce rabot au graphique du prix — qui repartait au tout debut de la
+// serie, deux nuits plus tot, a chaque chargement.
+function panneauBas(id) {
+  return LightweightCharts.createChart(document.getElementById(id), {
+    ...commun,
+    timeScale: { ...commun.timeScale, visible: false },
+    rightPriceScale: { visible: false },
+    handleScroll: false,
+    handleScale: false,
+  });
+}
+
+// Les panneaux du bas n'ont qu'un point par minute cotee, les barres en ont des
+// milliers : synchroniser deux axes par INDICE revient alors a aligner le
+// centieme point de l'un sur le centieme de l'autre, qui ne sont pas au meme
+// instant. La vue partait ainsi sur la nuit precedente. Cette serie ne trace
+// rien : elle donne au panneau exactement les memes instants qu'au prix, et
+// l'indice redevient comparable.
+// Le squelette porte une VALEUR, pas seulement un instant. Une serie qui n'a que
+// des instants est du « whitespace » : elle etend bien l'axe, mais un graphique
+// dont TOUTES les series sont vides refuse de se positionner — il accepte la
+// largeur d'une plage et en ignore la position. Le panneau du book, seul a
+// n'avoir aucune mesure tant que le collecteur n'a pas ecrit son premier point,
+// restait alors deux nuits en arriere pendant que les trois autres suivaient le
+// prix. La valeur est constante et la serie invisible : rien ne se dessine, et
+// elle vit sur l'echelle de droite, elle-meme masquee.
+function squelette(graphique) {
+  return graphique.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+}
+
+// Une bande = une serie sur son PROPRE axe, invisible, cale par ses marges. Et
+// NON plusieurs courbes sur un axe commun.
+//
+// Les grandeurs tracees ici n'ont pas la meme unite : le GEX est en dollars par
 // mouvement de 1 % du spot, le charm en dollars de delta par JOUR, le vanna en
-// dollars de delta par POINT DE VOL. Sur un axe partage, elles se croisent — et
-// un croisement se lit comme un evenement alors qu'il ne depend que du facteur
-// d'echelle choisi ici. C'est un faux signal fabrique par l'ecran.
+// dollars de delta par POINT DE VOL, le delta en dollars tout court. Sur un axe
+// partage, elles se croisent — et un croisement se lit comme un evenement alors
+// qu'il ne depend que du facteur d'echelle choisi ici. C'est un faux signal
+// fabrique par l'ecran.
 //
 // Les separer physiquement le supprime, sans rien perdre : ce qui compte pour
 // chacune est son SIGNE et sa DERIVE, tous deux intacts dans sa propre bande.
-function bande(id, couleur, titre, haut, bas) {
-  const s = gTotaux.addLineSeries({
+function bande(graphique, id, couleur, titre, haut, bas, zero) {
+  const s = graphique.addLineSeries({
     color: couleur,
     lineWidth: 2,
     priceLineVisible: false,
@@ -169,52 +259,73 @@ function bande(id, couleur, titre, haut, bas) {
     title: titre,
     priceScaleId: id,
   });
-  gTotaux.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
-  // Le zero, parce que c'est le passage par zero qui change la lecture — pas la
-  // valeur absolue.
-  s.createPriceLine({ price: 0, color: "#2c3442", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+  graphique.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
+  // Le zero, quand c'est le passage par zero qui change la lecture — pas la
+  // valeur absolue. L'IV et le skew ne changent jamais de signe : la ligne y
+  // serait du decor.
+  if (zero) {
+    s.createPriceLine({ price: 0, color: "#2c3442", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+  }
   return s;
 }
 
-const sGex = bande("gex", "#e0a458", "GEX", 0.06, 0.70);
-const sCharm = bande("charm", "#6b8cae", "charm", 0.38, 0.38);
-const sVanna = bande("vanna", "#9a7fb8", "vanna", 0.70, 0.06);
+// Le FLUX : ce que la couverture oblige les teneurs de marche a acheter ou
+// vendre.
+const gTotaux = panneauBas("totaux");
+const squeletteTotaux = squelette(gTotaux);
+const sGex = bande(gTotaux, "gex", "#e0a458", "GEX", 0.06, 0.70, true);
+const sCharm = bande(gTotaux, "charm", "#6b8cae", "charm", 0.38, 0.38, true);
+const sVanna = bande(gTotaux, "vanna", "#9a7fb8", "vanna", 0.70, 0.06, true);
+
+// La POSITION : ce que le book EST, et non ce qu'il oblige a faire.
+//
+// La distinction n'est pas decorative. Le GEX, le charm et le vanna disent quoi
+// acheter ou vendre ; le delta, le vega et le theta disent seulement ce que la
+// position vaut et ce qu'elle coute. Le theta en particulier n'engendre AUCUN
+// flux de couverture — il ne dit pas quoi faire, il dit ce que ne rien faire
+// coute. Les melanger aux trois autres laisserait croire qu'il agit.
+const gBook = panneauBas("book");
+const squeletteBook = squelette(gBook);
+const sDelta = bande(gBook, "delta", "#5fb3d9", "delta", 0.06, 0.70, true);
+const sVega = bande(gBook, "vega", "#c98fd6", "vega", 0.38, 0.38, true);
+const sTheta = bande(gBook, "theta", "#cfc26b", "thêta", 0.70, 0.06, true);
 
 // L'IV et le skew sont des pourcentages : les mettre avec des dollars sur le
 // meme panneau reproduirait exactement le defaut qu'on vient de corriger.
-const gVol = LightweightCharts.createChart(document.getElementById("vol"), {
-  ...commun,
-  timeScale: { ...commun.timeScale, visible: false },
-  rightPriceScale: { visible: false },
-});
-function bandeVol(id, couleur, titre, haut, bas) {
-  const s = gVol.addLineSeries({
-    color: couleur, lineWidth: 2, priceLineVisible: false,
-    lastValueVisible: false, title: titre, priceScaleId: id,
-  });
-  gVol.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
-  return s;
-}
-const sIv = bandeVol("iv", "#c9805e", "IV ATM", 0.12, 0.56);
-const sSkew = bandeVol("skew", "#7fa88a", "skew", 0.60, 0.08);
+const gVol = panneauBas("vol");
+const squeletteVol = squelette(gVol);
+const sIv = bande(gVol, "iv", "#c9805e", "IV ATM", 0.12, 0.56, false);
+const sSkew = bande(gVol, "skew", "#7fa88a", "skew", 0.60, 0.08, false);
 
-squeletteVol = gVol.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+// Le prix conduit, les trois autres suivent. Jamais l'inverse.
+synchroniser(gPrix, [gTotaux, gBook, gVol]);
 
-synchroniser([gPrix, gTotaux, gVol]);
-
-const millions = (v) =>
+// Trois crans, pas deux. Le vega et le theta se comptent en centaines de
+// MILLIERS sur NQ la ou le GEX se compte en centaines de millions : sans le cran
+// du bas ils s'affichaient « -0.1 M$ », qu'on lit comme zero.
+const dollars = (v) =>
   v == null ? "—"
   : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + " Md$"
-  : (v / 1e6).toFixed(1) + " M$";
+  : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + " M$"
+  : (v / 1e3).toFixed(1) + " k$";
 
 const prix = (v) => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
 
 const pourcent = (v) => v == null ? "—" : (v * 100).toFixed(2) + " %";
 
 const PISTES = [
-  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458", format: millions },
-  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae", format: millions },
-  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8", format: millions },
+  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458", format: dollars },
+  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae", format: dollars },
+  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8", format: dollars },
+  // Les trois du book partagent un demi-panneau : leurs unites tiennent en trois
+  // mots, et l'explication passe au survol. Une etiquette qui deborde recouvre la
+  // courbe qu'elle nomme.
+  { id: "p-delta", champ: "delta", nom: "delta", unite: "de sous-jacent", couleur: "#5fb3d9", format: dollars,
+    aide: "La direction du book dealer, en dollars de sous-jacent. Le charm en est la dérive par jour, le vanna la dérive par point de volatilité." },
+  { id: "p-vega", champ: "vega", nom: "vega", unite: "par point de vol", couleur: "#c98fd6", format: dollars,
+    aide: "Ce que le book gagne ou perd quand la volatilité implicite monte d'un point." },
+  { id: "p-theta", champ: "theta", nom: "thêta", unite: "par jour", couleur: "#cfc26b", format: dollars,
+    aide: "Ce que la seule fuite du temps retire au book, à prix et à volatilité inchangés. Le seul des six à n'obliger à aucune couverture : il ne dit pas quoi faire, il dit ce que ne rien faire coûte." },
   { id: "p-iv", champ: "iv_atm", nom: "IV ATM", unite: "échéance la plus proche", couleur: "#c9805e", format: pourcent },
   { id: "p-skew", champ: "skew", nom: "skew", unite: "dIV / d ln(K/S) — négatif = puts plus chers", couleur: "#7fa88a", format: (v) => v == null ? "—" : v.toFixed(3) },
 ];
@@ -225,40 +336,54 @@ const PISTES = [
 function etiqueterPistes(niveaux) {
   for (const piste of PISTES) {
     const noeud = document.getElementById(piste.id);
+    // Le nom porte l'explication au survol : l'etiquette d'un demi-panneau n'a
+    // pas la place de la dire en clair, et la taire serait pire.
+    const nom = '<b style="color:' + piste.couleur + '"'
+      + (piste.aide ? ' title="' + piste.aide.replace(/"/g, "&quot;") + '"' : "")
+      + ">" + piste.nom + "</b>";
+
     const v = niveaux.map((n) => n[piste.champ]).filter((x) => x != null);
-    if (!v.length) { noeud.innerHTML = ""; continue; }
+    // Une bande vide se DIT. Muette, elle se lit comme une mesure nulle, alors
+    // qu'elle veut dire que rien n'a encore ete ecrit — ce qui est le cas des
+    // trois greeks du book tant que le collecteur n'a pas boucle son balayage.
+    if (!v.length) {
+      noeud.innerHTML = nom + '<span class="u">aucun point écrit</span>';
+      continue;
+    }
     const bas = Math.min.apply(null, v);
     const haut = Math.max.apply(null, v);
     const dernier = v[v.length - 1];
     noeud.innerHTML =
-      '<b style="color:' + piste.couleur + '">' + piste.nom + "</b>"
+      nom
       + '<span class="v ' + (dernier < 0 ? "negatif" : "positif") + '">' + piste.format(dernier) + "</span>"
       + '<span class="u">' + piste.unite + "</span>"
       + '<span class="p">' + piste.format(bas) + " → " + piste.format(haut) + "</span>";
   }
 }
 
-// Les deux graphiques partagent le même axe : les séries sont à la minute des
-// deux côtés, c'est tout l'intérêt de les avoir écrites ainsi. Le drapeau
-// empêche l'aller-retour de se relancer indéfiniment.
-let enSynchro = false;
-function synchroniser(graphiques) {
-  for (const source of graphiques) {
-    source.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
-      if (!plage || enSynchro) return;
-      enSynchro = true;
-      for (const cible of graphiques) {
-        if (cible !== source) cible.timeScale().setVisibleLogicalRange(plage);
-      }
-      enSynchro = false;
-    });
-  }
+// Tous les graphiques partagent le même axe : les séries sont à la minute
+// partout, c'est tout l'intérêt de les avoir écrites ainsi.
+//
+// **Un seul conduit.** Faire écouter tout le monde paraissait plus symétrique et
+// créait une boucle : un panneau qui ne peut pas honorer une plage renvoie celle
+// qu'il a retenue, et cette réponse fait autorité pour les autres. Un demi-panneau
+// de 800 px plafonne à 1 600 barres — il ramenait ainsi les 2 736 barres du prix
+// à sa propre limite, au tout début de la série. Ici la source est le prix, elle
+// n'écoute personne, et il n'y a plus de retour possible.
+function synchroniser(maitre, suiveurs) {
+  maitre.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
+    if (!plage) return;
+    for (const cible of suiveurs) cible.timeScale().setVisibleLogicalRange(plage);
+  });
 }
 
-function ecrire(id, texte, valeur) {
+function ecrire(id, texte, valeur, titre) {
   const noeud = document.getElementById(id);
   noeud.textContent = texte;
   noeud.className = "valeur" + (valeur == null ? "" : valeur < 0 ? " negatif" : " positif");
+  // Le detail au survol quand la mesure en cache : l'en-tete n'a pas la place
+  // d'aligner trois niveaux, mais les taire serait revenir au defaut corrige.
+  if (titre) noeud.title = titre; else noeud.removeAttribute("title");
 }
 
 async function json(route) {
@@ -472,8 +597,14 @@ async function rafraichir() {
     poser("barres", chandeliers, barres);
     // Les memes instants, sans valeur : c'est ce qui rend les deux axes
     // comparables point par point.
-    poser("squelette", squelette, barres.map((b) => ({ time: b.time })));
-    poser("squelette-vol", squeletteVol, barres.map((b) => ({ time: b.time })));
+    // Un tableau NEUF par serie plutot que le meme partage entre les trois :
+    // `setData()` garde ce qu'on lui donne par reference, et trois series qui
+    // pointent sur le meme tableau dependent alors les unes des autres sans que
+    // rien ne le dise.
+    const instants = () => barres.map((b) => ({ time: b.time, value: 0 }));
+    poser("squelette-totaux", squeletteTotaux, instants());
+    poser("squelette-book", squeletteBook, instants());
+    poser("squelette-vol", squeletteVol, instants());
 
     // Une valeur absente ne se trace pas : relier deux points de part et
     // d'autre d'un trou inventerait un niveau qui n'a jamais existé.
@@ -486,6 +617,7 @@ async function rafraichir() {
     poser("pw", lignePw, serie("put_wall"));
     poser("cwoi", ligneCwOi, serie("call_wall_oi"));
     poser("pwoi", lignePwOi, serie("put_wall_oi"));
+    poser("maxpain", ligneMaxPain, serie("max_pain"));
     poser("iv", sIv, serie("iv_atm"));
     poser("skew", sSkew, serie("skew"));
 
@@ -493,20 +625,52 @@ async function rafraichir() {
     poser("charm", sCharm, serie("charm"));
     poser("vanna", sVanna, serie("vanna"));
 
+    poser("delta", sDelta, serie("delta"));
+    poser("vega", sVega, serie("vega"));
+    poser("theta", sTheta, serie("theta"));
+
     // Le cadrage n'a lieu qu'une fois. Ensuite la vue appartient a qui regarde.
     if (premierRendu && barres.length) { cadrer(barres, niveaux); premierRendu = false; }
+
+    // Rattraper les suiveurs. Un panneau encore vide au moment du cadrage ne
+    // l'a pas suivi — il n'avait rien a cadrer —, et il resterait ensuite sur
+    // une autre periode que les trois autres : des lignes de grille a des heures
+    // qui ne sont pas celles du prix. C'est le cas du book tant que le
+    // collecteur n'a pas ecrit son premier point.
+    //
+    // Repousser la plage du MAITRE est idempotent : c'est exactement celle que
+    // le lecteur a choisie en zoomant, et la renvoyer ne la deplace pas.
+    const cadre = gPrix.timeScale().getVisibleLogicalRange();
+    if (cadre) {
+      for (const g of [gTotaux, gBook, gVol]) g.timeScale().setVisibleLogicalRange(cadre);
+    }
 
     const dernier = niveaux[niveaux.length - 1];
     const spot = profil.etat.spot ?? dernier?.spot ?? null;
     ecrire("spot", prix(spot));
-    ecrire("gex", millions(dernier?.gex), dernier?.gex);
-    ecrire("zg", prix(dernier?.zero_gamma));
+    ecrire("gex", dollars(dernier?.gex), dernier?.gex);
     ecrire("cw", prix(dernier?.call_wall));
     ecrire("pw", prix(dernier?.put_wall));
+    ecrire("mp", prix(dernier?.max_pain));
 
     profilCourant = profil.strikes;
     regimeCourant = profil.regime;
     tracerBande(profil.etat.spot, profil.attendu);
+
+    // Le compte des AUTRES bascules, a cote du niveau retenu : sans lui, un
+    // regime qui croise trois fois se lit comme un regime qui croise une fois.
+    const autres = tracerCroisements(profil.croisements, profil.zero_gamma);
+    ecrire(
+      "zg",
+      prix(dernier?.zero_gamma) + (autres ? "  +" + autres : ""),
+      null,
+      autres
+        ? "Le profil croise zéro " + (autres + 1) + " fois : "
+          + profil.croisements.map(prix).join(" / ")
+          + ". Le régime n'est pas une simple bascule au-dessus / en dessous."
+        : null
+    );
+    ecrire("sigma", profil.attendu == null ? "—" : "± " + Math.round(profil.attendu) + " pts");
     spotCourant = spot;
     derniereEmpreinte = "";   // forcer le redessin sur les nouvelles valeurs
     etiqueterPistes(niveaux);

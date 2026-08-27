@@ -113,6 +113,8 @@ pub struct LigneExposee {
     pub delta: f64,
     /// Vega dollar du book dealer.
     pub vega: f64,
+    /// Thêta dollar du book dealer, par jour.
+    pub theta: f64,
 }
 
 /// Les expositions cumulées d'un strike, toutes échéances confondues.
@@ -192,6 +194,14 @@ pub struct Analyse {
     pub delta: f64,
     /// Vega dollar total.
     pub vega: f64,
+    /// Thêta dollar total, par jour.
+    ///
+    /// Ce que la seule fuite du temps retire au book, à prix et à volatilité
+    /// inchangés. Contrairement au gamma, au charm et au vanna, il ne produit
+    /// **aucun flux de couverture** : il ne dit pas ce que les teneurs de marché
+    /// doivent acheter ou vendre, seulement ce que leur position coûte ou
+    /// rapporte à ne rien faire.
+    pub theta: f64,
     /// Le croisement de zéro retenu : le plus proche du spot.
     pub zero_gamma: Option<f64>,
     /// Tous les croisements trouvés.
@@ -208,6 +218,11 @@ pub struct Analyse {
     pub skew: Option<f64>,
     /// Le mouvement que le marché price d'ici cette échéance, en points.
     pub attendu: Option<f64>,
+    /// Le strike où les options de cette échéance valent le moins au règlement.
+    ///
+    /// Comme l'IV et le skew, il ne concerne que l'échéance la plus proche :
+    /// [`max_pain`] explique pourquoi mélanger les dates n'aurait pas de sens.
+    pub max_pain: Option<f64>,
 }
 
 /// La volatilité implicite à la monnaie d'une échéance.
@@ -338,7 +353,18 @@ pub fn expositions(chaine: &Chaine, params: &Parametres) -> Vec<LigneExposee> {
                 delta: (l.call.delta * l.call.open_interest - l.put.delta * l.put.open_interest)
                     * cs
                     * spot,
+                // Le vega et le thêta sont déjà en unités de PRIX — dollars par
+                // point de vol, dollars par jour —, alors que le delta est sans
+                // dimension. D'où le `* spot` sur le seul delta : l'asymétrie
+                // n'en est pas une, elle rend les trois comparables en dollars.
                 vega: (l.call.vega * l.call.open_interest - l.put.vega * l.put.open_interest) * cs,
+                // Même convention de signe que le delta et le vega : long les
+                // calls, court les puts. Le thêta d'une option longue est négatif,
+                // donc en être COURT rapporte — la soustraction n'est pas une
+                // faute, elle porte tout le sens du chiffre.
+                theta: (l.call.theta * l.call.open_interest
+                    - l.put.theta * l.put.open_interest)
+                    * cs,
             }
         })
         .collect()
@@ -451,6 +477,95 @@ pub fn murs(par_strike: &[AgregatStrike], spot: f64, params: &Parametres) -> Mur
             true,
         ),
     }
+}
+
+/// Le strike où les options en circulation valent le moins, au règlement.
+///
+/// Pour chaque strike candidat `K`, on somme la valeur intrinsèque qu'auraient
+/// TOUS les contrats ouverts si le sous-jacent réglait là :
+/// `Σ call_oi × max(0, K − Kᵢ) + Σ put_oi × max(0, Kᵢ − K)`. Le minimum de cette
+/// somme est le max pain — le règlement le moins coûteux pour ceux qui ont vendu
+/// ces options, donc le plus douloureux pour ceux qui les détiennent.
+///
+/// **Sur une seule échéance**, jamais sur la chaîne entière : la valeur
+/// intrinsèque ne se cristallise qu'au règlement, et deux échéances règlent deux
+/// jours différents. Les additionner supposerait que le prix est le même les deux
+/// jours — exactement l'hypothèse que le calcul cherche à éclairer.
+///
+/// Le multiplicateur du contrat n'entre pas dans le calcul : il multiplie toutes
+/// les douleurs par le même facteur et ne peut donc pas déplacer le minimum.
+///
+/// Ce que ce chiffre **est** : une description de la répartition de l'open
+/// interest, aussi factuelle que les murs. Ce qu'il **n'est pas** : une
+/// prévision. La théorie du « pinning » autour du max pain reste contestée, et
+/// **rien dans ce dépôt ne la vérifie**. `gex --valider` pourrait la mesurer,
+/// mais il lui manque pour cela une colonne `max_pain` dans `history.csv` — que
+/// l'ajout d'une colonne à un fichier déjà accumulé rend moins anodin qu'il n'y
+/// paraît, l'en-tête n'étant écrit qu'à la création.
+///
+/// `None` quand l'échéance n'a aucun contrat ouvert : une douleur nulle partout
+/// n'a pas de minimum qui veuille dire quelque chose.
+pub fn max_pain(lignes: &[LigneExposee], echeance: EcheanceNy, spot: f64) -> Option<f64> {
+    let ouverts: Vec<(f64, f64, f64)> = lignes
+        .iter()
+        .filter(|l| l.ligne.echeance == echeance)
+        .map(|l| {
+            (
+                l.ligne.strike,
+                l.ligne.call.open_interest,
+                l.ligne.put.open_interest,
+            )
+        })
+        .collect();
+    if ouverts.iter().all(|(_, c, p)| c + p <= 0.0) {
+        return None;
+    }
+    ouverts
+        .iter()
+        .map(|(k, _, _)| {
+            let douleur: f64 = ouverts
+                .iter()
+                .map(|(ki, oc, op)| oc * (k - ki).max(0.0) + op * (ki - k).max(0.0))
+                .sum();
+            (*k, douleur)
+        })
+        // Deux strikes à douleur égale : le plus proche du spot l'emporte, comme
+        // pour le zero gamma. Sans ce départage, l'ordre de la chaîne déciderait.
+        .min_by(|a, b| {
+            a.1.total_cmp(&b.1)
+                .then((a.0 - spot).abs().total_cmp(&(b.0 - spot).abs()))
+        })
+        .map(|(k, _)| k)
+}
+
+/// Les greeks du book que la source n'a pas publiés.
+///
+/// Le delta, le vega et le thêta ne sont **jamais recalculés** — contrairement au
+/// gamma, qui a son repli en Black-76. Une source qui ne les sert pas donne donc
+/// un total d'exactement zéro, et zéro se lit comme « le book est neutre » là où
+/// la donnée dit « je n'en sais rien ».
+///
+/// Exactement zéro sur des milliers de strikes ouverts n'arrive pas par
+/// compensation : c'est la signature d'une absence. Une chaîne sans aucun contrat
+/// ouvert, elle, n'apprend rien — on ne signale rien dans ce cas, le vide y est
+/// déjà dit ailleurs.
+pub fn greeks_muets(analyse: &Analyse) -> Vec<&'static str> {
+    let ouvert = analyse
+        .lignes
+        .iter()
+        .any(|l| l.ligne.call.open_interest + l.ligne.put.open_interest > 0.0);
+    if !ouvert {
+        return Vec::new();
+    }
+    [
+        ("delta", analyse.delta),
+        ("vega", analyse.vega),
+        ("thêta", analyse.theta),
+    ]
+    .into_iter()
+    .filter(|(_, v)| *v == 0.0)
+    .map(|(nom, _)| nom)
+    .collect()
 }
 
 /// Demi-plage de monnaie sur laquelle le skew est ajusté.
@@ -686,6 +801,7 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
         vanna: lignes.iter().map(|l| l.vanna).sum(),
         delta: lignes.iter().map(|l| l.delta).sum(),
         vega: lignes.iter().map(|l| l.vega).sum(),
+        theta: lignes.iter().map(|l| l.theta).sum(),
         zero_gamma: zero_gamma(&croisements, spot),
         murs: murs(&agreges, spot, params),
         ecart_gamma: ecart_gamma(&lignes),
@@ -699,6 +815,7 @@ pub fn analyser(chaine: &Chaine, params: &Parametres) -> Result<Analyse, ChaineI
             let t = lignes.iter().find(|l| l.ligne.echeance == e).map(|l| l.t)?;
             attendu_implicite(spot, iv_atm(&lignes, e, spot)?, t)
         }),
+        max_pain: proche.and_then(|e| max_pain(&lignes, e, spot)),
         par_strike: agreges,
         lignes,
         niveaux,
@@ -993,6 +1110,291 @@ mod tests {
         assert_eq!(attendu_implicite(29_000.0, 0.20, 0.0), None);
         assert_eq!(attendu_implicite(29_000.0, 0.0, 0.01), None);
         assert_eq!(attendu_implicite(0.0, 0.20, 0.01), None);
+    }
+
+    /// Un strike et ses deux open interest : `(strike, call, put)`.
+    type StrikeOi = (f64, f64, f64);
+
+    /// Une chaîne réduite à ce qui compte pour le max pain : des strikes, des
+    /// open interest, et rien d'autre qui puisse influencer le résultat.
+    fn chaine_oi(par_echeance: &[(&str, Vec<StrikeOi>)], spot: f64) -> Chaine {
+        let releve = InstantReleve(instant("2026-08-25 20:30:00"));
+        let cote = |oi: f64| Cote {
+            iv: 0.20,
+            gamma: 1e-5,
+            delta: 0.5,
+            open_interest: oi,
+            vega: 10.0,
+            theta: 0.0,
+        };
+        let lignes: Vec<Ligne> = par_echeance
+            .iter()
+            .flat_map(|(ech, strikes)| {
+                strikes.iter().map(move |(k, oc, op)| Ligne {
+                    echeance: EcheanceNy(instant(ech)),
+                    strike: *k,
+                    call: cote(*oc),
+                    put: cote(*op),
+                })
+            })
+            .collect();
+        Chaine::nouvelle(lignes, spot, releve).unwrap()
+    }
+
+    /// La douleur, recalculée à la main sur trois strikes : 3 000 calls posés en
+    /// bas contre 1 000 puts posés en haut.
+    ///
+    /// `pain(100) = 1 000 × 20 = 20 000` — les calls ne valent rien au règlement.
+    /// `pain(110) = 3 000 × 10 + 1 000 × 10 = 40 000`.
+    /// `pain(120) = 3 000 × 20 = 60 000`.
+    ///
+    /// Le minimum est donc 100 : la masse de calls tire le règlement vers le bas,
+    /// parce que ce sont eux qui coûtent cher s'il monte.
+    #[test]
+    fn le_max_pain_est_le_strike_le_moins_couteux_au_reglement() {
+        let lignes = expositions(
+            &chaine_oi(
+                &[(
+                    ECHEANCES[0],
+                    vec![(100.0, 3_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 1_000.0)],
+                )],
+                110.0,
+            ),
+            &params(),
+        );
+        let e = EcheanceNy(instant(ECHEANCES[0]));
+        assert_eq!(max_pain(&lignes, e, 110.0), Some(100.0));
+    }
+
+    /// Inverser le rapport de force renverse la conclusion : 1 000 calls en bas
+    /// contre 3 000 puts en haut, et le minimum remonte à 120.
+    ///
+    /// `pain(100) = 3 000 × 20 = 60 000`, `pain(110) = 40 000`,
+    /// `pain(120) = 1 000 × 20 = 20 000`.
+    #[test]
+    fn le_max_pain_suit_la_masse_d_open_interest() {
+        let lignes = expositions(
+            &chaine_oi(
+                &[(
+                    ECHEANCES[0],
+                    vec![(100.0, 1_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 3_000.0)],
+                )],
+                110.0,
+            ),
+            &params(),
+        );
+        let e = EcheanceNy(instant(ECHEANCES[0]));
+        assert_eq!(max_pain(&lignes, e, 110.0), Some(120.0));
+    }
+
+    /// Le cas plat, écrit pour qu'il ne surprenne personne : calls posés sur le
+    /// strike le plus bas, puts sur le plus haut, tout est hors de la monnaie
+    /// quel que soit le règlement envisagé et la douleur vaut zéro partout.
+    ///
+    /// Le max pain ne désigne alors rien de particulier. Le départage par
+    /// distance au spot rend un strike stable plutôt que le premier de la liste,
+    /// mais c'est une convention, pas une mesure.
+    #[test]
+    fn une_douleur_plate_se_departage_par_la_distance_au_spot() {
+        let lignes = expositions(
+            &chaine_oi(
+                &[(
+                    ECHEANCES[0],
+                    vec![(100.0, 0.0, 3_000.0), (110.0, 0.0, 0.0), (120.0, 1_000.0, 0.0)],
+                )],
+                110.0,
+            ),
+            &params(),
+        );
+        let e = EcheanceNy(instant(ECHEANCES[0]));
+        assert_eq!(max_pain(&lignes, e, 110.0), Some(110.0));
+        assert_eq!(max_pain(&lignes, e, 101.0), Some(100.0));
+    }
+
+    /// Une seule échéance à la fois. Ici la proche dit 100 et la lointaine dirait
+    /// 120 : les mélanger donnerait un strike qui n'est le règlement d'aucune des
+    /// deux, puisqu'elles ne règlent pas le même jour.
+    #[test]
+    fn le_max_pain_ne_melange_pas_les_echeances() {
+        let chaine = chaine_oi(
+            &[
+                (
+                    ECHEANCES[0],
+                    vec![(100.0, 3_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 1_000.0)],
+                ),
+                (
+                    ECHEANCES[2],
+                    vec![
+                        (100.0, 10_000.0, 0.0),
+                        (110.0, 0.0, 0.0),
+                        (120.0, 0.0, 30_000.0),
+                    ],
+                ),
+            ],
+            110.0,
+        );
+        let lignes = expositions(&chaine, &params());
+        assert_eq!(
+            max_pain(&lignes, EcheanceNy(instant(ECHEANCES[0])), 110.0),
+            Some(100.0)
+        );
+        assert_eq!(
+            max_pain(&lignes, EcheanceNy(instant(ECHEANCES[2])), 110.0),
+            Some(120.0)
+        );
+        // Et c'est bien la proche que l'analyse retient.
+        assert_eq!(analyser(&chaine, &params()).unwrap().max_pain, Some(100.0));
+    }
+
+    /// Sans contrat ouvert, la douleur est nulle partout. Rendre un strike
+    /// quand même désignerait le premier de la liste comme un niveau mesuré.
+    #[test]
+    fn pas_d_open_interest_pas_de_max_pain() {
+        let lignes = expositions(
+            &chaine_oi(
+                &[(
+                    ECHEANCES[0],
+                    vec![(100.0, 0.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 0.0)],
+                )],
+                110.0,
+            ),
+            &params(),
+        );
+        assert_eq!(max_pain(&lignes, EcheanceNy(instant(ECHEANCES[0])), 110.0), None);
+    }
+
+    /// Le multiplicateur du contrat multiplie toutes les douleurs par le même
+    /// facteur : il ne peut pas déplacer le minimum, et le max pain n'en dépend
+    /// donc pas.
+    #[test]
+    fn le_max_pain_ne_depend_pas_du_multiplicateur() {
+        let chaine = chaine_essai();
+        let petit = analyser(
+            &chaine,
+            &Parametres {
+                taille_contrat: 1.0,
+                ..params()
+            },
+        )
+        .unwrap();
+        let grand = analyser(
+            &chaine,
+            &Parametres {
+                taille_contrat: 1_000.0,
+                ..params()
+            },
+        )
+        .unwrap();
+        assert_eq!(petit.max_pain, grand.max_pain);
+        assert!(petit.max_pain.is_some());
+    }
+
+    /// Une chaîne d'un seul strike, dont on choisit les greeks publiés.
+    fn chaine_greeks(
+        (delta_c, vega_c, theta_c, oi_c): (f64, f64, f64, f64),
+        (delta_p, vega_p, theta_p, oi_p): (f64, f64, f64, f64),
+    ) -> Chaine {
+        let releve = InstantReleve(instant("2026-08-25 20:30:00"));
+        let ligne = Ligne {
+            echeance: EcheanceNy(instant(ECHEANCES[0])),
+            strike: SPOT,
+            call: Cote {
+                iv: 0.20,
+                gamma: 1e-5,
+                delta: delta_c,
+                open_interest: oi_c,
+                vega: vega_c,
+                theta: theta_c,
+            },
+            put: Cote {
+                iv: 0.20,
+                gamma: 1e-5,
+                delta: delta_p,
+                open_interest: oi_p,
+                vega: vega_p,
+                theta: theta_p,
+            },
+        };
+        Chaine::nouvelle(vec![ligne], SPOT, releve).unwrap()
+    }
+
+    /// Le thêta du book suit la convention de signe du delta et du vega : long les
+    /// calls, court les puts.
+    ///
+    /// `(-10 × 100 − (−8 × 50)) × 20 = −12 000`. Le signe moins devant le put
+    /// n'est pas une faute : le thêta d'une option longue est négatif, donc en
+    /// être COURT rapporte, et c'est tout le sens du chiffre.
+    #[test]
+    fn le_theta_du_book_compte_les_puts_a_l_envers() {
+        let a = analyser(
+            &chaine_greeks((0.5, 12.0, -10.0, 100.0), (-0.5, 11.0, -8.0, 50.0)),
+            &params(),
+        )
+        .unwrap();
+        assert!((a.theta - (-12_000.0)).abs() < 1e-9, "thêta {}", a.theta);
+    }
+
+    /// Un book uniquement court des puts GAGNE du thêta : c'est la position du
+    /// vendeur d'options, et elle doit ressortir positive.
+    #[test]
+    fn un_book_court_des_puts_gagne_du_theta() {
+        let a = analyser(
+            &chaine_greeks((0.5, 12.0, -10.0, 0.0), (-0.5, 11.0, -8.0, 50.0)),
+            &params(),
+        )
+        .unwrap();
+        assert!((a.theta - 8_000.0).abs() < 1e-9, "thêta {}", a.theta);
+    }
+
+    /// Le delta est sans dimension et se met en dollars par le spot ; le vega et
+    /// le thêta sont déjà en unités de prix et ne le prennent pas. Confondre les
+    /// deux traitements multiplierait deux totaux sur trois par vingt-neuf mille.
+    #[test]
+    fn seul_le_delta_passe_par_le_spot() {
+        let a = analyser(
+            &chaine_greeks((0.5, 12.0, -10.0, 100.0), (0.0, 0.0, 0.0, 0.0)),
+            &params(),
+        )
+        .unwrap();
+        assert!((a.delta - 0.5 * 100.0 * TAILLE * SPOT).abs() < 1e-6, "delta {}", a.delta);
+        assert!((a.vega - 12.0 * 100.0 * TAILLE).abs() < 1e-9, "vega {}", a.vega);
+        assert!((a.theta + 10.0 * 100.0 * TAILLE).abs() < 1e-9, "thêta {}", a.theta);
+    }
+
+    /// Ces trois-là n'ont pas de repli recalculé : une source qui ne les publie
+    /// pas donne exactement zéro, et zéro se lirait comme « book neutre ».
+    #[test]
+    fn des_greeks_non_publies_se_signalent() {
+        let a = analyser(
+            &chaine_greeks((0.0, 0.0, 0.0, 100.0), (0.0, 0.0, 0.0, 50.0)),
+            &params(),
+        )
+        .unwrap();
+        assert_eq!(greeks_muets(&a), vec!["delta", "vega", "thêta"]);
+    }
+
+    /// Un seul absent se signale seul : la source peut servir le delta et taire
+    /// le thêta, et dire « les trois » serait faux.
+    #[test]
+    fn un_seul_greek_muet_ne_denonce_pas_les_autres() {
+        let a = analyser(
+            &chaine_greeks((0.5, 12.0, 0.0, 100.0), (-0.5, 11.0, 0.0, 50.0)),
+            &params(),
+        )
+        .unwrap();
+        assert_eq!(greeks_muets(&a), vec!["thêta"]);
+    }
+
+    /// Sans contrat ouvert, un total nul n'apprend rien : il n'y a rien à
+    /// signaler, et le crier ajouterait du bruit à un relevé déjà vide.
+    #[test]
+    fn sans_open_interest_rien_a_signaler() {
+        let a = analyser(
+            &chaine_greeks((0.5, 12.0, -10.0, 0.0), (-0.5, 11.0, -8.0, 0.0)),
+            &params(),
+        )
+        .unwrap();
+        assert!(greeks_muets(&a).is_empty());
     }
 
     /// La pente doit retrouver le skew injecté : -0,15 par unité de ln(K/S).

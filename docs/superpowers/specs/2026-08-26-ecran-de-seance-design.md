@@ -99,6 +99,56 @@ plus sensible ». C'est leur accord qui rend un niveau crédible.
 diminue de minute en minute, donc une bande tracée dans le passé montrerait un T
 qui n'était pas celui du moment. Elle ne vaut que pour maintenant.
 
+Elle est étiquetée « 2/3 · +114 » et non « +1σ ». Le sigma est du jargon, et un
+écran qui demande un glossaire n'informe pas : l'étiquette dit ce que la borne
+signifie — le marché price environ deux chances sur trois de rester dedans.
+
+**Toutes les bascules du régime, pas seulement celle qu'on retient.**
+`croisements` est une liste, et le gamma total change de signe plusieurs fois dès
+que les ailes sont chargées. N'en montrer qu'une se lit comme une bascule unique —
+au-dessus la couverture amortit, en dessous elle amplifie — ce qui est faux quand
+il y en a trois. Les autres sont tracées en trait fin, dans un orange assourdi qui
+les rattache au zero gamma sans les confondre avec lui.
+
+Ce sont les croisements du profil **peint**, donc les endroits exacts où le fond
+change de couleur : les traits nomment ce que le dégradé montre déjà. Une bascule
+à ±10 % du spot n'est pas dans le champ du fond, et l'écran ne prétend pas la
+connaître — le lecteur en ligne de commande, lui, va jusqu'à ±20 % et les nomme
+toutes.
+
+**Le max pain**, en série, contrairement aux deux précédents : il ne dépend pas du
+temps restant mais de l'open interest, et c'est sa **dérive** qui porte le sens. Un
+max pain immobile que le prix rejoint ne dit pas la même chose qu'un max pain qui
+se déplace vers le prix — le second signifie que des positions s'ouvrent.
+
+L'écran ne le présente pas comme une cible. Il est décrit dans la légende par ce
+qu'il est — « où les options de l'échéance proche valent le moins au règlement » —
+et non par ce qu'on lui prête.
+
+**Le flux et la position, dans deux panneaux distincts.** Le GEX, le charm et le
+vanna disent ce que la couverture oblige les teneurs de marché à acheter ou
+vendre. Le delta, le vega et le thêta disent ce que leur position **est**. Le
+thêta en particulier n'engendre aucun flux : il ne dit pas quoi faire, il dit ce
+que ne rien faire coûte. Les mélanger aux trois premiers laisserait croire qu'il
+agit — la séparation est la seule façon de le dire sans une note de bas de page.
+
+Ils occupent la rangée du bas en **deux demi-panneaux côte à côte**, avec la
+volatilité, plutôt qu'une rangée de plus : trois bandes supplémentaires ne
+valaient pas cent dix pixels de graphique de prix, qui reste le sujet. Un
+demi-panneau montre la même plage de temps, comprimée, et c'est la dérive qu'on y
+lit — pas une date.
+
+Ce partage a coûté deux défauts, tous deux dans la même zone et tous deux mesurés
+plutôt que devinés :
+
+- Un panneau de 800 px plafonne à 1 600 barres — la bibliothèque impose un demi-
+  pixel par barre au minimum — et rabote toute plage plus large. Tant que chaque
+  graphique écoutait les autres, ce rabot faisait autorité et ramenait le prix au
+  début de sa série. **Le prix conduit seul** désormais.
+- Un graphique dont toutes les séries sont vides accepte la largeur d'une plage et
+  en ignore la position. Le squelette qui aligne les axes porte donc une valeur
+  constante, invisible, au lieu de simples instants.
+
 ### Ce que l'écran ne fera pas
 
 **Pas de rejeu.** Le curseur se promène sur les trente jours de séries, mais le

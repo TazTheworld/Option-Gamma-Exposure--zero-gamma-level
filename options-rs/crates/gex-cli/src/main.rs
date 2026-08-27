@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, ValueEnum};
-use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser};
+use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser, greeks_muets};
 use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
 use gex_store::historique::{LigneHistorique, enregistrer};
@@ -255,8 +255,18 @@ fn echelle(valeurs: &[f64]) -> (f64, &'static str) {
         .fold(0.0_f64, |acc, v| acc.max(v.abs()));
     if pic >= 1e9 {
         (1e9, "milliards")
-    } else {
+    } else if pic >= 1e6 || pic == 0.0 {
+        // Zéro n'a pas d'ordre de grandeur : il garde le cran par défaut plutôt
+        // que de descendre pour un chiffre qui n'en est pas un. C'est aussi le
+        // cas d'une liste vide.
         (1e6, "millions")
+    } else {
+        // Le cran des milliers existe pour le vega et le thêta, qui sur NQ se
+        // comptent en centaines de milliers là où le GEX se compte en centaines
+        // de millions. Sans lui, ils s'affichaient « -0.10 millions » : deux
+        // décimales pour un chiffre qui en mérite trois, et une valeur qu'on lit
+        // comme nulle alors qu'elle ne l'est pas.
+        (1e3, "milliers")
     }
 }
 
@@ -328,6 +338,13 @@ fn afficher(a: &Analyse, produit: &str, args: &Arguments, dte_max: Option<i64>) 
         optionnel(a.murs.put, dec),
         optionnel(a.murs.put_oi, dec)
     );
+    // Max pain : le strike où les options de l'échéance la plus proche valent le
+    // moins au règlement. Une description de l'open interest, pas une prévision —
+    // le dépôt ne mesure nulle part que le prix y va.
+    println!(
+        "Max Pain   : {:>12} (échéance la plus proche)",
+        optionnel(a.max_pain, dec)
+    );
     // Charm : delta que les dealers doivent racheter (négatif) ou revendre
     // (positif) pour chaque jour qui passe, à prix inchangé.
     println!(
@@ -337,6 +354,29 @@ fn afficher(a: &Analyse, produit: &str, args: &Arguments, dte_max: Option<i64>) 
     println!(
         "Vanna      : {} {gunite} $ de delta / point de vol",
         groupe_signe(a.vanna / gech, 2)
+    );
+
+    // Le book lui-même, et non plus le flux qu'il engendre. Les trois précédents
+    // disent ce que les teneurs de marché doivent ACHETER OU VENDRE ; ces trois-ci
+    // disent ce que leur position EST. Deux échelles séparées : le delta dollar
+    // se compte en milliards quand le vega et le thêta se comptent en millions,
+    // et une échelle commune écraserait les seconds.
+    let (dech, dunite) = echelle(&[a.delta]);
+    let (bech, bunite) = echelle(&[a.vega, a.theta]);
+    println!(
+        "Delta      : {} {dunite} $ de sous-jacent",
+        groupe_signe(a.delta / dech, 2)
+    );
+    println!(
+        "Vega       : {} {bunite} $ / point de vol",
+        groupe_signe(a.vega / bech, 2)
+    );
+    // Thêta : ce que la seule fuite du temps retire au book, à prix et à vol
+    // inchangés. Seul des six à ne produire AUCUN flux de couverture — il ne dit
+    // pas quoi faire, il dit ce que ne rien faire coûte.
+    println!(
+        "Thêta      : {} {bunite} $ / jour",
+        groupe_signe(a.theta / bech, 2)
     );
 
     avertir(a, dec);
@@ -356,10 +396,37 @@ fn avertir(a: &Analyse, dec: usize) {
             groupe(a.niveaux[a.niveaux.len() - 1], dec)
         );
     } else if a.croisements.len() > 1 {
+        // Les nommer, pas seulement les compter : « croise 3 fois » laisse le
+        // lecteur avec un seul niveau en main et deux qu'il ne connaîtra jamais.
+        // Ce sont des niveaux comme le zero gamma retenu, et le régime bascule à
+        // chacun d'eux.
         println!(
-            "\nAttention : le profil croise zéro {} fois. Le niveau retenu est le plus \
-             proche du spot ; le régime n'est pas une simple bascule au-dessus / en dessous.",
-            a.croisements.len()
+            "\nAttention : le profil croise zéro {} fois — {}. Le niveau retenu est le plus \
+             proche du spot ({}) ;\nle régime n'est pas une simple bascule au-dessus / en dessous.",
+            a.croisements.len(),
+            a.croisements
+                .iter()
+                .map(|c| groupe(*c, dec))
+                .collect::<Vec<_>>()
+                .join(" / "),
+            optionnel(a.zero_gamma, dec)
+        );
+    }
+
+    // Le delta, le vega et le thêta n'ont pas de repli recalculé, contrairement au
+    // gamma : une source qui ne les publie pas donne exactement zéro, et zéro se
+    // lit comme « le book est neutre » là où la donnée dit « je n'en sais rien ».
+    let muets = greeks_muets(a);
+    if !muets.is_empty() {
+        let pluriel = muets.len() > 1;
+        println!(
+            "\nAttention : {} exactement nul{} sur {} strikes ouverts — la source ne {} publie \
+             pas.\nLe delta, le vega et le thêta n'ont aucun repli recalculé, contrairement au \
+             gamma :\nce n'est pas un book neutre, c'est une mesure absente.",
+            muets.join(", "),
+            if pluriel { "s" } else { "" },
+            groupe(a.par_strike.len() as f64, 0),
+            if pluriel { "les" } else { "le" },
         );
     }
 
@@ -617,11 +684,16 @@ mod tests {
         assert_eq!(groupe(0.5, 4), "0.5000");
     }
 
-    /// Un GEX de plusieurs milliards ne se lit pas en millions.
+    /// Un GEX de plusieurs milliards ne se lit pas en millions, et un vega de
+    /// quelques centaines de milliers ne se lit pas « -0.10 millions ».
     #[test]
     fn l_echelle_suit_l_ordre_de_grandeur() {
         assert_eq!(echelle(&[-2.16e9]).1, "milliards");
         assert_eq!(echelle(&[-3.57e8]).1, "millions");
+        assert_eq!(echelle(&[-9.68e4]).1, "milliers");
+        // Zéro n'a pas d'ordre de grandeur : il garde le cran par défaut, sinon
+        // un greek non publié changerait l'unité de la ligne qui l'affiche.
+        assert_eq!(echelle(&[0.0]).1, "millions");
         assert_eq!(echelle(&[]).1, "millions");
     }
 

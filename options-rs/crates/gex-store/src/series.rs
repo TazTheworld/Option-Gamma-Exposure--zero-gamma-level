@@ -67,6 +67,18 @@ pub struct PointNiveaux {
     pub charm: f64,
     /// Vanna totale.
     pub vanna: f64,
+    /// Delta, vega et thêta dollar du book, les trois greeks de POSITION.
+    ///
+    /// `Option` et non `f64` comme leurs voisins, pour une raison qui n'est pas
+    /// cosmétique : ils ne sont pas recalculés faute d'être publiés, et un fichier
+    /// écrit avant leur ajout n'en a aucune trace. Les relire à zéro dessinerait
+    /// une ligne plate qui se lit « le book était neutre » sur toute la séance
+    /// précédente. Vide veut dire vide.
+    pub delta: Option<f64>,
+    /// Vega dollar du book, par point de volatilité.
+    pub vega: Option<f64>,
+    /// Thêta dollar du book, par jour.
+    pub theta: Option<f64>,
     /// Mur call en gamma.
     pub call_wall: Option<f64>,
     /// Mur put en gamma.
@@ -83,6 +95,14 @@ pub struct PointNiveaux {
     pub iv_atm: Option<f64>,
     /// La pente du smile sur cette même échéance.
     pub skew: Option<f64>,
+    /// Le strike où les options de l'échéance la plus proche valent le moins au
+    /// règlement.
+    ///
+    /// Il dérive lentement : c'est l'open interest qui bouge, pas le prix. Une
+    /// série le montre là où un chiffre du jour ne dirait rien — un max pain qui
+    /// se déplace vers le spot n'a pas le même sens qu'un max pain immobile que
+    /// le prix rejoint.
+    pub max_pain: Option<f64>,
 }
 
 /// La minute a-t-elle changé depuis le dernier point écrit ?
@@ -248,6 +268,10 @@ pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), Erreu
             ("put_wall_oi", peut_etre(|p| p.put_wall_oi)),
             ("iv_atm", peut_etre(|p| p.iv_atm)),
             ("skew", peut_etre(|p| p.skew)),
+            ("max_pain", peut_etre(|p| p.max_pain)),
+            ("delta", peut_etre(|p| p.delta)),
+            ("vega", peut_etre(|p| p.vega)),
+            ("theta", peut_etre(|p| p.theta)),
         ],
     )?;
     ecrire_atomique(&lot, cible)
@@ -339,6 +363,10 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             "put_wall_oi",
             "iv_atm",
             "skew",
+            "max_pain",
+            "delta",
+            "vega",
+            "theta",
         ],
     )?;
     Ok(instants
@@ -359,6 +387,10 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             // alors None, et la serie reste lisible.
             iv_atm: c[9][i],
             skew: c[10][i],
+            max_pain: c[11][i],
+            delta: c[12][i],
+            vega: c[13][i],
+            theta: c[14][i],
         })
         .collect())
 }
@@ -395,6 +427,10 @@ mod tests {
             call_wall_oi: None,
             iv_atm: None,
             skew: None,
+            max_pain: Some(29_100.0),
+            delta: Some(15_470_400_000.0),
+            vega: Some(-962_400.0),
+            theta: Some(-1_204_000.0),
             put_wall_oi: Some(29_000.0),
         }
     }
@@ -550,6 +586,46 @@ mod tests {
         assert_eq!(relus[0].zero_gamma, None);
         assert_eq!(relus[0].call_wall, None);
         assert_eq!(relus[1].zero_gamma, Some(29_400.0));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Une série écrite avant l'ajout d'une colonne reste lisible.
+    ///
+    /// Les points déjà accumulés n'ont pas de max pain et n'en auront jamais : le
+    /// relevé qui les a produits n'existe plus. La relecture rend `None` pour
+    /// eux, et la séance en cours continue de s'écrire par-dessus — sans quoi un
+    /// ajout de mesure effacerait l'historique de celles d'avant.
+    #[test]
+    fn un_ancien_fichier_sans_la_colonne_reste_lisible() {
+        let d = dossier("gex-test-ancienne-colonne");
+        let cible = chemin_niveaux(&d, "NQ");
+        let p = point("2026-08-26 09:15:00", Some(29_400.0));
+
+        // Le schéma d'avant : tout sauf `max_pain`.
+        let ancien = lot(
+            vec![p.instant.and_utc().timestamp_micros()],
+            vec![
+                ("spot", vec![Some(p.spot)]),
+                ("zero_gamma", vec![p.zero_gamma]),
+                ("gex", vec![Some(p.gex)]),
+                ("charm", vec![Some(p.charm)]),
+                ("vanna", vec![Some(p.vanna)]),
+                ("call_wall", vec![p.call_wall]),
+                ("put_wall", vec![p.put_wall]),
+                ("call_wall_oi", vec![p.call_wall_oi]),
+                ("put_wall_oi", vec![p.put_wall_oi]),
+                ("iv_atm", vec![p.iv_atm]),
+                ("skew", vec![p.skew]),
+            ],
+        )
+        .unwrap();
+        ecrire_atomique(&ancien, &cible).unwrap();
+
+        let relus = lire_niveaux(&cible).unwrap();
+        assert_eq!(relus.len(), 1);
+        assert_eq!(relus[0].max_pain, None, "colonne absente, pas un zéro");
+        assert_eq!(relus[0].zero_gamma, Some(29_400.0), "le reste est intact");
+        assert_eq!(relus[0].put_wall_oi, p.put_wall_oi);
         let _ = std::fs::remove_dir_all(&d);
     }
 

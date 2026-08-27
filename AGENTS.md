@@ -31,6 +31,7 @@ net et déjà appliqué partout :
 | `analyser`, `murs`, `expositions`, `croisements_zero` | `build_chain`, `front_month` |
 | `charger`, `ecrire`, `archiver`, `fusionner` | `black76`, `TickType`, `Contract` |
 | `perimetre`, `selection_vif`, `temps_restant` | `StrikePrice`, `OpenInt`, `conId` |
+| `attendu_implicite`, `pente_skew`, `iv_atm` | `max_pain`, `black76` |
 
 Les commentaires et la documentation sont en français, **avec les accents**. Les
 noms de colonnes du fichier parquet suivent le format CBOE et restent en anglais.
@@ -203,6 +204,37 @@ donnée sur les strikes réellement morts.
 **Le seuil d'alerte à 5 %** sur l'écart entre sources, et **20 %** sur le poids des
 0-1 DTE. En dessous, l'écart est du bruit ; au-dessus, il change la lecture.
 
+**Les panneaux du bas de l'écran suivent le prix, ils ne le conduisent pas.** Ce n'est
+pas un choix d'ergonomie, c'est la correction d'un défaut mesuré. `lightweight-charts`
+impose un espacement minimal d'un demi-pixel par barre : un panneau de 800 px plafonne
+donc à 1 600 barres et **rabote** toute plage plus large. Avec une synchronisation où
+chacun écoutait les autres, ce rabot faisait autorité — le graphique du prix, qui porte
+2 736 barres, se retrouvait ramené au tout début de sa série, deux nuits plus tôt, à
+chaque chargement. La source est désormais le prix seul ; les suiveurs ont
+`handleScroll` et `handleScale` à `false` et ne peuvent plus répondre.
+
+**Un panneau dont toutes les séries sont vides refuse de se positionner.** Il accepte
+la largeur d'une plage et en ignore la position. Le squelette qui aligne les axes porte
+donc une **valeur** constante et non de simples instants : en « whitespace » pur, le
+panneau de la position du book restait deux nuits en arrière tant que le collecteur
+n'avait pas écrit son premier point. La série reste invisible, sur une échelle masquée :
+rien ne se dessine.
+
+**Le max pain sur une seule échéance.** La valeur intrinsèque ne se cristallise qu'au
+règlement, et deux échéances règlent deux jours différents : sommer leur douleur
+supposerait que le prix est le même les deux jours — exactement l'hypothèse que le calcul
+cherche à éclairer. C'est donc l'échéance la plus proche, comme pour l'IV ATM et le skew.
+
+Deux propriétés que les tests fixent, parce qu'elles surprennent :
+
+- **Le multiplicateur du contrat n'entre pas dans le calcul.** Il multiplie toutes les
+  douleurs par le même facteur et ne peut pas déplacer le minimum. L'y faire figurer
+  laisserait croire qu'il compte.
+- **La douleur peut être plate.** Calls posés sur le strike le plus bas, puts sur le plus
+  haut : tout est hors de la monnaie quel que soit le règlement envisagé, la somme vaut
+  zéro partout et le max pain ne désigne rien. Le départage par distance au spot rend
+  alors un strike stable — c'est une convention, pas une mesure, et le test le dit.
+
 **`--valider` refuse de conclure sous vingt observations.** Deux garde-fous sans
 lesquels la mesure se mesurerait elle-même : un périmètre à la fois — les enchaîner
 classerait le régime d'après un GEX qui change de signe rien qu'en changeant
@@ -223,6 +255,20 @@ Le corollaire vaut pour les séries : quand le marché ne cote pas, la série de
 niveaux **n'écrit rien** plutôt qu'un point à zéro. Une ligne plate se lirait comme
 « le gamma est nul » là où la donnée dit « je ne cote pas ». Les barres, elles,
 continuent : le future se traite la nuit.
+
+Même règle pour les greeks de position. **Le delta, le vega et le thêta ne sont jamais
+recalculés** — contrairement au gamma, qui a son repli en Black-76. Une source qui ne les
+publie pas donne donc un total d'exactement zéro, qui se lit « le book est neutre » là où
+la donnée dit « je n'en sais rien ». Exactement zéro sur des milliers de strikes ouverts
+n'arrive pas par compensation : [`greeks_muets`] le détecte, le lecteur et l'écran le
+disent. Dans la série, ces trois-là sont des `Option<f64>` et non des `f64` comme leurs
+voisins, pour la même raison : un fichier écrit avant leur ajout n'en a aucune trace, et
+les relire à zéro dessinerait une ligne plate sur toute la séance précédente.
+
+Et une bande vide de l'écran **le dit** — « aucun point écrit » — au lieu de rester
+muette. Muette, on la lit comme une mesure nulle.
+
+[`greeks_muets`]: options-rs/crates/gex-core/src/analyse.rs
 
 ## Le partage entre les deux .md
 
@@ -278,3 +324,12 @@ toujours, les noms de fichiers non.
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà
   une partie.
+- **Le max pain n'est pas validé.** Il est mesuré, stocké dans la série des niveaux
+  et affiché, mais `--valider` ne le confronte à rien : le « pinning » reste une
+  théorie que ce dépôt décrit sans la juger. Le mesurer demande une colonne
+  `max_pain` dans `history.csv`, et **ce n'est pas un simple ajout** :
+  `lire_historique` cherche bien ses colonnes par nom et tolère les absentes, mais
+  `enregistrer` n'écrit l'en-tête qu'à la création du fichier. Une colonne de plus
+  produirait donc des lignes à 26 champs sous un en-tête à 25 — perdues en silence.
+  Il faut d'abord traiter la migration de l'en-tête, puis écrire la quatrième
+  affirmation.

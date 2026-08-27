@@ -19,7 +19,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use clap::Parser;
-use gex_core::analyse::{Parametres, analyser};
+use gex_core::analyse::{Analyse, Parametres, analyser, greeks_muets};
 use gex_core::contrat::multiplicateur;
 use gex_store::series::{chemin_barres, chemin_niveaux};
 use gex_store::{chemin_courant, lire_releve};
@@ -85,6 +85,22 @@ struct Niveau {
     /// sur l'axe du sous-jacent.
     iv_atm: Option<f64>,
     skew: Option<f64>,
+    /// Le strike où les options de l'échéance la plus proche valent le moins au
+    /// règlement.
+    ///
+    /// Sa dérive porte plus que sa valeur : il ne bouge que quand l'open interest
+    /// bouge, donc quand quelqu'un ouvre ou ferme des positions.
+    max_pain: Option<f64>,
+    /// Les trois greeks de POSITION du book : ce qu'il est, et non le flux qu'il
+    /// engendre.
+    ///
+    /// Ils vont dans leur propre panneau, et jamais avec le GEX, le charm ou le
+    /// vanna : un delta dollar se compte en milliards quand un charm se compte en
+    /// millions, et le partage d'un axe fabriquerait des croisements qui ne
+    /// dépendent que de l'échelle.
+    delta: Option<f64>,
+    vega: Option<f64>,
+    theta: Option<f64>,
 }
 
 /// Le GEX d'un strike, à l'instant présent.
@@ -132,6 +148,24 @@ struct Profil {
     regime: Vec<PointProfil>,
     /// Le mouvement que le marché price d'ici l'échéance la plus proche.
     attendu: Option<f64>,
+    /// **Tous** les niveaux où le régime change de signe, pas seulement celui
+    /// qu'on retient.
+    ///
+    /// Le profil croise zéro plusieurs fois dès que les ailes sont chargées.
+    /// N'en montrer qu'un laissait croire à une bascule unique : au-dessus on
+    /// amortit, en dessous on amplifie. C'est faux quand il y en a trois, et le
+    /// lecteur en ligne de commande le signalait déjà sans les nommer.
+    ///
+    /// Ce sont les croisements du profil **peint**, donc de la même plage que
+    /// lui : une bascule à ±10 % du spot n'est pas dans le champ, et l'écran ne
+    /// prétend pas la connaître.
+    croisements: Vec<f64>,
+    /// Celui des croisements que l'écran retient : le plus proche du spot.
+    ///
+    /// La ligne orange du graphique vient de la série historique et non d'ici ;
+    /// ce champ sert à savoir lequel des croisements est déjà tracé, pour ne pas
+    /// le dessiner deux fois.
+    zero_gamma: Option<f64>,
 }
 
 /// Demi-plage du profil de régime, autour du spot.
@@ -145,6 +179,31 @@ const NIVEAUX_REGIME: usize = 160;
 
 fn erreur(message: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::SERVICE_UNAVAILABLE, message.to_string())
+}
+
+/// Le bandeau d'alerte de l'écran.
+///
+/// Le lecteur en ligne de commande signale les mêmes choses ; l'écran ne peut pas
+/// se contenter de moins sous prétexte qu'il est joli. Un book dont le delta, le
+/// vega ou le thêta valent exactement zéro n'est pas un book neutre : c'est une
+/// source qui ne les publie pas, et ces trois-là n'ont aucun repli recalculé.
+fn avertissement(analyse: &Analyse, cote: bool) -> Option<String> {
+    if !cote {
+        return Some("Aucun open interest dans le relevé : le marché ne cote pas.".to_string());
+    }
+    let muets = greeks_muets(analyse);
+    (!muets.is_empty()).then(|| {
+        let pluriel = muets.len() > 1;
+        format!(
+            "{} exactement nul{} sur {} strikes ouverts : la source ne {} publie pas. \
+             Ce n'est pas un book neutre, c'est une mesure absente — le delta, le vega et \
+             le thêta n'ont aucun repli recalculé, contrairement au gamma.",
+            muets.join(", "),
+            if pluriel { "s" } else { "" },
+            analyse.par_strike.len(),
+            if pluriel { "les" } else { "le" },
+        )
+    })
 }
 
 async fn barres(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -181,6 +240,10 @@ async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse
             put_wall_oi: p.put_wall_oi,
             iv_atm: p.iv_atm,
             skew: p.skew,
+            max_pain: p.max_pain,
+            delta: p.delta,
+            vega: p.vega,
+            theta: p.theta,
         })
         .collect();
     Ok(axum::Json(sortie))
@@ -208,6 +271,8 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             strikes: Vec::new(),
             regime: Vec::new(),
             attendu: None,
+            croisements: Vec::new(),
+            zero_gamma: None,
         }));
     }
 
@@ -255,9 +320,7 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             releve: Some(chaine.releve.0.and_utc().timestamp()),
             spot: Some(analyse.spot),
             strikes: strikes.len(),
-            avertissement: (!cote).then(|| {
-                "Aucun open interest dans le relevé : le marché ne cote pas.".to_string()
-            }),
+            avertissement: avertissement(&analyse, cote),
         },
         strikes,
         regime: analyse
@@ -270,6 +333,8 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             })
             .collect(),
         attendu: analyse.attendu,
+        croisements: analyse.croisements,
+        zero_gamma: analyse.zero_gamma,
     }))
 }
 
