@@ -138,16 +138,50 @@ valaient pas cent dix pixels de graphique de prix, qui reste le sujet. Un
 demi-panneau montre la même plage de temps, comprimée, et c'est la dérive qu'on y
 lit — pas une date.
 
-Ce partage a coûté deux défauts, tous deux dans la même zone et tous deux mesurés
-plutôt que devinés :
+### Ce que l'usage a fait jeter
+
+Trois graphiques de la bibliothèque pour les mesures du bas, de largeurs 1600,
+800 et 800 sous un prix de 1349. Rien n'était alignable verticalement : on ne
+pouvait pas descendre du regard d'un pic de prix vers ce qu'avait fait le GEX au
+même instant, ce qui est pourtant la seule raison d'empiler des panneaux. S'y
+ajoutaient trois filigranes, des étiquettes posées **sur** les courbes, des
+échelles invisibles — donc des courbes décoratives —, et des marges qui mangeaient
+plus des trois quarts de la hauteur de chaque bande.
+
+Remplacés par **une seule toile dessinée à la main**, dont les abscisses viennent
+de l'échelle de temps du prix. L'alignement devient exact par construction, à
+n'importe quel zoom. Les étiquettes vivent dans la gouttière de droite — les trois
+cents pixels qu'occupent l'échelle des prix et la colonne du profil — donc aucune
+ne croise plus jamais une courbe, et les courbes récupèrent toute la largeur.
+Chaque couloir a sa ligne de zéro, un remplissage jusqu'à elle, et une échelle
+recalculée sur ce qui est **visible** : zoomer agrandit vraiment.
+
+Le survol est venu avec : un trait vertical traverse le prix et les huit courbes,
+la gouttière affiche la valeur de l'instant pointé en face de chaque courbe, et la
+bulle suit le curseur.
+
+Cette bulle ne portait d'abord que le prix et les niveaux, pour ne pas répéter ce
+que la gouttière affichait déjà. **À l'usage c'était faux** : la gouttière est à
+huit cents pixels du curseur et personne ne fait le trajet du regard. Ce qu'on
+cherche doit être là où on pointe. Elle donne donc maintenant l'instant entier,
+les huit mesures comprises, dans les couleurs de leurs couloirs. La gouttière
+reste : elle est en face de *sa* courbe, donc elle répond à une autre question —
+« cette ligne-là, elle vaut combien ».
+
+Ce chantier a mis au jour quatre défauts, tous mesurés plutôt que devinés :
 
 - Un panneau de 800 px plafonne à 1 600 barres — la bibliothèque impose un demi-
   pixel par barre au minimum — et rabote toute plage plus large. Tant que chaque
   graphique écoutait les autres, ce rabot faisait autorité et ramenait le prix au
-  début de sa série. **Le prix conduit seul** désormais.
-- Un graphique dont toutes les séries sont vides accepte la largeur d'une plage et
-  en ignore la position. Le squelette qui aligne les axes porte donc une valeur
-  constante, invisible, au lieu de simples instants.
+  début de sa série. Le problème a disparu avec les panneaux.
+- La bibliothèque affiche l'heure **UTC** et rien d'autre : la bulle annonçait
+  20:05 sous un axe qui marquait 18:05, et l'en-tête donnait une troisième
+  lecture. Les instants sont décalés à l'entrée et remis à la sortie.
+- `timeToCoordinate` rend `null` pour un instant qu'aucune série ne porte : les
+  minutes sans transaction faisaient disparaître leurs points de niveaux.
+- Le cœur du charm — ses centiles 2 à 98 — n'occupait que 13 % de son étendue. Un
+  pic unique aplatissait la journée. L'échelle se borne au cœur, les excursions
+  sont marquées d'un chevron et comptées.
 
 ### Ce que l'écran ne fera pas
 
@@ -156,10 +190,44 @@ profil par strike reste celui de maintenant. Reconstituer un profil passé
 demanderait d'archiver la chaîne entière chaque minute, ce que la conception des
 séries a explicitement écarté.
 
-**Pas de réglages.** L'horizon, la source de gamma et la convention de temps sont
-des décisions qui changent le chiffre, et elles appartiennent à la ligne de
-commande où elles sont explicites. Un menu déroulant les rendrait invisibles dans
-une capture d'écran.
+**Presque pas de réglages.** La source de gamma et la convention de temps sont des
+décisions qui changent le chiffre, et elles restent à la ligne de commande où
+elles sont explicites. Un menu déroulant les rendrait invisibles dans une capture
+d'écran.
+
+L'horizon d'échéance, lui, a été rendu réglable après usage. Le souci d'origine
+était juste, la conclusion trop large : c'est l'**invisibilité** qui posait
+problème, pas le réglage. Des boutons dont l'actif reste allumé, et une note
+permanente qui dit sous quel horizon les tracés d'historique ont été calculés,
+font qu'une capture porte les deux informations.
+
+Il agit sur **tout** — le profil par strike, le fond de régime, la bande
+implicite, les chiffres de l'en-tête, et les tracés d'historique eux-mêmes.
+
+Ce dernier point n'allait pas de soi. La conception disait « pas de rejeu :
+reconstituer un profil passé demanderait d'archiver la chaîne entière chaque
+minute ». C'est vrai, et ça reste vrai pour le profil et le fond. Mais les
+**niveaux**, eux, n'ont pas besoin d'archive : il suffit de les calculer à chaque
+horizon **au moment où la chaîne est encore là**. Le collecteur écrit donc un
+point par horizon et par minute.
+
+Les chiffres qui tranchent : le relevé pèse 245 Ko, soit 353 Mo par jour si on
+l'archivait chaque minute — contre 29 Ko pour 385 points de niveaux, soit une
+quinzaine de méga-octets par mois pour quatre horizons. Cent fois moins cher, et
+ça répond exactement à la question posée.
+
+Sans cela, changer d'horizon ne déplaçait que ce qui se recalcule depuis le relevé
+courant : le profil et le fond bougeaient, le zero gamma et les murs non, et
+l'en-tête annonçait un mur là où le graphique n'en montrait aucun.
+
+La série porte donc sa colonne `dte_max`, comme l'historique CSV le faisait déjà —
+c'est elle qui distingue les points d'une même minute. Absente d'un fichier
+ancien, elle vaut `None`, ces points ne sont rangés sous aucun horizon, et l'écran
+dit « un seul, non enregistré » au lieu de supposer.
+
+Les boutons viennent de ce que la série **contient**, pas d'une liste écrite dans
+la page : les deux divergeraient, et l'écran proposerait des horizons dont aucune
+trace n'existe.
 
 **Rien en silence.** Le différé de quinze minutes est écrit à l'écran, pas
 supposé connu. Un relevé qui date, une série vide parce que le marché ne cote pas,

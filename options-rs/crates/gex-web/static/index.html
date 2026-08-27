@@ -13,6 +13,18 @@
 
 <header>
   <h1>NQ — gamma exposure</h1>
+  <!-- L'horizon d'echeance, en clair et non dans un menu.
+       La conception disait « pas de reglages a l'ecran : un menu deroulant les
+       rendrait invisibles dans une capture ». Le souci etait juste, la conclusion
+       trop large — c'est l'INVISIBILITE qui posait probleme, pas le reglage. Le
+       choix actif est donc toujours allume, et la note qui suit dit sous quel
+       horizon les traces d'historique ont ete calculees. Une capture porte les
+       deux. -->
+  <div class="horizon">
+    <span class="etiquette">horizon</span>
+    <span id="horizon-boutons"></span>
+    <span class="note" id="horizon-note"></span>
+  </div>
   <div class="mesure"><span class="etiquette">spot</span><span class="valeur" id="spot">—</span></div>
   <div class="mesure"><span class="etiquette">GEX</span><span class="valeur" id="gex">—</span></div>
   <div class="mesure"><span class="etiquette">zero gamma</span><span class="valeur" id="zg">—</span></div>
@@ -20,6 +32,12 @@
   <div class="mesure"><span class="etiquette">put wall</span><span class="valeur" id="pw">—</span></div>
   <div class="mesure"><span class="etiquette">max pain</span><span class="valeur" id="mp">—</span></div>
   <div class="mesure"><span class="etiquette">mouvement pricé</span><span class="valeur" id="sigma">—</span></div>
+  <!-- Deux horloges, parce qu'il y a deux sources et qu'elles ne s'arretent pas
+       ensemble. Les chandeliers naissent d'une TRANSACTION ; les niveaux
+       s'ecrivent a l'HORLOGE. Pendant l'arret technique du CME — 17 h a New
+       York — le sous-jacent ne traite pas, aucune barre n'apparait, et les
+       niveaux continuent tout seuls. Sans ces deux dates cote a cote, on lit
+       « les options sont en avance sur le prix ». -->
   <div class="fraicheur" id="fraicheur">—</div>
 </header>
 
@@ -35,29 +53,22 @@
     <div id="strikes"></div>
     <span class="axe-zero"></span>
   </section>
-  <section class="panneau" id="totaux">
-    <div class="piste" id="p-gex" style="top:6%"></div>
-    <div class="piste" id="p-charm" style="top:38%"></div>
-    <div class="piste" id="p-vanna" style="top:70%"></div>
+  <!-- Les huit mesures, dessinees a la main sur une seule toile.
+       Trois graphiques de largeurs differentes — 1600, 800, 800 — sous un prix
+       de 1349 ne s'alignaient sur rien : on ne pouvait pas descendre du regard
+       d'un pic de prix vers ce qu'avait fait le GEX, ce qui est pourtant tout
+       l'interet de panneaux empiles. Ici les x viennent de l'echelle de temps du
+       PRIX lui-meme, donc l'alignement est exact par construction, a n'importe
+       quel zoom. Meme methode que le fond de regime et le profil par strike. -->
+  <section class="panneau" id="bandes">
+    <canvas id="toile-bandes"></canvas>
   </section>
-  <!-- Deux panneaux cote a cote plutot que deux rangees de plus : trois bandes
-       supplementaires ne valaient pas cent dix pixels de graphique de prix. Un
-       demi-panneau montre la meme plage de temps, comprimee — et c'est la
-       DERIVE qu'on y lit, pas une date. -->
-  <div class="rangee">
-    <section class="panneau" id="book">
-      <span class="titre">position du book</span>
-      <div class="piste" id="p-delta" style="top:6%"></div>
-      <div class="piste" id="p-vega" style="top:38%"></div>
-      <div class="piste" id="p-theta" style="top:70%"></div>
-    </section>
-    <section class="panneau" id="vol">
-      <span class="titre">volatilité</span>
-      <div class="piste" id="p-iv" style="top:10%"></div>
-      <div class="piste" id="p-skew" style="top:58%"></div>
-    </section>
-  </div>
 </main>
+
+<!-- La bulle donne tout ce qui vaut a l'instant pointe : le cours, les niveaux
+     poses dessus, et les huit mesures. Elle suit le curseur, ou qu'il soit — le
+     graphique du prix comme la bande du bas. -->
+<div id="bulle" hidden></div>
 
 <footer>
   <span class="legende"><i class="pastille" style="background:#e0a458"></i> zero gamma</span>
@@ -68,10 +79,10 @@
   <span class="legende"><i class="pastille" style="background:#1d7268"></i><i class="pastille" style="background:#a13c39"></i> murs par open interest</span>
   <span class="legende"><i class="pastille" style="background:#3f4d63"></i> la bande où le marché price 2 chances sur 3 d'ici l'échéance (spot ± IV·√T)</span>
   <span class="legende"><i class="pastille pave" style="background:rgba(38,166,154,.35)"></i><i class="pastille pave" style="background:rgba(239,83,80,.35)"></i> fond : la couverture amortit / amplifie à ce niveau</span>
-  <span class="legende"><i class="pastille" style="background:#6b8cae"></i> charm</span>
-  <span class="legende"><i class="pastille" style="background:#9a7fb8"></i> vanna</span>
-  <span class="legende" title="Ce que le book EST, et non ce qu'il oblige à faire. Le thêta en particulier n'engendre aucun flux de couverture : il dit ce que ne rien faire coûte."><i class="pastille" style="background:#5fb3d9"></i><i class="pastille" style="background:#c98fd6"></i><i class="pastille" style="background:#cfc26b"></i> delta · vega · thêta — la position, pas le flux</span>
-  <span>chaque unité dans sa bande : elles ne se comparent pas entre elles</span>
+  <span class="legende"><i class="pastille pave" style="background:rgba(14,17,23,.75);outline:1px dashed #3d4658"></i> au-delà : les niveaux s'écrivent, le sous-jacent ne traite pas</span>
+  <span class="legende" title="Le collecteur écrit un point par horizon : les tracés suivent le bouton. Ces traits pleins ne servent que dans l'intervalle où la série n'a pas encore de point à l'horizon demandé.">traits pleins étiquetés « 1j », « 0DTE »… : l'horizon choisi n'a pas encore de tracé</span>
+  <span>chaque mesure a sa propre échelle : elles ne se comparent pas entre elles</span>
+  <span>survole n'importe où — prix ou bande : le trait traverse tout, la bulle donne l'instant entier</span>
   <span>données différées d'environ 15 minutes — ce n'est pas du temps réel</span>
 </footer>
 
@@ -84,6 +95,19 @@
 const RAFRAICHISSEMENT = 15000;   // le collecteur réécrit toutes les 15 s
 const PERIME = 300;               // au-delà, le relevé est visiblement vieux
 const MARGE_DROITE = 8;           // barres d'air à droite du dernier prix
+
+// L'axe de la bibliotheque affiche l'heure UTC et ne sait rien faire d'autre.
+// L'ecran, lui, se lit a l'heure de qui regarde : sans decalage, la bulle
+// annoncait 20:05 sous un axe qui marquait 18:05 — deux heures d'ecart pour le
+// meme pixel, et l'en-tete donnait encore une troisieme lecture. On decale donc
+// les instants a l'entree du graphique et on les remet a la sortie.
+//
+// Le decalage se calcule POUR CHAQUE instant et non une fois pour toutes : entre
+// juin et janvier il change d'une heure, et une serie de trente jours peut
+// traverser le changement. Le retour est exact partout sauf dans l'heure meme du
+// basculement, ou aucun choix ne l'est.
+const versEcran = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
+const depuisEcran = (t) => t + new Date(t * 1000).getTimezoneOffset() * 60;
 
 const commun = {
   layout: { background: { color: "rgba(0,0,0,0)" }, textColor: "#7d8794", fontSize: 11 },
@@ -186,6 +210,37 @@ const ligneMaxPain = gPrix.addLineSeries({ color: "#c2b280", lineWidth: 1, lineS
 // trace, qui est ce qui compte pour lui.
 let traitsCroisements = [];
 
+// Le filet de securite, et rien de plus.
+//
+// Les lignes du graphique — zero gamma, murs, max pain — viennent de la serie, et
+// le collecteur ecrit desormais un point PAR HORIZON : elles suivent donc le
+// bouton comme le profil et le fond. Ces traits horizontaux ne servent plus que
+// dans l'intervalle ou la serie n'a pas encore de point a l'horizon demande —
+// juste apres un demarrage, ou quand on regarde un horizon que le collecteur
+// vient d'ajouter. Sans eux, l'en-tete annoncerait un mur a 29 500 pendant que
+// le graphique n'en montrerait aucun.
+let traitsMaintenant = [];
+
+const nomHorizon = (dte) => dte === 0 ? "0DTE" : dte < 0 ? "tout" : dte + "j";
+
+function tracerMaintenant(m, memeHorizon, horizon) {
+  for (const l of traitsMaintenant) chandeliers.removePriceLine(l);
+  traitsMaintenant = [];
+  if (!m || memeHorizon) return;
+  const suffixe = " " + nomHorizon(horizon);
+  const poser = (valeur, couleur, titre) => {
+    if (valeur == null) return;
+    traitsMaintenant.push(chandeliers.createPriceLine({
+      price: valeur, color: couleur, lineWidth: 1, lineStyle: 0,
+      axisLabelVisible: true, title: titre + suffixe,
+    }));
+  };
+  poser(m.zero_gamma, "#e0a458", "zero gamma");
+  poser(m.call_wall, "#26a69a", "call wall");
+  poser(m.put_wall, "#ef5350", "put wall");
+  poser(m.max_pain, "#c2b280", "max pain");
+}
+
 function tracerCroisements(croisements, retenu) {
   for (const l of traitsCroisements) chandeliers.removePriceLine(l);
   traitsCroisements = [];
@@ -200,105 +255,16 @@ function tracerCroisements(croisements, retenu) {
   return autres.length;
 }
 
-// Un panneau du bas : pas d'axe des temps — celui du prix vaut pour tous —, pas
-// d'echelle de prix, puisque chaque bande a la sienne.
+// L'axe du temps du prix doit connaitre les instants des NIVEAUX, pas seulement
+// ceux des barres.
 //
-// Et pas de zoom ni de deplacement : ces panneaux SUIVENT le prix, ils ne le
-// conduisent pas. Ce n'est pas un confort, c'est ce qui empeche un bug mesure.
-// Un panneau de 800 px ne peut pas afficher 2 736 barres : l'espacement minimal
-// de la bibliotheque est d'un demi-pixel, donc il plafonne a 1 600 et RABOTE
-// toute plage plus large. Quand il pouvait repondre a la synchronisation, il
-// renvoyait ce rabot au graphique du prix — qui repartait au tout debut de la
-// serie, deux nuits plus tot, a chaque chargement.
-function panneauBas(id) {
-  return LightweightCharts.createChart(document.getElementById(id), {
-    ...commun,
-    timeScale: { ...commun.timeScale, visible: false },
-    rightPriceScale: { visible: false },
-    handleScroll: false,
-    handleScale: false,
-  });
-}
-
-// Les panneaux du bas n'ont qu'un point par minute cotee, les barres en ont des
-// milliers : synchroniser deux axes par INDICE revient alors a aligner le
-// centieme point de l'un sur le centieme de l'autre, qui ne sont pas au meme
-// instant. La vue partait ainsi sur la nuit precedente. Cette serie ne trace
-// rien : elle donne au panneau exactement les memes instants qu'au prix, et
-// l'indice redevient comparable.
-// Le squelette porte une VALEUR, pas seulement un instant. Une serie qui n'a que
-// des instants est du « whitespace » : elle etend bien l'axe, mais un graphique
-// dont TOUTES les series sont vides refuse de se positionner — il accepte la
-// largeur d'une plage et en ignore la position. Le panneau du book, seul a
-// n'avoir aucune mesure tant que le collecteur n'a pas ecrit son premier point,
-// restait alors deux nuits en arriere pendant que les trois autres suivaient le
-// prix. La valeur est constante et la serie invisible : rien ne se dessine, et
-// elle vit sur l'echelle de droite, elle-meme masquee.
-function squelette(graphique) {
-  return graphique.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
-}
-
-// Une bande = une serie sur son PROPRE axe, invisible, cale par ses marges. Et
-// NON plusieurs courbes sur un axe commun.
-//
-// Les grandeurs tracees ici n'ont pas la meme unite : le GEX est en dollars par
-// mouvement de 1 % du spot, le charm en dollars de delta par JOUR, le vanna en
-// dollars de delta par POINT DE VOL, le delta en dollars tout court. Sur un axe
-// partage, elles se croisent — et un croisement se lit comme un evenement alors
-// qu'il ne depend que du facteur d'echelle choisi ici. C'est un faux signal
-// fabrique par l'ecran.
-//
-// Les separer physiquement le supprime, sans rien perdre : ce qui compte pour
-// chacune est son SIGNE et sa DERIVE, tous deux intacts dans sa propre bande.
-function bande(graphique, id, couleur, titre, haut, bas, zero) {
-  const s = graphique.addLineSeries({
-    color: couleur,
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    title: titre,
-    priceScaleId: id,
-  });
-  graphique.priceScale(id).applyOptions({ scaleMargins: { top: haut, bottom: bas }, visible: false });
-  // Le zero, quand c'est le passage par zero qui change la lecture — pas la
-  // valeur absolue. L'IV et le skew ne changent jamais de signe : la ligne y
-  // serait du decor.
-  if (zero) {
-    s.createPriceLine({ price: 0, color: "#2c3442", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-  }
-  return s;
-}
-
-// Le FLUX : ce que la couverture oblige les teneurs de marche a acheter ou
-// vendre.
-const gTotaux = panneauBas("totaux");
-const squeletteTotaux = squelette(gTotaux);
-const sGex = bande(gTotaux, "gex", "#e0a458", "GEX", 0.06, 0.70, true);
-const sCharm = bande(gTotaux, "charm", "#6b8cae", "charm", 0.38, 0.38, true);
-const sVanna = bande(gTotaux, "vanna", "#9a7fb8", "vanna", 0.70, 0.06, true);
-
-// La POSITION : ce que le book EST, et non ce qu'il oblige a faire.
-//
-// La distinction n'est pas decorative. Le GEX, le charm et le vanna disent quoi
-// acheter ou vendre ; le delta, le vega et le theta disent seulement ce que la
-// position vaut et ce qu'elle coute. Le theta en particulier n'engendre AUCUN
-// flux de couverture — il ne dit pas quoi faire, il dit ce que ne rien faire
-// coute. Les melanger aux trois autres laisserait croire qu'il agit.
-const gBook = panneauBas("book");
-const squeletteBook = squelette(gBook);
-const sDelta = bande(gBook, "delta", "#5fb3d9", "delta", 0.06, 0.70, true);
-const sVega = bande(gBook, "vega", "#c98fd6", "vega", 0.38, 0.38, true);
-const sTheta = bande(gBook, "theta", "#cfc26b", "thêta", 0.70, 0.06, true);
-
-// L'IV et le skew sont des pourcentages : les mettre avec des dollars sur le
-// meme panneau reproduirait exactement le defaut qu'on vient de corriger.
-const gVol = panneauBas("vol");
-const squeletteVol = squelette(gVol);
-const sIv = bande(gVol, "iv", "#c9805e", "IV ATM", 0.12, 0.56, false);
-const sSkew = bande(gVol, "skew", "#7fa88a", "skew", 0.60, 0.08, false);
-
-// Le prix conduit, les trois autres suivent. Jamais l'inverse.
-synchroniser(gPrix, [gTotaux, gBook, gVol]);
+// Une barre nait d'une transaction ; un point de niveaux s'ecrit a l'horloge.
+// Pendant l'arret technique du CME le sous-jacent ne traite pas : trente-neuf
+// minutes de niveaux, aucune barre. `timeToCoordinate` rendait `null` pour ces
+// instants-la — ils disparaissaient purement et simplement de la bande. Cette
+// serie ne trace rien : elle ajoute leurs minutes a l'axe, et le trou se voit
+// alors pour ce qu'il est.
+const axeNiveaux = gPrix.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
 
 // Trois crans, pas deux. Le vega et le theta se comptent en centaines de
 // MILLIERS sur NQ la ou le GEX se compte en centaines de millions : sans le cran
@@ -313,68 +279,320 @@ const prix = (v) => v == null ? "—" : v.toLocaleString("fr-FR", { maximumFract
 
 const pourcent = (v) => v == null ? "—" : (v * 100).toFixed(2) + " %";
 
-const PISTES = [
-  { id: "p-gex", champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458", format: dollars },
-  { id: "p-charm", champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae", format: dollars },
-  { id: "p-vanna", champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8", format: dollars },
-  // Les trois du book partagent un demi-panneau : leurs unites tiennent en trois
-  // mots, et l'explication passe au survol. Une etiquette qui deborde recouvre la
-  // courbe qu'elle nomme.
-  { id: "p-delta", champ: "delta", nom: "delta", unite: "de sous-jacent", couleur: "#5fb3d9", format: dollars,
-    aide: "La direction du book dealer, en dollars de sous-jacent. Le charm en est la dérive par jour, le vanna la dérive par point de volatilité." },
-  { id: "p-vega", champ: "vega", nom: "vega", unite: "par point de vol", couleur: "#c98fd6", format: dollars,
-    aide: "Ce que le book gagne ou perd quand la volatilité implicite monte d'un point." },
-  { id: "p-theta", champ: "theta", nom: "thêta", unite: "par jour", couleur: "#cfc26b", format: dollars,
-    aide: "Ce que la seule fuite du temps retire au book, à prix et à volatilité inchangés. Le seul des six à n'obliger à aucune couverture : il ne dit pas quoi faire, il dit ce que ne rien faire coûte." },
-  { id: "p-iv", champ: "iv_atm", nom: "IV ATM", unite: "échéance la plus proche", couleur: "#c9805e", format: pourcent },
-  { id: "p-skew", champ: "skew", nom: "skew", unite: "dIV / d ln(K/S) — négatif = puts plus chers", couleur: "#7fa88a", format: (v) => v == null ? "—" : v.toFixed(3) },
+// Les huit mesures, groupees par CE QU'ELLES DISENT et non par commodite.
+//
+// Le flux est ce que la couverture oblige a acheter ou vendre. La position est
+// ce que le book EST. Le theta en particulier n'engendre aucun flux : il ne dit
+// pas quoi faire, il dit ce que ne rien faire coute. Les melanger laisserait
+// croire qu'il agit.
+//
+// `zero` dit si la ligne de zero a un sens. L'IV ne descend jamais sous zero et
+// le skew n'y monte jamais : la tracer chez eux serait du decor, et la forcer
+// dans l'echelle ecraserait la courbe dans un coin.
+const GROUPES = [
+  {
+    nom: "flux — ce que la couverture oblige à faire",
+    mesures: [
+      { champ: "gex", nom: "GEX", unite: "par mouvement de 1 %", couleur: "#e0a458", format: dollars },
+      { champ: "charm", nom: "charm", unite: "de delta / jour", couleur: "#6b8cae", format: dollars },
+      { champ: "vanna", nom: "vanna", unite: "de delta / point de vol", couleur: "#9a7fb8", format: dollars },
+    ],
+  },
+  {
+    nom: "position — ce que le book est",
+    mesures: [
+      { champ: "delta", nom: "delta", unite: "de sous-jacent", couleur: "#5fb3d9", format: dollars },
+      { champ: "vega", nom: "vega", unite: "par point de vol", couleur: "#c98fd6", format: dollars },
+      { champ: "theta", nom: "thêta", unite: "par jour", couleur: "#cfc26b", format: dollars },
+    ],
+  },
+  {
+    nom: "volatilité",
+    mesures: [
+      { champ: "iv_atm", nom: "IV ATM", unite: "échéance la plus proche", couleur: "#c9805e", format: pourcent },
+      { champ: "skew", nom: "skew", unite: "dIV / d ln(K/S)", couleur: "#7fa88a", format: (v) => v == null ? "—" : v.toFixed(3) },
+    ],
+  },
 ];
+const MESURES = GROUPES.flatMap((g) => g.mesures);
 
-// La valeur courante ET la plage de ce qui est trace : sans la plage, une ligne
-// qui monte ne dit pas de combien, et l'echelle d'une bande n'est pas celle des
-// deux autres.
-function etiqueterPistes(niveaux) {
-  for (const piste of PISTES) {
-    const noeud = document.getElementById(piste.id);
-    // Le nom porte l'explication au survol : l'etiquette d'un demi-panneau n'a
-    // pas la place de la dire en clair, et la taire serait pire.
-    const nom = '<b style="color:' + piste.couleur + '"'
-      + (piste.aide ? ' title="' + piste.aide.replace(/"/g, "&quot;") + '"' : "")
-      + ">" + piste.nom + "</b>";
+// --- La bande des mesures -------------------------------------------------
+//
+// Dessinee a la main, et non par la bibliotheque. Trois graphiques de largeurs
+// differentes ne s'alignaient sur rien ; ici les x viennent de l'echelle de
+// temps du PRIX, donc une minute tombe au meme pixel dans les chandeliers et
+// dans les huit courbes. C'est ce qui permet de descendre du regard d'un pic de
+// prix vers ce que le GEX a fait au meme instant.
+//
+// Le prix reserve sa droite a son echelle, et le profil occupe la colonne
+// suivante : ces trois cents pixels sont la GOUTTIERE. Les etiquettes y vivent,
+// hors du trace. Elles s'ecrivaient avant PAR-DESSUS les courbes, ce qui rendait
+// les deux illisibles a la fois.
 
-    const v = niveaux.map((n) => n[piste.champ]).filter((x) => x != null);
-    // Une bande vide se DIT. Muette, elle se lit comme une mesure nulle, alors
-    // qu'elle veut dire que rien n'a encore ete ecrit — ce qui est le cas des
-    // trois greeks du book tant que le collecteur n'a pas boucle son balayage.
-    if (!v.length) {
-      noeud.innerHTML = nom + '<span class="u">aucun point écrit</span>';
-      continue;
+const toileBandes = document.getElementById("toile-bandes");
+const MARGE_BANDES = 6;      // air en haut et en bas de la toile
+const TITRE_GROUPE = 14;     // hauteur du bandeau d'un groupe
+const GOUTTIERE_AIR = 14;    // ecart entre la fin du trace et le texte
+
+let niveauxCourants = [];
+let barresCourantes = [];
+let instantSurvole = null;   // l'instant sous la souris, ou null
+
+/// La droite du trace, en pixels : la ou l'echelle des prix commence.
+function bordDuTrace() {
+  const panneau = document.getElementById("prix");
+  let echelle = 66;
+  try { echelle = gPrix.priceScale("right").width(); } catch (e) { /* defaut */ }
+  return Math.max(40, panneau.clientWidth - echelle);
+}
+
+/// Le point de niveaux le plus proche d'un instant, s'il n'est pas trop loin.
+function niveauA(instant) {
+  if (instant == null || !niveauxCourants.length) return null;
+  let meilleur = null;
+  for (const p of niveauxCourants) {
+    if (meilleur === null || Math.abs(p.time - instant) < Math.abs(meilleur.time - instant)) {
+      meilleur = p;
     }
-    const bas = Math.min.apply(null, v);
-    const haut = Math.max.apply(null, v);
-    const dernier = v[v.length - 1];
-    noeud.innerHTML =
-      nom
-      + '<span class="v ' + (dernier < 0 ? "negatif" : "positif") + '">' + piste.format(dernier) + "</span>"
-      + '<span class="u">' + piste.unite + "</span>"
-      + '<span class="p">' + piste.format(bas) + " → " + piste.format(haut) + "</span>";
+  }
+  // Au-dela de cinq minutes ce n'est plus « le point d'ici », c'est un autre
+  // moment : mieux vaut ne rien montrer que montrer a cote.
+  return meilleur && Math.abs(meilleur.time - instant) <= 300 ? meilleur : null;
+}
+
+function dessinerBandes() {
+  const panneau = document.getElementById("bandes");
+  const large = panneau.clientWidth;
+  const haut = panneau.clientHeight;
+  if (!large || !haut) return;
+
+  // Le texte a besoin de la vraie densite de pixels, sinon il bave. Les aplats
+  // du fond de regime s'en passaient ; pas des lettres.
+  const dpr = window.devicePixelRatio || 1;
+  if (toileBandes.width !== Math.round(large * dpr) || toileBandes.height !== Math.round(haut * dpr)) {
+    toileBandes.width = Math.round(large * dpr);
+    toileBandes.height = Math.round(haut * dpr);
+    toileBandes.style.width = large + "px";
+    toileBandes.style.height = haut + "px";
+  }
+  const ctx = toileBandes.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, large, haut);
+
+  const droite = bordDuTrace();
+  const gx = droite + GOUTTIERE_AIR;                 // debut de la gouttiere
+  const gLarge = Math.max(120, large - gx - 12);
+
+  const rang = (haut - 2 * MARGE_BANDES - GROUPES.length * TITRE_GROUPE) / MESURES.length;
+  if (rang < 12) return;
+
+  const ts = gPrix.timeScale();
+  const x = (t) => ts.timeToCoordinate(versEcran(t));
+
+  // La derniere transaction : au-dela, le prix ne cote plus mais les niveaux
+  // continuent de s'ecrire a l'horloge. Le dire ici evite de lire « les options
+  // sont en avance sur le prix ».
+  const finBarres = barresCourantes.length ? barresCourantes[barresCourantes.length - 1].time : null;
+  const xFin = finBarres == null ? null : x(finBarres);
+
+  const survoleX = instantSurvole == null ? null : x(instantSurvole);
+
+  let y = MARGE_BANDES;
+  let rangs = 0;
+  for (const groupe of GROUPES) {
+    // Le bandeau du groupe : un filet sur toute la largeur, le nom dans la
+    // gouttiere. Le nom dans le trace croiserait les courbes.
+    ctx.strokeStyle = "#212836";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y + TITRE_GROUPE / 2) + 0.5);
+    ctx.lineTo(large - 12, Math.round(y + TITRE_GROUPE / 2) + 0.5);
+    ctx.stroke();
+    ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = "#0e1117";
+    const largeurNom = ctx.measureText(groupe.nom.toUpperCase()).width;
+    ctx.fillRect(gx - 5, y, largeurNom + 10, TITRE_GROUPE);
+    ctx.fillStyle = "#6b7688";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillText(groupe.nom.toUpperCase(), gx, y + TITRE_GROUPE / 2 + 1);
+    y += TITRE_GROUPE;
+
+    for (const mesure of groupe.mesures) {
+      // Un couloir sur deux legerement plus clair. Huit courbes empilees sans
+      // rien pour les separer se lisent comme un seul enchevetrement ; la teinte
+      // est trop faible pour se voir, juste assez pour que la ligne se voie.
+      if (rangs % 2 === 1) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.016)";
+        ctx.fillRect(0, y, large - 12, rang);
+      }
+      rangs++;
+      dessinerRang(ctx, mesure, y, rang, droite, gx, gLarge, x);
+      y += rang;
+    }
+  }
+
+  // Le voile de la zone sans transaction, puis le trait, puis le guide du
+  // survol : dans cet ordre, pour que rien ne recouvre le trait qu'on cherche.
+  if (xFin != null && xFin < droite - 1) {
+    ctx.fillStyle = "rgba(14, 17, 23, 0.55)";
+    ctx.fillRect(xFin, 0, droite - xFin, haut);
+    ctx.strokeStyle = "#3d4658";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(Math.round(xFin) + 0.5, 0);
+    ctx.lineTo(Math.round(xFin) + 0.5, haut);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (survoleX != null && survoleX >= 0 && survoleX <= droite) {
+    ctx.strokeStyle = "#6b7688";
+    ctx.beginPath();
+    ctx.moveTo(Math.round(survoleX) + 0.5, 0);
+    ctx.lineTo(Math.round(survoleX) + 0.5, haut);
+    ctx.stroke();
   }
 }
 
-// Tous les graphiques partagent le même axe : les séries sont à la minute
-// partout, c'est tout l'intérêt de les avoir écrites ainsi.
-//
-// **Un seul conduit.** Faire écouter tout le monde paraissait plus symétrique et
-// créait une boucle : un panneau qui ne peut pas honorer une plage renvoie celle
-// qu'il a retenue, et cette réponse fait autorité pour les autres. Un demi-panneau
-// de 800 px plafonne à 1 600 barres — il ramenait ainsi les 2 736 barres du prix
-// à sa propre limite, au tout début de la série. Ici la source est le prix, elle
-// n'écoute personne, et il n'y a plus de retour possible.
-function synchroniser(maitre, suiveurs) {
-  maitre.timeScale().subscribeVisibleLogicalRangeChange((plage) => {
-    if (!plage) return;
-    for (const cible of suiveurs) cible.timeScale().setVisibleLogicalRange(plage);
-  });
+/// Une ligne : la courbe a gauche, son etiquette dans la gouttiere a droite.
+function dessinerRang(ctx, mesure, y, rang, droite, gx, gLarge, x) {
+  const haut = y + 3;
+  const bas = y + rang - 3;
+
+  // Seuls les points VISIBLES fixent l'echelle. Prendre toute la serie
+  // reduirait une seance calme a un trait plat des qu'une autre a ete agitee ;
+  // ici, zoomer agrandit vraiment.
+  const points = [];
+  for (const p of niveauxCourants) {
+    const v = p[mesure.champ];
+    if (v == null) continue;
+    const px = x(p.time);
+    if (px == null || px < -20 || px > droite + 20) continue;
+    points.push({ x: px, v });
+  }
+
+  ctx.textBaseline = "middle";
+  if (!points.length) {
+    // Un couloir vide se DIT. Muet, il se lit comme une mesure nulle alors qu'il
+    // veut dire tout autre chose — et il y a deux « autre chose » a ne pas
+    // confondre : la mesure n'a jamais ete ecrite, ou elle l'a ete ailleurs dans
+    // la seance et le zoom l'a laissee dehors. Les mots ne sont pas les memes.
+    const ailleurs = niveauxCourants.some((p) => p[mesure.champ] != null);
+    etiquette(ctx, mesure, gx, gLarge, y, rang, null,
+              ailleurs ? "hors de la fenêtre" : "aucun point écrit");
+    return;
+  }
+
+  const tries = points.map((p) => p.v).sort((a, b) => a - b);
+  const vrai = { bas: tries[0], haut: tries[tries.length - 1] };
+  const centile = (p) => tries[Math.min(tries.length - 1, Math.floor(p * tries.length))];
+
+  // L'echelle sur le COEUR de la distribution, pas sur ses extremes.
+  //
+  // Mesure sur une seance : le coeur du charm — ses centiles 2 a 98 — n'occupait
+  // que 13 % de son etendue totale. Un unique pic de -17 Md$ aplatissait donc
+  // toute la journee en un trait colle au bord. Borner l'echelle la rend lisible.
+  //
+  // Mais on ne le fait pas en silence : les points qui sortent sont rognes au
+  // bord du couloir, chacun marque d'un chevron, et comptes dans la gouttiere a
+  // cote de l'etendue VRAIE. Rogner sans le dire effacerait le pic, ce qui serait
+  // pire que de l'aplatir.
+  const coeur = { bas: centile(0.02), haut: centile(0.98) };
+  const rogne = coeur.haut > coeur.bas
+    && (coeur.haut - coeur.bas) < (vrai.haut - vrai.bas) * 0.5;
+  let bas0 = rogne ? coeur.bas : vrai.bas;
+  let haut0 = rogne ? coeur.haut : vrai.haut;
+
+  // Zero n'entre dans l'echelle que si les valeurs le TRAVERSENT. L'y forcer
+  // quand elles restent d'un cote — le charm est negatif toute la journee —
+  // coutait quatre-vingt-dix pour cent du couloir pour une ligne qu'on sait deja
+  // ou est. Quand il n'y est pas, c'est le remplissage qui dit de quel cote : il
+  // s'ancre au bord du couloir tourne VERS zero.
+  const traverse = bas0 < 0 && haut0 > 0;
+  if (haut0 === bas0) { haut0 += Math.abs(haut0) * 0.05 + 1; bas0 -= Math.abs(bas0) * 0.05 + 1; }
+  const marge = (haut0 - bas0) * 0.12;
+  bas0 -= marge;
+  haut0 += marge;
+  const py = (v) => bas - ((v - bas0) / (haut0 - bas0)) * (bas - haut);
+  const borne = (v) => Math.max(haut, Math.min(bas, py(v)));
+  const socle = traverse ? py(0) : (haut0 <= 0 ? haut : bas);
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, socle);
+  for (const p of points) ctx.lineTo(p.x, borne(p.v));
+  ctx.lineTo(points[points.length - 1].x, socle);
+  ctx.closePath();
+  ctx.fillStyle = mesure.couleur + "2e";
+  ctx.fill();
+
+  if (traverse) {
+    ctx.strokeStyle = "#2c3442";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(socle) + 0.5);
+    ctx.lineTo(droite, Math.round(socle) + 0.5);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = mesure.couleur;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  points.forEach((p, i) => (i ? ctx.lineTo(p.x, borne(p.v)) : ctx.moveTo(p.x, borne(p.v))));
+  ctx.stroke();
+
+  // Les chevrons : un par point sorti du cadre, au bord qu'il a franchi.
+  let dehors = 0;
+  ctx.fillStyle = mesure.couleur;
+  for (const p of points) {
+    const brut = py(p.v);
+    if (brut >= haut && brut <= bas) continue;
+    dehors++;
+    const vers = brut < haut ? 1 : -1;          // 1 = sorti par le haut
+    const yb = vers > 0 ? haut + 1 : bas - 1;
+    ctx.beginPath();
+    ctx.moveTo(p.x, yb - vers * 3);
+    ctx.lineTo(p.x - 2.5, yb);
+    ctx.lineTo(p.x + 2.5, yb);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  const dernier = points[points.length - 1];
+  ctx.beginPath();
+  ctx.arc(dernier.x, borne(dernier.v), 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // La valeur affichee suit la souris. Sans survol, c'est la derniere.
+  const point = instantSurvole == null ? null : niveauA(instantSurvole);
+  const valeur = point ? point[mesure.champ] : dernier.v;
+  const etendue = mesure.format(vrai.bas) + " → " + mesure.format(vrai.haut);
+  etiquette(ctx, mesure, gx, gLarge, y, rang, valeur,
+            etendue + (dehors ? "  · " + dehors + " hors cadre" : ""));
+}
+
+/// Le nom, la valeur et l'unite d'une ligne, dans la gouttiere.
+function etiquette(ctx, mesure, gx, gLarge, y, rang, valeur, dessous) {
+  const milieu = y + rang / 2;
+  ctx.textAlign = "left";
+  ctx.font = "700 10px ui-sans-serif, system-ui, sans-serif";
+  ctx.fillStyle = mesure.couleur;
+  ctx.fillText(mesure.nom, gx, milieu - 6);
+
+  ctx.textAlign = "right";
+  ctx.font = "600 11.5px ui-sans-serif, system-ui, sans-serif";
+  ctx.fillStyle = valeur == null ? "#7d8794" : valeur < 0 ? "#ef5350" : "#26a69a";
+  ctx.fillText(valeur == null ? "—" : mesure.format(valeur), gx + gLarge, milieu - 6);
+
+  ctx.textAlign = "left";
+  ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+  ctx.fillStyle = "#6b7688";
+  ctx.fillText(mesure.unite, gx, milieu + 7);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#4d5666";
+  ctx.fillText(dessous, gx + gLarge, milieu + 7);
 }
 
 function ecrire(id, texte, valeur, titre) {
@@ -391,6 +609,208 @@ async function json(route) {
   if (!reponse.ok) throw new Error(await reponse.text());
   return reponse.json();
 }
+
+// --- L'horizon d'echeance -------------------------------------------------
+//
+// Il ne change pas le chiffre a la marge : sur un indice, la chaine entiere et le
+// 0-7 DTE donnent des GEX de SIGNES OPPOSES pour la meme seance. Mesure sur ce
+// releve : 72,2 M$ a un jour, 223,5 M$ a sept, 234,2 M$ sur tout.
+//
+// Il n'agit que sur MAINTENANT — le profil par strike, le fond de regime, la
+// bande implicite, les bascules, et les chiffres de l'en-tete. Les traces
+// d'historique gardent celui du collecteur : leur chaine d'origine n'est pas
+// archivee, donc elles ne peuvent pas etre recalculees. La note a cote des
+// boutons le dit, et s'allume quand les deux different.
+// Ce que veut dire chaque horizon. La LISTE, elle, ne vient pas d'ici : elle
+// vient de ce que la serie contient reellement, sinon les deux divergeraient et
+// l'ecran proposerait des horizons sans historique.
+const SENS_HORIZON = {
+  0: "Les options qui expirent aujourd'hui. Leur gamma explose près du règlement — et leurs greeks sont les plus instables sur des données différées.",
+  1: "Aujourd'hui et demain.",
+  7: "La semaine. Au-delà, les échéances lointaines dominent les murs sans produire de flux de couverture à court terme.",
+  30: "Le mois. C'est le défaut du lecteur en ligne de commande.",
+};
+
+// `null` tant qu'on n'a pas lu la serie.
+let horizonChoisi = null;
+// Ceux que la serie contient. Vide = fichier ecrit avant que le collecteur ne
+// les enregistre : un seul horizon, inconnu.
+let horizonsConnus = [];
+
+function poserHorizons(dispo, servi) {
+  const change = dispo.join(",") !== horizonsConnus.join(",");
+  horizonsConnus = dispo;
+  // Un horizon choisi qui n'existe plus — le collecteur a redemarre avec un
+  // autre `--dte-max` — laisserait tous les boutons eteints. On retombe sur ce
+  // que le serveur a servi.
+  if (horizonChoisi === null || (dispo.length && !dispo.includes(horizonChoisi))) {
+    horizonChoisi = servi;
+  }
+  if (!change && document.querySelector("#horizon-boutons button")) { marquerHorizon(); return; }
+
+  const boite = document.getElementById("horizon-boutons");
+  if (!dispo.length) {
+    // Rien a proposer : la serie ne dit pas sous quel horizon elle a ete
+    // calculee. Un bouton laisserait croire qu'on peut en changer.
+    boite.innerHTML = '<span class="aucun">un seul, non enregistré</span>';
+    return;
+  }
+  boite.innerHTML = dispo
+    .map((h) => '<button data-dte="' + h + '" title="'
+      + (SENS_HORIZON[h] || "Horizon suivi par le collecteur.").replace(/"/g, "&quot;")
+      + '">' + nomHorizon(h) + "</button>")
+    .join("");
+  for (const b of boite.querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      horizonChoisi = Number(b.dataset.dte);
+      marquerHorizon();
+      rafraichir();
+    });
+  }
+  marquerHorizon();
+}
+
+function marquerHorizon() {
+  for (const b of document.querySelectorAll("#horizon-boutons button")) {
+    b.classList.toggle("actif", Number(b.dataset.dte) === horizonChoisi);
+  }
+}
+
+// Ce que la note dit, et quand elle s'allume.
+//
+// Le cas normal a disparu : le collecteur ecrit desormais un point par horizon,
+// donc les traces SUIVENT le bouton et il n'y a plus rien a signaler. Restent
+// deux cas ou l'ecran doit parler — une serie d'avant, qui ne nomme pas son
+// horizon, et un horizon que la serie ne porte pas encore.
+function noterHorizon(serie) {
+  const noeud = document.getElementById("horizon-note");
+  if (!horizonsConnus.length) {
+    // Une seule courbe, d'horizon inconnu, et aucun bouton pour en changer :
+    // rien ne PEUT differer, donc rien a signaler et aucun trait a ajouter.
+    noeud.textContent = "tracés : horizon du collecteur, non enregistré";
+    noeud.classList.remove("different");
+    return true;
+  }
+  const suivi = serie.horizon != null && serie.horizon === horizonChoisi;
+  noeud.textContent = suivi ? "tracés : le même" : "tracés : pas encore écrits à cet horizon";
+  noeud.classList.toggle("different", !suivi);
+  return suivi;
+}
+
+// --- Le survol ------------------------------------------------------------
+//
+// Un seul instant survole pour tout l'ecran, quelle que soit la zone pointee.
+// Le trait vertical traverse le prix et les huit courbes, la gouttiere affiche
+// la valeur de CET instant, et la bulle donne TOUT ce qui vaut a cet instant :
+// le cours, les niveaux poses dessus, et les huit mesures.
+//
+// Elle ne portait d'abord que le prix, pour ne pas repeter ce que la gouttiere
+// affichait deja. A l'usage c'est faux : la gouttiere est a huit cents pixels du
+// curseur, et personne ne fait le trajet du regard. Ce qu'on cherche doit etre
+// la ou on pointe. La gouttiere reste, elle : elle est en face de SA courbe,
+// donc elle repond a une autre question — « cette ligne-la, elle vaut combien ».
+
+const bulle = document.getElementById("bulle");
+const parInstant = new Map();   // instant -> barre
+
+function survoler(instant, page) {
+  if (instant == null) { quitterSurvol(); return; }
+  instantSurvole = instant;
+  derniereEmpreinte = "";   // forcer le redessin du guide
+
+  const b = parInstant.get(instant);
+  const n = niveauA(instant);
+  if (!b && !n) { quitterSurvol(); return; }
+
+  const quand = new Date(instant * 1000).toLocaleString("fr-FR", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  const ligne = (nom, valeur, couleur) =>
+    '<div class="l"><span class="n"' + (couleur ? ' style="color:' + couleur + '"' : "")
+    + ">" + nom + '</span><span class="v">' + valeur + "</span></div>";
+
+  let html = '<div class="quand">' + quand + "</div>";
+  if (b) {
+    const sens = b.close >= b.open ? "positif" : "negatif";
+    html += ligne("cours", '<b class="' + sens + '">' + prix(b.close) + "</b>")
+          + ligne("haut / bas", prix(b.high) + " / " + prix(b.low));
+  } else {
+    // Pas de barre a cette minute : le sous-jacent n'a pas traite. C'est
+    // l'explication du decalage, elle se dit la ou on la cherche.
+    html += '<div class="rien">aucune transaction à cette minute</div>';
+  }
+  if (n) {
+    html += '<div class="sep"></div>'
+          + ligne("zero gamma", prix(n.zero_gamma), "#e0a458")
+          + ligne("call wall", prix(n.call_wall), "#26a69a")
+          + ligne("put wall", prix(n.put_wall), "#ef5350")
+          + ligne("max pain", prix(n.max_pain), "#c2b280");
+
+    // Les huit mesures, groupees comme dans la bande et dans les memes couleurs :
+    // c'est ce qui rattache chaque ligne de la bulle a son couloir sans avoir a
+    // le dire.
+    for (const groupe of GROUPES) {
+      html += '<div class="sep"></div>';
+      for (const m of groupe.mesures) {
+        const v = n[m.champ];
+        html += ligne(m.nom, v == null ? "—" : m.format(v), m.couleur);
+      }
+    }
+  }
+  bulle.innerHTML = html;
+  bulle.hidden = false;
+
+  // Basculer du cote oppose quand on approche du bord : une bulle coupee ne se
+  // lit pas, et une bulle sous le curseur cache ce qu'on regarde.
+  const l = bulle.offsetWidth;
+  const h = bulle.offsetHeight;
+  const gauche = page.x + 18 + l > window.innerWidth ? page.x - 18 - l : page.x + 18;
+  const sommet = page.y + 14 + h > window.innerHeight ? page.y - 14 - h : page.y + 14;
+  bulle.style.left = Math.max(4, gauche) + "px";
+  bulle.style.top = Math.max(4, sommet) + "px";
+}
+
+function quitterSurvol() {
+  if (instantSurvole !== null) derniereEmpreinte = "";
+  instantSurvole = null;
+  bulle.hidden = true;
+}
+
+// Le prix envoie l'instant DE SON AXE : on le remet a l'heure des donnees.
+//
+// Le drapeau coupe la boucle : survoler la bande pose le curseur du prix, ce qui
+// declenche cet abonnement, qui rappellerait `survoler`. Sans lui, deux
+// gestionnaires se renvoient la main a chaque mouvement de souris.
+let enSurvol = false;
+gPrix.subscribeCrosshairMove((p) => {
+  if (enSurvol) return;
+  if (!p || !p.time || !p.point) { quitterSurvol(); return; }
+  const boite = document.getElementById("prix").getBoundingClientRect();
+  survoler(depuisEcran(p.time), { x: boite.left + p.point.x, y: boite.top + p.point.y });
+});
+
+// La bande n'est pas un graphique de la bibliotheque : elle traduit elle-meme
+// son abscisse en instant, avec l'echelle du prix. Et elle pose le curseur du
+// prix, pour que le trait traverse VRAIMENT tout l'ecran — c'est la seule raison
+// d'empiler des panneaux.
+toileBandes.addEventListener("mousemove", (e) => {
+  const boite = toileBandes.getBoundingClientRect();
+  const ecran = gPrix.timeScale().coordinateToTime(e.clientX - boite.left);
+  if (ecran == null) { quitterSurvol(); return; }
+  const t = depuisEcran(ecran);
+  survoler(t, { x: e.clientX, y: e.clientY });
+  const b = parInstant.get(t);
+  enSurvol = true;
+  try {
+    if (b) gPrix.setCrosshairPosition(b.close, ecran, chandeliers);
+    else gPrix.clearCrosshairPosition();
+  } finally { enSurvol = false; }
+});
+toileBandes.addEventListener("mouseleave", () => {
+  quitterSurvol();
+  enSurvol = true;
+  try { gPrix.clearCrosshairPosition(); } finally { enSurvol = false; }
+});
 
 // --- Le profil par strike -------------------------------------------------
 //
@@ -457,18 +877,30 @@ function dessinerProfil() {
 
 // Redessiner quand le graphique bouge. lightweight-charts n'émet rien sur son
 // échelle de PRIX — un zoom vertical ou un glissement ne préviennent pas. On
-// compare donc les coordonnées à chaque image : deux conversions par image, et
-// le rendu ne se refait que si quelque chose a réellement bougé.
+// compare donc les coordonnées à chaque image : quelques conversions par image,
+// et le rendu ne se refait que si quelque chose a réellement bougé.
+//
+// L'empreinte porte les DEUX axes. Le profil et le régime ne dépendent que de
+// l'échelle des prix, la bande des mesures que de celle du temps : ne surveiller
+// que la première laissait la bande figée pendant qu'on se déplaçait dans la
+// séance.
 function surveiller() {
-  if (profilCourant.length) {
-    const a = chandeliers.priceToCoordinate(profilCourant[0].strike);
-    const b = chandeliers.priceToCoordinate(profilCourant[profilCourant.length - 1].strike);
-    const empreinte = a + "|" + b + "|" + noeudStrikes.clientHeight;
-    if (empreinte !== derniereEmpreinte) {
-      derniereEmpreinte = empreinte;
-      dessinerProfil();
-      peindreRegime();
-    }
+  const p = document.getElementById("prix");
+  const plage = gPrix.timeScale().getVisibleLogicalRange();
+  const a = profilCourant.length ? chandeliers.priceToCoordinate(profilCourant[0].strike) : 0;
+  const b = profilCourant.length
+    ? chandeliers.priceToCoordinate(profilCourant[profilCourant.length - 1].strike) : 0;
+  const empreinte = [
+    a, b, noeudStrikes.clientHeight, p.clientWidth, p.clientHeight,
+    plage ? plage.from.toFixed(2) + ":" + plage.to.toFixed(2) : "-",
+    instantSurvole,
+  ].join("|");
+
+  if (empreinte !== derniereEmpreinte) {
+    derniereEmpreinte = empreinte;
+    dessinerProfil();
+    peindreRegime();
+    dessinerBandes();
   }
   requestAnimationFrame(surveiller);
 }
@@ -514,19 +946,49 @@ function peindreRegime() {
       : "rgba(239, 83, 80, " + force + ")";
     ctx.fillRect(0, a.y, l, Math.max(1, b.y - a.y));
   }
+
+  // La zone sans transaction, voilee ici aussi. Il n'y a aucun chandelier pour
+  // la couvrir, donc le voile se voit — et le fond de regime cesse d'y suggerer
+  // un marche qui vit alors que le sous-jacent ne traite pas.
+  const fin = barresCourantes.length ? barresCourantes[barresCourantes.length - 1].time : null;
+  const xFin = fin == null ? null : gPrix.timeScale().timeToCoordinate(versEcran(fin));
+  const bord = bordDuTrace();
+  if (xFin != null && xFin < bord - 1) {
+    ctx.fillStyle = "rgba(14, 17, 23, 0.55)";
+    ctx.fillRect(xFin, 0, bord - xFin, h);
+  }
 }
 
 // --- La fraîcheur ---------------------------------------------------------
 
+// Deux horloges, parce qu'il y a deux sources et qu'elles ne s'arrêtent pas
+// ensemble. Une barre naît d'une TRANSACTION, un point de niveaux s'écrit à
+// l'HORLOGE : pendant l'arrêt technique du CME — 17 h à New York — le
+// sous-jacent ne traite pas, aucun chandelier n'apparaît, et les niveaux
+// continuent tout seuls. Mesuré sur une séance : 39 points de niveaux sans
+// aucune barre, tous entre 21:06 et 21:44 UTC, avec deux valeurs de spot
+// distinctes en 39 minutes. Sans ces deux dates côte à côte, l'écran se lit
+// « les options sont en avance sur le prix ».
 function fraicheur(etat) {
   const noeud = document.getElementById("fraicheur");
   if (!etat.releve) { noeud.textContent = "aucun relevé"; noeud.classList.add("perime"); return; }
   const age = Math.round(Date.now() / 1000 - etat.releve);
-  const quand = new Date(etat.releve * 1000).toLocaleTimeString("fr-FR");
-  noeud.textContent = "relevé " + quand + " · il y a " + age + " s · " + etat.strikes + " strikes";
+  const heure = (t) => new Date(t * 1000).toLocaleTimeString("fr-FR");
+  const fin = barresCourantes.length ? barresCourantes[barresCourantes.length - 1].time : null;
+  const retard = fin == null ? null : Math.round((etat.releve - fin) / 60);
+
+  let texte = "relevé " + heure(etat.releve) + " · il y a " + age + " s · " + etat.strikes + " strikes";
+  if (fin != null) {
+    texte += "\ndernière transaction " + heure(fin);
+    // Deux minutes, c'est la barre en cours qui n'est pas close. Au-dela, le
+    // sous-jacent ne traite plus et il faut le dire, pas le laisser deviner.
+    if (retard >= 3) texte += " — " + retard + " min sans cotation du sous-jacent";
+  }
+  noeud.textContent = texte;
   // Vieillir visiblement quand le collecteur s'arrête : sans ça, un écran figé
   // se lit comme un marché calme.
   noeud.classList.toggle("perime", age > PERIME);
+  noeud.classList.toggle("decale", retard != null && retard >= 3);
 }
 
 function avertir(message) {
@@ -582,35 +1044,40 @@ function cadrer(barres, niveaux) {
     ? niveaux[0].time - Math.max(fin - niveaux[0].time, 1800) * 0.3
     : fin - 6 * 3600;
   gPrix.timeScale().setVisibleRange({
-    from: Math.max(Math.round(depuis), barres[0].time),
-    to: fin,
+    from: versEcran(Math.max(Math.round(depuis), barres[0].time)),
+    to: versEcran(fin),
   });
   gPrix.timeScale().scrollToRealTime();
 }
 
 async function rafraichir() {
   try {
-    const [barres, niveaux, profil] = await Promise.all([
-      json("/api/barres"), json("/api/niveaux"), json("/api/profil"),
+    const suffixe = horizonChoisi === null ? "" : "?dte_max=" + horizonChoisi;
+    const [barres, serieNiveaux, profil] = await Promise.all([
+      json("/api/barres"),
+      json("/api/niveaux" + suffixe),
+      json("/api/profil" + suffixe),
     ]);
+    // Les boutons viennent de ce que la SERIE contient, pas d'une liste ecrite
+    // ici : les deux divergeraient, et l'ecran proposerait des horizons dont
+    // aucune trace n'existe. Et c'est l'horizon RETENU par le serveur qui allume
+    // le bouton, pas celui demande — l'ecran montre ce qui a ete fait.
+    poserHorizons(serieNiveaux.horizons, serieNiveaux.horizon);
+    const niveaux = serieNiveaux.points;
 
-    poser("barres", chandeliers, barres);
-    // Les memes instants, sans valeur : c'est ce qui rend les deux axes
-    // comparables point par point.
-    // Un tableau NEUF par serie plutot que le meme partage entre les trois :
-    // `setData()` garde ce qu'on lui donne par reference, et trois series qui
-    // pointent sur le meme tableau dependent alors les unes des autres sans que
-    // rien ne le dise.
-    const instants = () => barres.map((b) => ({ time: b.time, value: 0 }));
-    poser("squelette-totaux", squeletteTotaux, instants());
-    poser("squelette-book", squeletteBook, instants());
-    poser("squelette-vol", squeletteVol, instants());
+    poser("barres", chandeliers, barres.map((b) => ({
+      time: versEcran(b.time), open: b.open, high: b.high, low: b.low, close: b.close,
+    })));
+    // Les minutes des NIVEAUX ajoutees a l'axe. Sans elles, les instants ou le
+    // sous-jacent n'a pas traite n'ont aucune coordonnee, et les points de
+    // niveaux qui s'y trouvent disparaissent de la bande sans un mot.
+    poser("axe-niveaux", axeNiveaux, niveaux.map((n) => ({ time: versEcran(n.time) })));
 
     // Une valeur absente ne se trace pas : relier deux points de part et
     // d'autre d'un trou inventerait un niveau qui n'a jamais existé.
     const serie = (champ) => niveaux
       .filter((n) => n[champ] != null)
-      .map((n) => ({ time: n.time, value: n[champ] }));
+      .map((n) => ({ time: versEcran(n.time), value: n[champ] }));
 
     poser("zg", ligneZg, serie("zero_gamma"));
     poser("cw", ligneCw, serie("call_wall"));
@@ -618,51 +1085,43 @@ async function rafraichir() {
     poser("cwoi", ligneCwOi, serie("call_wall_oi"));
     poser("pwoi", lignePwOi, serie("put_wall_oi"));
     poser("maxpain", ligneMaxPain, serie("max_pain"));
-    poser("iv", sIv, serie("iv_atm"));
-    poser("skew", sSkew, serie("skew"));
 
-    poser("gex", sGex, serie("gex"));
-    poser("charm", sCharm, serie("charm"));
-    poser("vanna", sVanna, serie("vanna"));
-
-    poser("delta", sDelta, serie("delta"));
-    poser("vega", sVega, serie("vega"));
-    poser("theta", sTheta, serie("theta"));
+    // La bande dessine les huit mesures elle-meme : elle a besoin des series
+    // brutes, pas d'objets de la bibliotheque.
+    niveauxCourants = niveaux;
+    barresCourantes = barres;
+    parInstant.clear();
+    for (const b of barres) parInstant.set(b.time, b);
 
     // Le cadrage n'a lieu qu'une fois. Ensuite la vue appartient a qui regarde.
     if (premierRendu && barres.length) { cadrer(barres, niveaux); premierRendu = false; }
 
-    // Rattraper les suiveurs. Un panneau encore vide au moment du cadrage ne
-    // l'a pas suivi — il n'avait rien a cadrer —, et il resterait ensuite sur
-    // une autre periode que les trois autres : des lignes de grille a des heures
-    // qui ne sont pas celles du prix. C'est le cas du book tant que le
-    // collecteur n'a pas ecrit son premier point.
-    //
-    // Repousser la plage du MAITRE est idempotent : c'est exactement celle que
-    // le lecteur a choisie en zoomant, et la renvoyer ne la deplace pas.
-    const cadre = gPrix.timeScale().getVisibleLogicalRange();
-    if (cadre) {
-      for (const g of [gTotaux, gBook, gVol]) g.timeScale().setVisibleLogicalRange(cadre);
-    }
-
     const dernier = niveaux[niveaux.length - 1];
     const spot = profil.etat.spot ?? dernier?.spot ?? null;
     ecrire("spot", prix(spot));
-    ecrire("gex", dollars(dernier?.gex), dernier?.gex);
-    ecrire("cw", prix(dernier?.call_wall));
-    ecrire("pw", prix(dernier?.put_wall));
-    ecrire("mp", prix(dernier?.max_pain));
+    const memeHorizon = noterHorizon(serieNiveaux);
+
+    // Les chiffres de l'en-tete decrivent MAINTENANT, donc ils viennent du relevé
+    // courant recalculé a l'horizon choisi — et non de la serie, qui est figee a
+    // celui du collecteur. Sans cela, cliquer « 0DTE » ne changeait rien a
+    // l'en-tete alors que le GEX passe de 234 a 72 M$.
+    const m = profil.maintenant;
+    ecrire("gex", dollars(m?.gex), m?.gex);
+    ecrire("cw", prix(m?.call_wall));
+    ecrire("pw", prix(m?.put_wall));
+    ecrire("mp", prix(m?.max_pain));
 
     profilCourant = profil.strikes;
     regimeCourant = profil.regime;
     tracerBande(profil.etat.spot, profil.attendu);
+    tracerMaintenant(m, memeHorizon, horizonChoisi);
 
     // Le compte des AUTRES bascules, a cote du niveau retenu : sans lui, un
     // regime qui croise trois fois se lit comme un regime qui croise une fois.
     const autres = tracerCroisements(profil.croisements, profil.zero_gamma);
     ecrire(
       "zg",
-      prix(dernier?.zero_gamma) + (autres ? "  +" + autres : ""),
+      prix(m?.zero_gamma) + (autres ? "  +" + autres : ""),
       null,
       autres
         ? "Le profil croise zéro " + (autres + 1) + " fois : "
@@ -673,7 +1132,6 @@ async function rafraichir() {
     ecrire("sigma", profil.attendu == null ? "—" : "± " + Math.round(profil.attendu) + " pts");
     spotCourant = spot;
     derniereEmpreinte = "";   // forcer le redessin sur les nouvelles valeurs
-    etiqueterPistes(niveaux);
     fraicheur(profil.etat);
     avertir(profil.etat.avertissement);
   } catch (err) {

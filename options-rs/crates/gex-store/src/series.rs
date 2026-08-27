@@ -79,6 +79,17 @@ pub struct PointNiveaux {
     pub vega: Option<f64>,
     /// Thêta dollar du book, par jour.
     pub theta: Option<f64>,
+    /// L'horizon d'échéance sous lequel ce point a été calculé, en jours.
+    ///
+    /// La série devient ainsi **auto-descriptive**, comme l'historique CSV qui
+    /// porte déjà sa colonne `dte_max`. Sans elle, un écran qui laisse choisir un
+    /// horizon ne peut pas dire sous quel horizon la trace a été tracée — et deux
+    /// relevés d'horizons différents ne sont pas comparables : sur un indice, la
+    /// chaîne entière et le 0–7 DTE donnent des GEX de signes opposés.
+    ///
+    /// `None` sur les fichiers écrits avant son ajout. Le collecteur écrit
+    /// toujours un nombre : son `--dte-max` n'a pas de variante « toutes ».
+    pub dte_max: Option<f64>,
     /// Mur call en gamma.
     pub call_wall: Option<f64>,
     /// Mur put en gamma.
@@ -272,6 +283,7 @@ pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), Erreu
             ("delta", peut_etre(|p| p.delta)),
             ("vega", peut_etre(|p| p.vega)),
             ("theta", peut_etre(|p| p.theta)),
+            ("dte_max", peut_etre(|p| p.dte_max)),
         ],
     )?;
     ecrire_atomique(&lot, cible)
@@ -367,6 +379,7 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             "delta",
             "vega",
             "theta",
+            "dte_max",
         ],
     )?;
     Ok(instants
@@ -391,6 +404,7 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             delta: c[12][i],
             vega: c[13][i],
             theta: c[14][i],
+            dte_max: c[15][i],
         })
         .collect())
 }
@@ -431,6 +445,7 @@ mod tests {
             delta: Some(15_470_400_000.0),
             vega: Some(-962_400.0),
             theta: Some(-1_204_000.0),
+            dte_max: Some(30.0),
             put_wall_oi: Some(29_000.0),
         }
     }
@@ -624,6 +639,11 @@ mod tests {
         let relus = lire_niveaux(&cible).unwrap();
         assert_eq!(relus.len(), 1);
         assert_eq!(relus[0].max_pain, None, "colonne absente, pas un zéro");
+        assert_eq!(relus[0].delta, None);
+        assert_eq!(relus[0].theta, None);
+        // L'horizon inconnu doit rester inconnu : l'écran dit « non enregistré »
+        // plutôt que de supposer celui qu'il affiche lui-même.
+        assert_eq!(relus[0].dte_max, None, "horizon inconnu, pas supposé");
         assert_eq!(relus[0].zero_gamma, Some(29_400.0), "le reste est intact");
         assert_eq!(relus[0].put_wall_oi, p.put_wall_oi);
         let _ = std::fs::remove_dir_all(&d);

@@ -116,11 +116,52 @@ arriverait *si* le prix allait là.
 À droite, le **GEX par strike**, en barres posées à la hauteur exacte de leur strike sur
 l'axe des prix : quand le cours bouge, le profil bouge avec.
 
-En bas, les séries temporelles, **chacune dans sa bande**, groupées par ce qu'elles
-disent : le **flux** que la couverture impose (GEX, charm, vanna), la **position** du book
-(delta, vega, thêta), et la **volatilité** (IV ATM, skew). Elles ne partagent pas d'axe —
-ce sont huit unités différentes, et un croisement entre deux d'entre elles ne voudrait rien
+En bas, les huit mesures, **chacune dans son couloir**, groupées par ce qu'elles disent :
+le **flux** que la couverture impose (GEX, charm, vanna), la **position** du book (delta,
+vega, thêta), et la **volatilité** (IV ATM, skew). Elles ne partagent pas d'échelle — ce
+sont huit unités différentes, et un croisement entre deux d'entre elles ne voudrait rien
 dire.
+
+Cette bande est **dessinée à la main**, et ses abscisses viennent de l'échelle de temps du
+graphique de prix : une minute tombe donc au même pixel dans les chandeliers et dans les
+huit courbes, à n'importe quel zoom. C'est ce qui permet de descendre du regard d'un pic de
+prix vers ce que le GEX a fait au même instant — la seule raison d'empiler des panneaux.
+Les étiquettes vivent dans la gouttière de droite, jamais par-dessus les courbes.
+
+**Survole n'importe où** — le graphique de prix comme la bande du bas : un trait vertical
+traverse tout, la gouttière affiche la valeur de cet instant en face de chaque courbe, et
+une bulle suit le curseur avec l'instant entier — cours, haut/bas, zero gamma, murs, max
+pain et les huit mesures.
+
+**L'horizon d'échéance se change d'un clic** : `0DTE · 1j · 7j · 30j · tout`. Ce n'est pas
+un détail de confort — sur le même relevé, le GEX vaut 72,2 M$ à un jour, 223,5 M$ à sept
+et 234,2 M$ sur toute la chaîne, et le zero gamma se déplace de soixante points.
+
+**Tout suit le bouton** — le profil par strike, le fond de régime, la bande implicite, les
+chiffres de l'en-tête, et les tracés d'historique eux-mêmes.
+
+Ce dernier point demande que le collecteur travaille un peu plus : il écrit **un point par
+horizon et par minute** au lieu d'un seul. La chaîne n'est sous la main qu'à cet
+instant-là — une fois le relevé suivant écrit, celle-ci n'existe plus nulle part. Calculer
+tout de suite ce que chaque horizon en dit coûte quelques millisecondes et une quinzaine de
+méga-octets par mois ; le reconstituer après coup demanderait d'archiver la chaîne entière
+chaque minute, soit **353 Mo par jour** au format actuel.
+
+Les boutons ne sont pas une liste écrite à l'avance : ils viennent de ce que la série
+contient réellement. Un horizon sans historique ne peut donc pas être proposé, et un
+fichier écrit avant cette version affiche « un seul, non enregistré » plutôt qu'un choix
+qui n'existe pas.
+
+> Si tu veux vraiment rejouer une séance passée sous n'importe quel paramètre — pas
+> seulement l'horizon, mais aussi la source de gamma ou le régime de volatilité —, le
+> collecteur sait archiver la chaîne : `--archiver 300` en écrit une toutes les cinq
+> minutes, soit 2,1 Go sur trente jours. Désactivé par défaut.
+>
+> Elles ont leur **propre** fenêtre glissante, `--retention-archives`, séparée de celle des
+> séries : trente jours de niveaux pèsent une quinzaine de méga-octets, trente jours
+> d'archives à la minute en pèsent dix mille, et un chiffre unique obligeait à sacrifier
+> l'un pour borner l'autre. Le coût réel est annoncé à la première archive écrite, mesuré
+> sur elle.
 
 > Flux et position ne sont pas la même chose. Le GEX, le charm et le vanna disent ce que
 > les teneurs de marché doivent **acheter ou vendre** ; le delta, le vega et le thêta
@@ -137,6 +178,23 @@ est servie depuis le disque, pas depuis un CDN, pour que l'écran marche sans r�
 > L'horodatage du dernier relevé est affiché **en permanence**, et vieillit visiblement
 > quand le collecteur s'arrête. Un écran qui a l'air vivant alors qu'il est figé est pire
 > qu'un écran vide.
+
+## « Les options sont en avance sur le prix »
+
+Elles ne le sont pas : c'est le **prix qui s'arrête**. Un chandelier naît d'une
+transaction, un point de niveaux s'écrit à l'horloge. Pendant l'arrêt technique quotidien
+du CME — 17 h à New York — le sous-jacent ne traite pas, aucune barre n'apparaît, et le
+collecteur continue d'écrire un point par minute.
+
+Mesuré sur une séance : **39 points de niveaux sans aucune barre**, tous entre 21:06 et
+21:44 UTC, avec deux valeurs de spot distinctes en 39 minutes. En dehors de ce bloc, aucun
+orphelin. Et en cherchant le retard qui minimise l'écart entre le spot des niveaux et la
+clôture des barres, le minimum tombe à **1 minute** — le temps qu'une barre se ferme. Les
+deux séries sont donc bien alignées ; le différé n'y est pour rien.
+
+L'écran le dit plutôt que de le laisser deviner : l'en-tête porte **deux horloges** — le
+relevé et la dernière transaction —, et la zone où le sous-jacent ne cote plus est voilée
+sur le graphique comme sur la bande.
 
 ## Les choix qui changent le chiffre
 

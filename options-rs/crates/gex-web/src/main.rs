@@ -101,6 +101,12 @@ struct Niveau {
     delta: Option<f64>,
     vega: Option<f64>,
     theta: Option<f64>,
+    /// L'horizon sous lequel ce point a été calculé.
+    ///
+    /// L'écran laisse choisir le sien pour l'instant présent ; il a besoin de
+    /// celui-ci pour dire sous quel horizon la TRACE, elle, a été tracée. Deux
+    /// horizons différents ne sont pas comparables.
+    dte_max: Option<f64>,
 }
 
 /// Le GEX d'un strike, à l'instant présent.
@@ -127,6 +133,29 @@ struct Etat {
     strikes: usize,
     /// Le message à afficher quand quelque chose cloche.
     avertissement: Option<String>,
+}
+
+/// Ce que le relevé courant vaut **à l'horizon choisi**.
+///
+/// Ces mêmes grandeurs existent dans la série des niveaux, mais figées à
+/// l'horizon du collecteur. Elles sont recalculées ici parce que l'horizon change
+/// le chiffre, et pas à la marge : sur un indice, la chaîne entière et le 0–7 DTE
+/// donnent des GEX de **signes opposés** pour la même séance.
+#[derive(Serialize)]
+struct Maintenant {
+    gex: f64,
+    zero_gamma: Option<f64>,
+    call_wall: Option<f64>,
+    put_wall: Option<f64>,
+    max_pain: Option<f64>,
+}
+
+/// L'horizon demandé par l'écran.
+#[derive(serde::Deserialize, Debug, Clone, Copy, Default)]
+struct Horizon {
+    /// Jours d'échéance au maximum. Absent : celui de la ligne de commande.
+    /// `-1` : toutes les échéances.
+    dte_max: Option<i64>,
 }
 
 /// Le GEX à un niveau de prix hypothétique.
@@ -166,6 +195,13 @@ struct Profil {
     /// ce champ sert à savoir lequel des croisements est déjà tracé, pour ne pas
     /// le dessiner deux fois.
     zero_gamma: Option<f64>,
+    /// Les chiffres du relevé courant, à l'horizon retenu.
+    maintenant: Option<Maintenant>,
+    /// L'horizon effectivement appliqué, en jours. `None` = toutes les échéances.
+    ///
+    /// Renvoyé et non déduit : l'écran affiche ce que le serveur a **fait**, pas
+    /// ce qu'il a demandé. Un horizon refusé ou corrigé se verrait.
+    horizon: Option<i64>,
 }
 
 /// Demi-plage du profil de régime, autour du spot.
@@ -179,6 +215,31 @@ const NIVEAUX_REGIME: usize = 160;
 
 fn erreur(message: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::SERVICE_UNAVAILABLE, message.to_string())
+}
+
+/// Lequel des horizons présents servir.
+///
+/// Le plus long par défaut : c'est celui du collecteur, et le plus complet. Un
+/// horizon demandé qui n'est pas dans le fichier est **ignoré** plutôt
+/// qu'obéi — servir un tableau vide se lirait comme « rien ne cotait », alors
+/// que la donnée existe, à un autre horizon.
+fn horizon_servi(horizons: &[i64], demande: Option<i64>) -> Option<i64> {
+    if horizons.is_empty() {
+        return None;
+    }
+    demande
+        .filter(|h| horizons.contains(h))
+        .or_else(|| horizons.last().copied())
+}
+
+/// L'horizon dit en toutes lettres, pour les messages.
+fn nom_horizon(jours: Option<i64>) -> String {
+    match jours {
+        None => "toutes échéances".to_string(),
+        Some(0) => "0 jour (0DTE)".to_string(),
+        Some(1) => "1 jour".to_string(),
+        Some(n) => format!("{n} jours"),
+    }
 }
 
 /// Le bandeau d'alerte de l'écran.
@@ -222,10 +283,46 @@ async fn barres(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
     Ok(axum::Json(sortie))
 }
 
-async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse, (StatusCode, String)> {
+/// La série des niveaux, à un horizon.
+///
+/// Un objet et non un tableau, parce qu'il y a deux questions à poser au fichier
+/// et une seule lecture pour y répondre : quels horizons contient-il, et que
+/// valent les points de celui qu'on veut.
+#[derive(Serialize)]
+struct SerieNiveaux {
+    /// Les horizons présents dans le fichier, triés. Vide sur un fichier écrit
+    /// avant que le collecteur n'enregistre le sien.
+    horizons: Vec<i64>,
+    /// L'horizon effectivement servi. `None` quand le fichier n'en nomme aucun.
+    horizon: Option<i64>,
+    /// Les points de cet horizon.
+    points: Vec<Niveau>,
+}
+
+async fn niveaux(
+    State(args): State<Arc<Arguments>>,
+    axum::extract::Query(demande): axum::extract::Query<Horizon>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let lus = gex_store::series::lire_niveaux(&chemin_niveaux(&args.dir, &args.produit))
         .map_err(erreur)?;
-    let sortie: Vec<Niveau> = lus
+
+    let mut horizons: Vec<i64> = lus.iter().filter_map(|p| p.dte_max.map(|h| h as i64)).collect();
+    horizons.sort_unstable();
+    horizons.dedup();
+
+    let horizon = horizon_servi(&horizons, demande.dte_max);
+
+    // Un point dont l'horizon est inconnu ne peut être rangé sous AUCUN horizon
+    // sans inventer la donnée. Tant que le fichier n'en nomme aucun, ils passent
+    // tous — c'est la série d'avant, cohérente avec elle-même. Dès qu'un horizon
+    // apparaît, les points muets sont écartés : les mêler à ceux d'un horizon
+    // nommé ferait lire deux mesures différentes comme une seule courbe.
+    let lus: Vec<_> = match horizon {
+        None => lus.iter().collect(),
+        Some(h) => lus.iter().filter(|p| p.dte_max == Some(h as f64)).collect(),
+    };
+
+    let points: Vec<Niveau> = lus
         .iter()
         .map(|p| Niveau {
             time: p.instant.and_utc().timestamp(),
@@ -244,9 +341,10 @@ async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse
             delta: p.delta,
             vega: p.vega,
             theta: p.theta,
+            dte_max: p.dte_max,
         })
         .collect();
-    Ok(axum::Json(sortie))
+    Ok(axum::Json(SerieNiveaux { horizons, horizon, points }))
 }
 
 /// Le profil par strike de l'instant présent.
@@ -254,7 +352,19 @@ async fn niveaux(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse
 /// Il vient du relevé courant et ne concerne que maintenant : un profil passé
 /// n'aurait aucun sens, le book ayant changé. C'est aussi pourquoi la série des
 /// niveaux ne le porte pas.
-async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse, (StatusCode, String)> {
+async fn profil(
+    State(args): State<Arc<Arguments>>,
+    axum::extract::Query(demande): axum::extract::Query<Horizon>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // L'horizon vient de l'écran, mais le serveur décide. `-1` veut dire toutes
+    // les échéances ; une valeur absurde est ramenée dans les bornes plutôt que
+    // refusée — et c'est l'horizon RETENU qui repart, pas celui demandé.
+    let horizon: Option<i64> = match demande.dte_max {
+        None => Some(args.dte_max),
+        Some(n) if n < 0 => None,
+        Some(n) => Some(n.min(3650)),
+    };
+
     let source = chemin_courant(&args.dir, &args.produit);
     if !source.exists() {
         return Ok(axum::Json(Profil {
@@ -273,6 +383,8 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             attendu: None,
             croisements: Vec::new(),
             zero_gamma: None,
+            maintenant: None,
+            horizon,
         }));
     }
 
@@ -285,7 +397,7 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
         &chaine,
         &Parametres {
             taille_contrat: taille,
-            dte_max: Some(args.dte_max),
+            dte_max: horizon,
             // Le profil sert ici de FOND derrière le prix, pas de tableau : il lui
             // faut du grain là où le prix se trouve, pas une couverture large et
             // grossière. Les défauts du lecteur — ±20 % en soixante pas, soit près
@@ -294,8 +406,35 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
             niveaux: NIVEAUX_REGIME,
             ..Default::default()
         },
-    )
-    .map_err(erreur)?;
+    );
+
+    // Un horizon vide n'est pas une panne. Hors séance, « 0DTE » ne contient rien
+    // — l'échéance du jour est déjà réglée — et c'est une réponse, pas une
+    // erreur. La rendre en 503 faisait afficher « le serveur ne répond pas » sur
+    // tout l'écran pour un clic parfaitement légitime.
+    let analyse = match analyse {
+        Ok(a) => a,
+        Err(e) => {
+            return Ok(axum::Json(Profil {
+                etat: Etat {
+                    releve: Some(chaine.releve.0.and_utc().timestamp()),
+                    spot: Some(chaine.spot),
+                    strikes: 0,
+                    avertissement: Some(format!(
+                        "Aucune échéance dans l'horizon {} : {e}",
+                        nom_horizon(horizon)
+                    )),
+                },
+                strikes: Vec::new(),
+                regime: Vec::new(),
+                attendu: None,
+                croisements: Vec::new(),
+                zero_gamma: None,
+                maintenant: None,
+                horizon,
+            }));
+        }
+    };
 
     let strikes: Vec<Strike> = analyse
         .par_strike
@@ -335,6 +474,14 @@ async fn profil(State(args): State<Arc<Arguments>>) -> Result<impl IntoResponse,
         attendu: analyse.attendu,
         croisements: analyse.croisements,
         zero_gamma: analyse.zero_gamma,
+        maintenant: Some(Maintenant {
+            gex: analyse.gex,
+            zero_gamma: analyse.zero_gamma,
+            call_wall: analyse.murs.call,
+            put_wall: analyse.murs.put,
+            max_pain: analyse.max_pain,
+        }),
+        horizon,
     }))
 }
 
@@ -392,4 +539,48 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Le plus long par défaut : c'est celui du collecteur, et le plus complet.
+    #[test]
+    fn sans_demande_le_plus_long_est_servi() {
+        assert_eq!(horizon_servi(&[0, 1, 7, 30], None), Some(30));
+        assert_eq!(horizon_servi(&[0], None), Some(0));
+    }
+
+    /// Un horizon demandé et présent est servi tel quel.
+    #[test]
+    fn un_horizon_present_est_servi() {
+        assert_eq!(horizon_servi(&[0, 1, 7, 30], Some(1)), Some(1));
+        assert_eq!(horizon_servi(&[0, 1, 7, 30], Some(0)), Some(0));
+    }
+
+    /// Un horizon absent est ignoré, pas obéi : servir un tableau vide se lirait
+    /// « rien ne cotait » alors que la donnée existe, à un autre horizon.
+    #[test]
+    fn un_horizon_absent_retombe_sur_le_plus_long() {
+        assert_eq!(horizon_servi(&[0, 1, 7, 30], Some(3)), Some(30));
+        assert_eq!(horizon_servi(&[0, 1, 7, 30], Some(-1)), Some(30));
+    }
+
+    /// Un fichier écrit avant que le collecteur n'enregistre l'horizon n'en nomme
+    /// aucun. Rien n'est servi comme horizon, et l'écran le dit.
+    #[test]
+    fn un_fichier_sans_horizon_n_en_nomme_aucun() {
+        assert_eq!(horizon_servi(&[], None), None);
+        assert_eq!(horizon_servi(&[], Some(7)), None);
+    }
+
+    /// L'horizon en toutes lettres, pour les messages de l'écran.
+    #[test]
+    fn l_horizon_se_dit_en_toutes_lettres() {
+        assert_eq!(nom_horizon(Some(0)), "0 jour (0DTE)");
+        assert_eq!(nom_horizon(Some(1)), "1 jour");
+        assert_eq!(nom_horizon(Some(30)), "30 jours");
+        assert_eq!(nom_horizon(None), "toutes échéances");
+    }
 }

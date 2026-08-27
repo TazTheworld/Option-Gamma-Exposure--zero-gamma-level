@@ -164,6 +164,55 @@ pub fn archiver(chaine: &Chaine, dossier: &Path, produit: &str) -> Result<PathBu
     Ok(cible)
 }
 
+/// Le format d'horodatage porté par le nom d'une archive.
+const HORODATAGE: &str = "%Y-%m-%d_%H%M";
+
+/// Efface les archives antérieures à la borne, et rend leur nombre.
+///
+/// Sans elle, `--archiver` était un piège différé : le collecteur écrivait un
+/// relevé de 245 Ko à chaque cadence et **rien ne l'effaçait jamais**. À la
+/// minute, cela fait 353 Mo par jour — la même fenêtre glissante de trente jours
+/// que les séries coûte 10,6 Go, un chiffre stable ; sans élagage, c'est 10,6 Go
+/// de plus chaque mois, indéfiniment.
+///
+/// C'est le **nom** qui décide de l'âge, pas la date du fichier : une copie, une
+/// restauration ou une horloge remise à l'heure changeraient la seconde, jamais
+/// le premier.
+///
+/// Et seuls les noms de cette forme sont candidats. `courant.parquet`,
+/// `barres.parquet` et `niveaux.parquet` vivent dans le même dossier ; un
+/// balayage qui les prendrait pour des archives effacerait la séance en cours.
+pub fn elaguer_archives(
+    dossier: &Path,
+    produit: &str,
+    borne: chrono::NaiveDateTime,
+) -> Result<usize, ErreurReleve> {
+    let dossier = dossier.join(produit.to_ascii_uppercase());
+    if !dossier.exists() {
+        return Ok(0);
+    }
+    let mut effacees = 0;
+    for entree in std::fs::read_dir(&dossier).map_err(ErreurReleve::Fichier)? {
+        let chemin = entree.map_err(ErreurReleve::Fichier)?.path();
+        if chemin.extension().is_none_or(|e| e != "parquet") {
+            continue;
+        }
+        let Some(nom) = chemin.file_stem().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Un nom qui n'est pas un horodatage n'est pas une archive : on n'y
+        // touche pas, quel qu'il soit.
+        let Ok(quand) = chrono::NaiveDateTime::parse_from_str(nom, HORODATAGE) else {
+            continue;
+        };
+        if quand < borne {
+            std::fs::remove_file(&chemin).map_err(ErreurReleve::Fichier)?;
+            effacees += 1;
+        }
+    }
+    Ok(effacees)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +326,57 @@ mod tests {
             "horodatage inattendu : {cible:?}"
         );
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Une archive plus vieille que la borne s'en va, une récente reste.
+    ///
+    /// Sans cet élagage, `--archiver` accumulait 353 Mo par jour que rien
+    /// n'effaçait jamais.
+    #[test]
+    fn les_archives_trop_vieilles_s_effacent() {
+        let d = dossier("gex-test-elagage");
+        let nq = d.join("NQ");
+        std::fs::create_dir_all(&nq).unwrap();
+        for nom in ["2026-07-01_0900", "2026-08-20_1430", "2026-08-26_0552"] {
+            std::fs::write(nq.join(format!("{nom}.parquet")), b"x").unwrap();
+        }
+        let borne = instant("2026-08-25 00:00:00");
+        assert_eq!(elaguer_archives(&d, "NQ", borne).unwrap(), 2);
+        assert!(nq.join("2026-08-26_0552.parquet").exists());
+        assert!(!nq.join("2026-07-01_0900.parquet").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Les trois fichiers de la séance vivent dans le même dossier. Un élagage
+    /// qui les prendrait pour des archives effacerait le relevé courant, les
+    /// barres et les niveaux — c'est-à-dire tout.
+    #[test]
+    fn l_elagage_ne_touche_pas_les_fichiers_de_seance() {
+        let d = dossier("gex-test-elagage-seance");
+        let nq = d.join("NQ");
+        std::fs::create_dir_all(&nq).unwrap();
+        for nom in ["courant", "barres", "niveaux", "notes"] {
+            std::fs::write(nq.join(format!("{nom}.parquet")), b"x").unwrap();
+        }
+        std::fs::write(nq.join("2026-07-01_0900.parquet"), b"x").unwrap();
+
+        // Une borne très postérieure : tout serait effacé si le nom ne décidait pas.
+        let efface = elaguer_archives(&d, "NQ", instant("2030-01-01 00:00:00")).unwrap();
+        assert_eq!(efface, 1, "seule l'archive horodatée devait partir");
+        for nom in ["courant", "barres", "niveaux", "notes"] {
+            assert!(nq.join(format!("{nom}.parquet")).exists(), "{nom} effacé");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Un dossier qui n'existe pas encore n'est pas une erreur : au tout premier
+    /// démarrage il n'y a rien à élaguer.
+    #[test]
+    fn un_dossier_absent_n_elague_rien() {
+        let d = dossier("gex-test-elagage-absent");
+        assert_eq!(
+            elaguer_archives(&d, "NQ", instant("2026-08-25 00:00:00")).unwrap(),
+            0
+        );
     }
 }

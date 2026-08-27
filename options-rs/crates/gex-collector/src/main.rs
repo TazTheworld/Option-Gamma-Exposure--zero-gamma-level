@@ -31,7 +31,7 @@ use gex_ib::assemblage::{build_chain, fusionner};
 use gex_ib::barres::PROFONDEUR_JOURS;
 use gex_ib::client::{ADRESSE_DEFAUT, ATTENTE_LOT, CLIENT_ID_DEFAUT, Passerelle, Valeurs};
 use gex_ib::decisions::{ContratOption, avec_conid, lots, perimetre, selection_vif};
-use gex_store::ecriture::{archiver, ecrire_courant};
+use gex_store::ecriture::{archiver, ecrire_courant, elaguer_archives};
 use gex_store::series::{
     Barre, PointNiveaux, RETENTION_JOURS, borne_de_retention, chemin_barres, chemin_niveaux,
     a_la_minute, ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux,
@@ -40,7 +40,7 @@ use gex_store::series::{
 
 use decisions::{
     MARGE_BANDE, attente_avant_reprise, bande_couverte, faut_il_rebalayer,
-    faut_il_reselectionner, socle_reutilisable,
+    faut_il_reselectionner, horizons_suivis, socle_reutilisable,
 };
 
 /// Lignes de données entretenues par défaut.
@@ -97,10 +97,19 @@ struct Arguments {
 
     /// Secondes entre deux archives horodatées. 0 pour ne rien archiver.
     ///
-    /// Désactivé par défaut. Les archives servent à rejouer une séance passée
-    /// sous un autre horizon — utile pour la recherche, inutile pour un suivi de
-    /// séance, et elles s'accumulent : quelques centaines de kilo-octets toutes
-    /// les quinze minutes, sans que rien ne les efface.
+    /// Désactivé par défaut, et à activer en connaissance de cause : un relevé
+    /// pèse 245 Ko sur NQ. Une archive par minute tient 353 Mo par jour, soit
+    /// 10,6 Go sur la fenêtre de rétention ; toutes les cinq minutes, 2,1 Go.
+    ///
+    /// Elles sont élaguées comme les séries, mais par leur propre fenêtre :
+    /// `--retention-archives`, qui suit `--retention` tant qu'on ne la pose pas.
+    /// Ce qui reste est donc stable, pas cumulatif. Le coût réel est annoncé à la
+    /// première archive écrite, mesuré sur elle.
+    ///
+    /// Elles ne servent pas au suivi de séance : les niveaux sont déjà écrits à
+    /// chaque horizon. Elles servent à REJOUER une séance sous d'autres
+    /// paramètres — une autre source de gamma, un autre régime de volatilité —
+    /// ce que rien d'autre ne permet une fois la chaîne remplacée.
     #[arg(long, default_value = "0")]
     archiver: u64,
 
@@ -116,6 +125,20 @@ struct Arguments {
     /// son socle.
     #[arg(long, default_value_t = RETENTION_JOURS)]
     retention: i64,
+
+    /// Jours d'archives conservés. Par défaut, autant que `--retention`.
+    ///
+    /// Séparé parce que les deux coûts n'ont rien de comparable : trente jours de
+    /// séries pèsent une quinzaine de méga-octets, trente jours d'archives à la
+    /// minute en pèsent dix mille. Un seul chiffre pour les deux obligeait à
+    /// sacrifier l'historique des niveaux pour borner celui des archives, ou
+    /// l'inverse.
+    ///
+    /// Le défaut suit `--retention` plutôt qu'une valeur à lui : un réglage qui
+    /// s'écarterait en silence de celui qu'on vient de poser serait une surprise.
+    /// Ce que ça coûte est annoncé à la première archive écrite, mesuré sur elle.
+    #[arg(long, value_name = "N")]
+    retention_archives: Option<i64>,
 
     /// Dossier des relevés.
     #[arg(long, default_value = "snapshots")]
@@ -245,6 +268,9 @@ struct Etat {
     refus_signale: bool,
     /// Et pour des barres qui ne se rafraîchissent plus.
     barres_muettes_signale: bool,
+    /// Le coût des archives a-t-il été annoncé ? Il se mesure sur la première
+    /// écrite, et ne se répète pas.
+    cout_archives_annonce: bool,
 }
 
 /// Une session : connexion, puis la boucle, jusqu'à la coupure.
@@ -532,41 +558,84 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                     }
                 }
 
-                let analyse = analyser(
-                    &fondue,
-                    &Parametres {
-                        taille_contrat: taille,
-                        dte_max: Some(args.dte_max),
-                        dte_min: args.dte_min,
-                        ..Default::default()
-                    },
-                );
-                // Le point de niveaux, lui, n'existe que si quelque chose cote.
-                if let (true, Ok(a)) = (cote, analyse) {
-                    etat.niveaux.push(PointNiveaux {
-                        instant: a_la_minute(instant),
-                        spot: a.spot,
-                        zero_gamma: a.zero_gamma,
-                        gex: a.gex,
-                        charm: a.charm,
-                        vanna: a.vanna,
-                        call_wall: a.murs.call,
-                        put_wall: a.murs.put,
-                        call_wall_oi: a.murs.call_oi,
-                        put_wall_oi: a.murs.put_oi,
-                        iv_atm: a.iv_atm,
-                        skew: a.skew,
-                        max_pain: a.max_pain,
-                        delta: Some(a.delta),
-                        vega: Some(a.vega),
-                        theta: Some(a.theta),
-                    });
+                // UN POINT PAR HORIZON, et non un seul.
+                //
+                // La chaîne n'est sous la main qu'ici : une fois le relevé
+                // suivant écrit, celle-ci n'existe plus nulle part. Calculer tout
+                // de suite ce que chaque horizon en dit coûte quelques
+                // millisecondes et une quinzaine de méga-octets par mois ; le
+                // reconstituer après coup demanderait d'archiver la chaîne
+                // entière chaque minute, soit 353 Mo par jour au format actuel.
+                //
+                // Sans cela, changer d'horizon à l'écran ne déplaçait que ce qui
+                // se recalcule depuis le relevé courant : le profil et le fond
+                // bougeaient, le zero gamma et les murs restaient où ils étaient.
+                //
+                // Le point de niveaux n'existe que si quelque chose cote.
+                if cote {
+                    for horizon in horizons_suivis(args.dte_max) {
+                        let a = match analyser(
+                            &fondue,
+                            &Parametres {
+                                taille_contrat: taille,
+                                dte_max: Some(horizon),
+                                dte_min: args.dte_min,
+                                ..Default::default()
+                            },
+                        ) {
+                            Ok(a) => a,
+                            // Un horizon vide n'est pas une panne : hors séance,
+                            // « 0DTE » ne contient rien, l'échéance du jour étant
+                            // déjà réglée. On saute celui-là, les autres passent.
+                            Err(_) => continue,
+                        };
+                        etat.niveaux.push(PointNiveaux {
+                            instant: a_la_minute(instant),
+                            spot: a.spot,
+                            zero_gamma: a.zero_gamma,
+                            gex: a.gex,
+                            charm: a.charm,
+                            vanna: a.vanna,
+                            call_wall: a.murs.call,
+                            put_wall: a.murs.put,
+                            call_wall_oi: a.murs.call_oi,
+                            put_wall_oi: a.murs.put_oi,
+                            iv_atm: a.iv_atm,
+                            skew: a.skew,
+                            max_pain: a.max_pain,
+                            delta: Some(a.delta),
+                            vega: Some(a.vega),
+                            theta: Some(a.theta),
+                            // C'est cette colonne qui distingue les points d'une
+                            // même minute. Sans elle, ils se liraient comme des
+                            // mesures contradictoires du même instant.
+                            dte_max: Some(horizon as f64),
+                        });
+                    }
                 }
                 // L'élagage suit la même horloge que le socle : une borne
                 // glissante, appliquée quand on écrit, sans mécanisme de plus.
                 let borne = borne_de_retention(instant, args.retention);
                 etat.barres = elaguer_barres(&etat.barres, borne);
                 etat.niveaux = elaguer_niveaux(&etat.niveaux, borne);
+
+                // Les archives suivent la MÊME fenêtre glissante que les séries.
+                // Sans cela, `--archiver` était un piège différé : un relevé de
+                // 245 Ko à chaque cadence, et rien pour l'effacer. À la minute,
+                // 353 Mo par jour qui s'ajoutent indéfiniment ; avec la fenêtre,
+                // 10,6 Go stables. Ce qui s'efface se dit, comme le reste.
+                if pas_archive.is_some() {
+                    let jours = args.retention_archives.unwrap_or(args.retention);
+                    let borne = borne_de_retention(instant, jours);
+                    match elaguer_archives(&args.dir, &args.produit, borne) {
+                        Ok(0) => {}
+                        Ok(n) => println!("  {n} archive(s) hors des {jours} jours effacée(s)."),
+                        // Une archive qui résiste n'arrête pas la collecte, mais
+                        // ne part pas non plus en silence : le dossier grossirait
+                        // sans que rien ne l'explique.
+                        Err(e) => eprintln!("  Élagage des archives impossible ({e}) — le dossier va grossir."),
+                    }
+                }
 
                 ecrire_barres(&etat.barres, &chemin_barres(&args.dir, &args.produit))
                     .map_err(|e| e.to_string())?;
@@ -584,6 +653,26 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                     .map_err(|e| e.to_string())?;
                 etat.derniere_archive = Some(Instant::now());
                 println!("\n[{}] archive : {}", maintenant().format("%H:%M:%S"), chemin.display());
+
+                // Ce que les archives vont coûter, dit une fois, et MESURÉ sur
+                // celle qu'on vient d'écrire plutôt qu'estimé sur une moyenne.
+                // Le chiffre dépend du produit — une chaîne NQ pèse dix fois une
+                // chaîne peu cotée — et personne ne devrait avoir à le découvrir
+                // en regardant son disque se remplir.
+                if !etat.cout_archives_annonce
+                    && let Ok(taille) = std::fs::metadata(&chemin).map(|m| m.len())
+                {
+                    etat.cout_archives_annonce = true;
+                    let jours = args.retention_archives.unwrap_or(args.retention);
+                    let par_jour = taille as f64 * 86_400.0 / args.archiver.max(1) as f64;
+                    println!(
+                        "  {} Ko l'archive, une toutes les {} s : compter {:.1} Go sur {jours} jours.\n\
+                           --retention-archives borne les archives sans toucher aux séries.",
+                        taille / 1024,
+                        args.archiver,
+                        par_jour * jours as f64 / 1e9,
+                    );
+                }
             }
         }
 

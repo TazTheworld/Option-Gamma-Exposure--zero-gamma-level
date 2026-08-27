@@ -47,6 +47,37 @@ h1 {
   letter-spacing: 0.02em;
 }
 
+/* L'horizon d'échéance. Des boutons, pas un menu : le choix actif doit rester
+   lisible dans une capture d'écran, ce qu'un déroulant fermé ne permet pas. */
+.horizon { display: flex; gap: 0.4rem; align-items: baseline; }
+.horizon button {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.42rem;
+  color: var(--texte-faible);
+  background: transparent;
+  border: 1px solid var(--bordure);
+  border-radius: 3px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.horizon button + button { margin-left: 0.15rem; }
+.horizon button:hover { color: var(--texte); border-color: #35405230; border-color: #354052; }
+.horizon button.actif {
+  color: var(--fond);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+/* La note dit sous quel horizon les tracés d'historique ont été calculés. Elle
+   s'allume quand il diffère de celui qu'on regarde : deux horizons différents ne
+   sont pas comparables, et le taire ferait lire les deux comme un seul. */
+.horizon .note { color: #4d5666; font-size: 0.68rem; }
+.horizon .note.different { color: var(--accent); }
+/* Aucun bouton : la série ne dit pas sous quel horizon elle a été calculée, donc
+   il n'y a rien à choisir. Un bouton laisserait croire le contraire. */
+.horizon .aucun { color: #4d5666; font-size: 0.7rem; font-style: italic; }
+
 .mesure { display: flex; gap: 0.4rem; align-items: baseline; }
 .mesure .etiquette { color: var(--texte-faible); font-size: 0.75rem; }
 .mesure .valeur { font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -59,10 +90,15 @@ h1 {
 .fraicheur {
   margin-left: auto;
   color: var(--texte-faible);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
   text-align: right;
+  /* Deux lignes : le relevé, puis la dernière transaction. Elles ne s'arrêtent
+     pas ensemble, et c'est précisément ce que ces deux dates servent à dire. */
+  white-space: pre-line;
 }
 .fraicheur.perime { color: var(--alerte); }
+.fraicheur.decale { color: var(--accent); }
 
 #avertissement {
   display: none;
@@ -78,7 +114,11 @@ main {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 250px;
-  grid-template-rows: 1fr 200px 150px;
+  /* Une seule rangée pour les huit mesures, au lieu de deux. Trente-deux pixels
+     par mesure suffisent quand rien n'est gaspillé : la bande est dessinée à la
+     main, sans marge d'échelle, sans filigrane, et ses étiquettes vivent dans la
+     gouttière de droite plutôt que par-dessus les courbes. */
+  grid-template-rows: 1fr 316px;
   gap: 1px;
   background: var(--bordure);
   min-height: 0;
@@ -110,26 +150,12 @@ main {
    l'alignement possible. Les totaux passent donc sous les deux. */
 #prix { grid-row: 1; grid-column: 1; }
 #profil { grid-row: 1; grid-column: 2; overflow: hidden; }
-#totaux { grid-row: 2; grid-column: 1 / 3; }
-
-/* La rangée du bas porte DEUX panneaux côte à côte, et non deux rangées de plus :
-   trois bandes supplémentaires ne valaient pas cent dix pixels de graphique de
-   prix, qui est le sujet de l'écran. Un demi-panneau montre la même plage de
-   temps, comprimée — et c'est la dérive qu'on y lit, pas une date. */
-.rangee {
-  grid-row: 3;
-  grid-column: 1 / 3;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--bordure);
-  min-height: 0;
-  min-width: 0;
-}
-
-/* Le titre des panneaux du bas se pose à droite : à gauche il tomberait sur la
-   première piste, dont l'étiquette commence au même endroit. */
-#book .titre, #vol .titre { left: auto; right: 0.75rem; }
+/* La bande des mesures occupe toute la largeur : son tracé s'arrête là où
+   l'échelle des prix commence, et les trois cents pixels restants — l'échelle
+   plus la colonne du profil — servent de gouttière aux étiquettes. C'est ce qui
+   les sort définitivement de par-dessus les courbes. */
+#bandes { grid-row: 2; grid-column: 1 / 3; }
+#bandes canvas { position: absolute; inset: 0; display: block; }
 
 /* La couche du regime : peinte SOUS les bougies, dont le fond est transparent. */
 #regime {
@@ -197,24 +223,30 @@ main {
 /* Une etiquette par bande des totaux : nom, valeur, unite, et la plage de ce
    qui est trace. Les echelles « overlay » de la bibliotheque ne dessinent aucun
    axe, et chaque bande ayant son unite, un axe commun n'aurait rien voulu dire. */
-.piste {
-  position: absolute;
-  left: 0.75rem;
-  z-index: 3;
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  font-size: 0.7rem;
+/* La bulle du survol.
+   Elle porte le PRIX et les niveaux posés dessus, pas les huit mesures : celles-ci
+   s'affichent déjà dans leur gouttière, en face de leur propre courbe, et les
+   répéter ici ferait lire deux fois la même chose à deux endroits. */
+#bulle {
+  position: fixed;
+  z-index: 20;
   pointer-events: none;
-  transform: translateY(-1.15em);
+  min-width: 168px;
+  padding: 0.4rem 0.55rem;
+  background: rgba(21, 26, 35, 0.97);
+  border: 1px solid var(--bordure);
+  border-radius: 3px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
-/* Le nom seul reçoit la souris, pour que son explication au survol s'affiche.
-   La piste entière, elle, reste transparente aux clics : elle couvre toute la
-   largeur du panneau et intercepterait le curseur du graphique. */
-.piste b { font-weight: 700; letter-spacing: 0.03em; pointer-events: auto; cursor: help; }
-.piste .v { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.78rem; }
-.piste .u { color: var(--texte-faible); }
-.piste .p { color: #4d5666; font-variant-numeric: tabular-nums; }
+#bulle[hidden] { display: none; }
+#bulle .quand { color: var(--texte-faible); font-size: 0.66rem; margin-bottom: 0.25rem; }
+#bulle .l { display: flex; justify-content: space-between; gap: 1.1rem; }
+#bulle .l .n { color: var(--texte-faible); }
+#bulle .l .v { font-variant-numeric: tabular-nums; }
+#bulle .sep { height: 1px; background: var(--bordure); margin: 0.3rem 0; }
+#bulle .rien { color: var(--alerte); font-size: 0.68rem; }
 
 footer {
   padding: 0.35rem 1rem;

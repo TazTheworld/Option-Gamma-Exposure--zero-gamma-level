@@ -92,6 +92,36 @@ pub fn socle_reutilisable(
     !faut_il_rebalayer(date_socle, maintenant)
 }
 
+/// Les horizons courts que la série suit en plus de celui du collecteur.
+///
+/// Zéro, un et sept jours : le 0DTE, le lendemain, la semaine. Ce sont ceux que
+/// l'écran propose et ceux qui changent le plus le chiffre — sur un relevé, le
+/// GEX vaut 72,2 M$ à un jour contre 234,2 M$ à trente.
+pub const HORIZONS_COURTS: [i64; 3] = [0, 1, 7];
+
+/// Les horizons sous lesquels chaque minute est calculée et écrite.
+///
+/// **Un point par horizon, pas un seul.** Sinon la trace d'historique reste figée
+/// à l'horizon du collecteur, et changer d'horizon à l'écran ne déplace que ce
+/// qui se recalcule depuis le relevé courant — le profil et le fond bougeaient
+/// pendant que le zero gamma et les murs, eux, ne bougeaient pas. La seule autre
+/// façon de corriger serait d'archiver la chaîne entière chaque minute : mesuré
+/// à 245 Ko le relevé, soit 353 Mo par jour, contre une quinzaine de méga-octets
+/// par mois ici.
+///
+/// Ceux qui dépassent l'horizon du collecteur sont écartés : il n'a pas souscrit
+/// ces contrats-là, et un horizon plus large ne rendrait que ce qu'il a déjà.
+pub fn horizons_suivis(dte_max: i64) -> Vec<i64> {
+    let mut tous: Vec<i64> = HORIZONS_COURTS
+        .into_iter()
+        .filter(|h| *h <= dte_max)
+        .chain(std::iter::once(dte_max))
+        .collect();
+    tous.sort_unstable();
+    tous.dedup();
+    tous
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +219,27 @@ mod tests {
             Some((29_500.0, 29_500.0)),
             MARGE_BANDE
         ));
+    }
+
+    /// L'horizon du collecteur en fait toujours partie, et jamais deux fois.
+    #[test]
+    fn les_horizons_suivis_contiennent_celui_du_collecteur() {
+        assert_eq!(horizons_suivis(30), vec![0, 1, 7, 30]);
+        assert_eq!(horizons_suivis(3), vec![0, 1, 3]);
+        // Sept est deja dans la liste courte : il n'y figure qu'une fois.
+        assert_eq!(horizons_suivis(7), vec![0, 1, 7]);
+    }
+
+    /// Un horizon plus long que celui du collecteur ne rendrait que ce qu'il a
+    /// deja souscrit : le proposer ferait croire a une chaine plus large.
+    #[test]
+    fn aucun_horizon_ne_depasse_celui_du_collecteur() {
+        for max in [0, 1, 2, 7, 30, 90] {
+            assert!(
+                horizons_suivis(max).iter().all(|h| *h <= max),
+                "horizon au-dela de {max}"
+            );
+        }
+        assert_eq!(horizons_suivis(0), vec![0]);
     }
 }

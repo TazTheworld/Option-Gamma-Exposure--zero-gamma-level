@@ -204,21 +204,36 @@ donnée sur les strikes réellement morts.
 **Le seuil d'alerte à 5 %** sur l'écart entre sources, et **20 %** sur le poids des
 0-1 DTE. En dessous, l'écart est du bruit ; au-dessus, il change la lecture.
 
-**Les panneaux du bas de l'écran suivent le prix, ils ne le conduisent pas.** Ce n'est
-pas un choix d'ergonomie, c'est la correction d'un défaut mesuré. `lightweight-charts`
-impose un espacement minimal d'un demi-pixel par barre : un panneau de 800 px plafonne
-donc à 1 600 barres et **rabote** toute plage plus large. Avec une synchronisation où
-chacun écoutait les autres, ce rabot faisait autorité — le graphique du prix, qui porte
-2 736 barres, se retrouvait ramené au tout début de sa série, deux nuits plus tôt, à
-chaque chargement. La source est désormais le prix seul ; les suiveurs ont
-`handleScroll` et `handleScale` à `false` et ne peuvent plus répondre.
+**La bande des huit mesures est dessinée à la main, pas par la bibliothèque.** Trois
+graphiques de largeurs différentes — 1600, 800, 800 — sous un prix de 1349 ne s'alignaient
+sur rien : on ne pouvait pas descendre du regard d'un pic de prix vers ce qu'avait fait le
+GEX au même instant, ce qui est pourtant la seule raison d'empiler des panneaux. Les
+abscisses viennent maintenant de `gPrix.timeScale().timeToCoordinate()`, donc l'alignement
+est exact **par construction**, à n'importe quel zoom. C'est déjà la méthode du fond de
+régime et du profil par strike.
 
-**Un panneau dont toutes les séries sont vides refuse de se positionner.** Il accepte
-la largeur d'une plage et en ignore la position. Le squelette qui aligne les axes porte
-donc une **valeur** constante et non de simples instants : en « whitespace » pur, le
-panneau de la position du book restait deux nuits en arrière tant que le collecteur
-n'avait pas écrit son premier point. La série reste invisible, sur une échelle masquée :
-rien ne se dessine.
+Trois pièges rencontrés en la construisant, tous mesurés :
+
+- `timeToCoordinate` rend `null` pour un instant qu'aucune série ne porte. Les minutes où
+  le sous-jacent ne traite pas n'ont pas de barre, donc pas de coordonnée : leurs points de
+  niveaux **disparaissaient** de la bande. Une série vide portant les minutes des niveaux
+  les rend à l'axe.
+- La bibliothèque affiche l'heure **UTC** et ne sait rien faire d'autre. La bulle
+  annonçait 20:05 sous un axe qui marquait 18:05. Les instants sont donc décalés à
+  l'entrée du graphique et remis à la sortie, avec le décalage calculé **pour chaque
+  instant** — entre juin et janvier il change d'une heure.
+- **Une valeur extrême écrase l'échelle de toute la séance.** Mesuré : le cœur du charm,
+  ses centiles 2 à 98, n'occupait que **13 %** de son étendue ; un unique pic de −17 Md$
+  aplatissait la journée en un trait. L'échelle se borne donc au cœur — mais les points
+  qui sortent sont marqués d'un chevron au bord du couloir et comptés dans la gouttière,
+  à côté de l'étendue vraie. Rogner sans le dire effacerait le pic, ce qui serait pire que
+  de l'aplatir.
+
+**Zéro n'entre dans l'échelle d'un couloir que si les valeurs le traversent.** L'y forcer
+quand elles restent d'un côté — le charm est négatif toute la journée — coûtait quatre-
+vingt-dix pour cent du couloir pour une ligne dont on sait déjà où elle est. Quand zéro
+n'y est pas, c'est le remplissage qui dit de quel côté : il s'ancre au bord du couloir
+tourné **vers** zéro.
 
 **Le max pain sur une seule échéance.** La valeur intrinsèque ne se cristallise qu'au
 règlement, et deux échéances règlent deux jours différents : sommer leur douleur
@@ -265,8 +280,77 @@ disent. Dans la série, ces trois-là sont des `Option<f64>` et non des `f64` co
 voisins, pour la même raison : un fichier écrit avant leur ajout n'en a aucune trace, et
 les relire à zéro dessinerait une ligne plate sur toute la séance précédente.
 
-Et une bande vide de l'écran **le dit** — « aucun point écrit » — au lieu de rester
-muette. Muette, on la lit comme une mesure nulle.
+Et un couloir vide de l'écran **le dit** au lieu de rester muet — muet, on le lit comme une
+mesure nulle. Avec deux formulations à ne pas confondre : « aucun point écrit » quand la
+mesure n'existe nulle part dans la série, « hors de la fenêtre » quand le zoom l'a laissée
+dehors.
+
+**Le collecteur écrit un point de niveaux PAR HORIZON, pas un seul.** La chaîne n'est sous
+la main qu'à l'instant du relevé : une fois le suivant écrit, celle-ci n'existe plus nulle
+part. Calculer tout de suite ce que chaque horizon en dit coûte quelques millisecondes et
+une quinzaine de méga-octets par mois ; le reconstituer après coup demanderait d'archiver
+la chaîne entière — mesuré à **245 Ko le relevé, soit 353 Mo par jour**, contre 29 Ko pour
+385 points de niveaux. `horizons_suivis` fixe la liste : les horizons courts, plus celui
+du collecteur, jamais au-delà de ce qu'il a souscrit.
+
+Sans cela, changer d'horizon à l'écran ne déplaçait que ce qui se recalcule depuis le
+relevé courant. Le profil et le fond bougeaient, le zero gamma et les murs restaient où ils
+étaient, et l'en-tête annonçait un mur à 29 500 pendant que le seul trait du graphique
+restait à 29 800 : deux affirmations contradictoires à l'écran en même temps.
+
+La colonne `dte_max` de la série est ce qui distingue les points d'une même minute. Sans
+elle ils se liraient comme des mesures contradictoires du même instant. **Un point dont
+l'horizon est inconnu — fichier écrit avant son ajout — n'est rangé sous aucun horizon** :
+l'y mettre inventerait la donnée. Tant que le fichier n'en nomme aucun, ils passent tous ;
+dès qu'un horizon apparaît, les muets sont écartés.
+
+**Les boutons de l'écran viennent de la série, pas d'une liste écrite dans la page.** Les
+deux divergeraient, et l'écran proposerait des horizons dont aucune trace n'existe. Il
+reste des traits pleins étiquetés `call wall 1j` comme filet : ils ne servent que dans
+l'intervalle où la série n'a pas encore de point à l'horizon demandé.
+
+**Les archives ont leur propre fenêtre glissante, et c'est le point.** `--archiver` était un
+piège différé : un relevé de 245 Ko à chaque cadence, et rien pour l'effacer. À la minute
+c'est 353 Mo par jour qui s'ajoutent indéfiniment ; avec la fenêtre, 10,6 Go **stables**.
+
+Elle est séparée de celle des séries — `--retention-archives` — parce que les deux coûts
+n'ont rien de comparable : trente jours de séries pèsent une quinzaine de méga-octets,
+trente jours d'archives à la minute en pèsent dix mille. Un chiffre unique obligeait à
+sacrifier l'historique des niveaux pour borner celui des archives. Le défaut suit
+`--retention` plutôt qu'une valeur à lui : un réglage qui s'écarterait en silence de celui
+qu'on vient de poser serait une surprise.
+
+Et le coût est **annoncé à la première archive écrite, mesuré sur elle** — pas estimé sur
+une moyenne. Une chaîne NQ pèse dix fois une chaîne peu cotée, et personne ne devrait
+découvrir le chiffre en regardant son disque se remplir.
+`elaguer_archives` décide de l'âge par le **nom** — `2026-08-26_2145.parquet` — et non par
+la date du fichier : une copie, une restauration ou une horloge remise à l'heure
+changeraient la seconde, jamais le premier. Et seuls les noms de cette forme sont
+candidats : `courant.parquet`, `barres.parquet` et `niveaux.parquet` vivent dans le même
+dossier, et un balayage qui les prendrait pour des archives effacerait la séance en cours.
+Un test le fixe.
+
+**L'historique des expositions ne se télécharge pas.** L'API historique d'IB sert
+`TRADES`, `MIDPOINT`, `BID`, `ASK`, `BID_ASK`, `AGGTRADES`, `HISTORICAL_VOLATILITY`,
+`OPTION_IMPLIED_VOLATILITY`, `FEE_RATE`, `SCHEDULE` et `ADJUSTED_LAST` — **pas d'open
+interest**. Or c'est lui qui fait l'exposition : sans lui, on a des greeks par contrat et
+aucun GEX. L'open interest n'arrive que par les ticks 27 et 28, en direct. Reconstituer une
+séance passée demanderait donc un fournisseur payant, pas un appel de plus. C'est la raison
+pour laquelle la série se construit minute par minute et ne se rattrape pas.
+
+**Un horizon vide n'est pas une panne.** Hors séance, « 0DTE » ne contient rien —
+l'échéance du jour est déjà réglée. Rendre l'erreur d'`analyser` en 503 faisait afficher
+« le serveur ne répond pas » sur tout l'écran pour un clic parfaitement légitime. La route
+répond 200 avec un avertissement qui nomme l'horizon.
+
+**Une barre naît d'une transaction, un point de niveaux s'écrit à l'horloge.** Elles ne
+s'arrêtent donc pas ensemble, et l'écran porte deux horloges pour cette raison. Mesuré sur
+une séance : 39 points de niveaux sans aucune barre, tous entre 21:06 et 21:44 UTC — l'arrêt
+technique du CME, 17 h à New York —, avec deux valeurs de spot distinctes en 39 minutes.
+Hors de ce bloc, aucun orphelin. Et le retard qui minimise l'écart entre le spot des
+niveaux et la clôture des barres vaut **1 minute**, le temps qu'une barre se ferme : les
+deux séries sont alignées, le différé n'y est pour rien. Sans ces deux dates côte à côte,
+l'écran se lit « les options sont en avance sur le prix ».
 
 [`greeks_muets`]: options-rs/crates/gex-core/src/analyse.rs
 
