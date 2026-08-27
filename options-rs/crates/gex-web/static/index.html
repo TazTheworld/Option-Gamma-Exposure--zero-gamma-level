@@ -41,6 +41,13 @@
        qu'il y a quelque chose a lire. -->
   <div class="mesure"><span class="etiquette">long gamma</span><span class="valeur" id="lg">—</span></div>
   <div class="mesure"><span class="etiquette">short gamma</span><span class="valeur" id="sg">—</span></div>
+  <!-- Les deux ensemble dans une seule mesure : l'en-tete est deja long, et un
+       mur ne se lit jamais seul de toute facon.
+       Sans ce chiffre, un mur hors du champ de prix — le put a 29 000 quand la
+       fenetre montre 29 400 a 29 650 — n'existait NULLE PART a l'ecran. Les
+       lignes sont hors echelle par construction : elles ne tirent pas le cadrage
+       vers elles, donc elles disparaissent sans un mot des qu'elles sortent. -->
+  <div class="mesure"><span class="etiquette">murs vol</span><span class="valeur" id="mv">—</span></div>
   <div class="mesure"><span class="etiquette">mouvement pricé</span><span class="valeur" id="sigma">—</span></div>
   <!-- Deux horloges, parce qu'il y a deux sources et qu'elles ne s'arretent pas
        ensemble. Les chandeliers naissent d'une TRANSACTION ; les niveaux
@@ -204,8 +211,8 @@ const lignePwOi = gPrix.addLineSeries({ color: "#a13c39", lineWidth: 1, lineStyl
 // par opposition aux positions accumulees depuis des semaines. Troisieme paire,
 // et pas un doublon — un mur par volume nait et meurt dans la journee la ou un
 // mur par open interest met des jours a bouger.
-const ligneCwVol = gPrix.addLineSeries({ color: "#8f7fd0", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
-const lignePwVol = gPrix.addLineSeries({ color: "#d07f9f", lineWidth: 1, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+const ligneCwVol = gPrix.addLineSeries({ color: "#a78bfa", lineWidth: 2, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
+const lignePwVol = gPrix.addLineSeries({ color: "#f472b6", lineWidth: 2, lineStyle: 1, priceLineVisible: false, lastValueVisible: false, ...horsEchelle });
 
 // Le max pain : le strike ou l'ensemble des options de l'echeance la plus proche
 // vaut le moins au reglement. Il repond encore a une autre question que les murs
@@ -268,8 +275,8 @@ function tracerMaintenant(m, memeHorizon, horizon) {
   poser(m.call_wall, "murs", "#26a69a", "call wall");
   poser(m.put_wall, "murs", "#ef5350", "put wall");
   poser(m.max_pain, "maxpain", "#c2b280", "max pain");
-  poser(m.call_wall_vol, "mursvol", "#8f7fd0", "call wall vol");
-  poser(m.put_wall_vol, "mursvol", "#d07f9f", "put wall vol");
+  poser(m.call_wall_vol, "mursvol", "#a78bfa", "call wall vol");
+  poser(m.put_wall_vol, "mursvol", "#f472b6", "put wall vol");
 }
 
 // Les deux strikes ou le gamma NET est le plus concentre.
@@ -390,7 +397,7 @@ const COUCHES = [
   { cle: "zg", nom: "zero gamma & bascules", couleurs: ["#e0a458"] },
   { cle: "murs", nom: "murs gamma", couleurs: ["#26a69a", "#ef5350"] },
   { cle: "mursoi", nom: "murs par open interest", couleurs: ["#1d7268", "#a13c39"] },
-  { cle: "mursvol", nom: "murs par volume du jour", couleurs: ["#8f7fd0", "#d07f9f"] },
+  { cle: "mursvol", nom: "murs par volume du jour", couleurs: ["#a78bfa", "#f472b6"] },
   { cle: "maxpain", nom: "max pain", couleurs: ["#c2b280"] },
   { cle: "gammamajeur", nom: "long / short gamma", couleurs: ["#3ddc97", "#ff6b6b"] },
   { cle: "sigma", nom: "bande ±1σ implicite", couleurs: ["#3f4d63"] },
@@ -1500,6 +1507,14 @@ async function rafraichir() {
     ecrire("mp", prix(m?.max_pain));
     ecrire("lg", prix(m?.long_gamma));
     ecrire("sg", prix(m?.short_gamma));
+    // Les deux murs par volume dans une seule mesure : un mur ne se lit jamais
+    // seul, et l'en-tete est deja long.
+    ecrire(
+      "mv",
+      m?.call_wall_vol == null && m?.put_wall_vol == null
+        ? "—"
+        : prix(m?.call_wall_vol) + " / " + prix(m?.put_wall_vol),
+    );
 
     profilCourant = profil.strikes;
     regimeCourant = profil.regime;

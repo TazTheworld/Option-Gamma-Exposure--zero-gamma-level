@@ -324,6 +324,18 @@ Aucune colonne n'a été ajoutée au format : `CallVol` et `PutVol` existaient d
 et s'écrivaient à zéro faute d'être collectées. Un relevé archivé avant leur remplissage les
 rend nulles, ce que `colonne_ou_zeros` fait déjà pour une colonne absente.
 
+**Un niveau hors échelle disparaît sans un mot : il lui faut donc un chiffre.** Les murs
+sont tracés avec `autoscaleInfoProvider: () => null` pour ne pas tasser les bougies en
+allant chercher un mur à mille points — mais du coup ils ne tirent pas le cadrage vers eux
+et s'effacent purement et simplement dès qu'ils sortent de la fenêtre de prix. Un put wall
+à 29 000 quand l'écran montre 29 400 à 29 650 n'existait alors **nulle part**. Chaque
+famille de murs porte donc sa mesure dans l'en-tête ; c'est elle qui reste quand la ligne
+sort du champ.
+
+Et une ligne discrète n'est pas une ligne visible. Les murs par volume avaient hérité du
+style volontairement effacé des murs par open interest — un pixel, pointillé sourd. Ce sont
+pourtant les plus réactifs des trois. Deux pixels et une couleur franche.
+
 **Le gamma majeur n'est pas un mur.** Un mur se calcule d'un seul côté — le gamma call
 au-dessus du spot, le put en dessous — et sous contrainte de position par rapport au prix.
 `gamma_majeur` prend le GEX **net** d'un strike, calls et puts confondus, sans regarder de
