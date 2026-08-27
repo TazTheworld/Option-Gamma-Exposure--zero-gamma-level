@@ -300,11 +300,21 @@ Trois choses que les tests fixent :
   elles divergeaient, la bande du bas cesserait de s'aligner sur le prix — et l'alignement
   est toute sa raison d'être.
 
-**Le volume des options demande le tick générique `100`.** Sans lui, les ticks 29 et 30
-n'arrivent **jamais** : la souscription réussit, les autres ticks arrivent, et rien ne
-signale qu'une famille entière manque — les murs par volume seraient restés vides en
-silence. Les trois codes (`100` volume, `101` open interest des options, `588` celui des
-futures) voyagent dans la même souscription et ne consomment qu'une des cent lignes.
+**Le volume différé porte un autre code que le volume direct.** `Volume` vaut 8,
+`DelayedVolume` vaut 74, et le collecteur tourne en différé par défaut : le tick 8
+n'arrive jamais. C'est exactement le piège déjà traité pour `ModelOption` (13) /
+`DelayedModelOption` (83), et il s'est reproduit parce que rien ne le rappelait ailleurs.
+
+Le symptôme est le pire possible : un volume nul **partout**, indistinguable d'un marché
+qui n'aurait pas traité. Il n'a été trouvé que parce que TWS affichait à l'écran un volume
+que le collecteur voyait à zéro. L'open interest, lui, n'a pas de variante différée — les
+codes 27 et 28 arrivent tels quels, ce qui explique qu'il ait toujours fonctionné et que
+rien n'ait mis la puce à l'oreille.
+
+Le tick générique `100` porte les codes 29 et 30, le volume agrégé des calls et des puts.
+Le volume du contrat lui-même n'en a pas besoin. Les trois codes demandés (`100`, `101`
+open interest des options, `588` celui des futures) voyagent dans la même souscription et
+ne consomment qu'une des cent lignes.
 
 Et le volume tombe dans **exactement le même piège** que l'open interest, celui qui avait
 mis tous les calls à zéro : IB envoie les deux codes pour chaque contrat, celui qui ne le

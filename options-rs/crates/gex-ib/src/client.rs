@@ -41,11 +41,11 @@ pub const CLIENT_ID_DEFAUT: i32 = 17;
 /// demande les deux, ce qui ne coûte **aucune ligne supplémentaire** — c'est la
 /// même souscription.
 ///
-/// `100` porte le VOLUME des options, ticks 29 et 30. Sans lui, ces ticks
-/// n'arrivent jamais et les murs par volume restent vides **sans un mot** : la
-/// souscription réussit, les autres ticks arrivent, et rien ne signale qu'une
-/// famille entière manque. C'est exactement le genre d'absence silencieuse que ce
-/// dépôt traque.
+/// `100` porte les ticks 29 et 30, le volume agrégé des calls et des puts. Le
+/// volume du contrat lui-même arrive par le tick 8, ou **74 en différé**, sans
+/// rien demander — c'est celui-là qui remplit les murs par volume, et le
+/// distinguer a demandé de constater que TWS affichait un volume que le
+/// collecteur voyait à zéro.
 ///
 /// Les trois voyagent dans la même souscription et ne consomment donc qu'une
 /// seule des cent lignes du quota.
@@ -556,9 +556,17 @@ impl Valeurs {
                 let volume_pour_nous = match s.tick_type {
                     TickType::OptionCallVolume => sens == Sens::Call,
                     TickType::OptionPutVolume => sens == Sens::Put,
-                    // Le volume tout court d'un contrat d'option n'est pas
-                    // ambigu : il n'a qu'un côté.
-                    TickType::Volume => true,
+                    // Le volume du contrat lui-même n'est pas ambigu : il n'a
+                    // qu'un côté. Mais il porte DEUX codes, et c'est le second
+                    // qui compte ici — le collecteur tourne en différé par
+                    // défaut, où le tick 8 n'arrive jamais et le 74 le remplace.
+                    //
+                    // Le même piège que `ModelOption` / `DelayedModelOption`,
+                    // déjà traité quelques lignes plus haut. Sans le différé, le
+                    // volume restait nul partout alors que TWS l'affichait à
+                    // l'écran — et rien ne distinguait ce silence d'un marché
+                    // qui n'aurait pas traité.
+                    TickType::Volume | TickType::DelayedVolume => true,
                     _ => false,
                 };
                 if volume_pour_nous {
@@ -685,6 +693,32 @@ mod tests {
     fn les_codes_de_volume_sont_ceux_d_ib() {
         assert_eq!(TickType::OptionCallVolume as i32, 29);
         assert_eq!(TickType::OptionPutVolume as i32, 30);
+        assert_eq!(TickType::Volume as i32, 8);
+        assert_eq!(TickType::DelayedVolume as i32, 74);
+    }
+
+    /// **Le volume différé porte un autre code**, et le collecteur tourne en
+    /// différé par défaut.
+    ///
+    /// Le même piège que `ModelOption` / `DelayedModelOption`. Sans le 74, le
+    /// volume restait nul partout alors que TWS l'affichait — et ce silence ne
+    /// se distinguait pas d'un marché qui n'aurait pas traité.
+    ///
+    /// L'open interest, lui, n'a pas de variante différée : les codes 27 et 28
+    /// arrivent tels quels, ce qui explique qu'il ait toujours fonctionné.
+    #[test]
+    fn le_volume_differe_compte_autant_que_le_direct() {
+        let taille = |tick_type, size| {
+            TickTypes::Size(ibapi::market_data::realtime::TickSize { tick_type, size })
+        };
+
+        let mut direct = Valeurs::default();
+        direct.absorber(&taille(TickType::Volume, 210.0), Sens::Call);
+        assert_eq!(direct.volume, Some(210.0));
+
+        let mut differe = Valeurs::default();
+        differe.absorber(&taille(TickType::DelayedVolume, 210.0), Sens::Call);
+        assert_eq!(differe.volume, Some(210.0), "le tick 74 doit compter");
     }
 
     /// Un open interest réellement nul doit rester nul : filtrer les zéros aurait
