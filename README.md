@@ -400,6 +400,12 @@ structurelle plutôt que conventionnelle — la crate qui produit les chiffres n
 aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire l'horloge, et
 un calcul qui dépendrait de l'heure courante ne compile pas.
 
+L'arbre de dépendances est **entièrement en Rust**, codecs compris : rien à compiler
+en C, donc rien de particulier à prévoir pour une cible ARM64. Le workspace compile
+pour `aarch64-unknown-linux-gnu` sans une modification, et faire tourner l'ensemble
+sur un Raspberry Pi 4 — collecteur, écran et IB Gateway sur la même machine — est
+décrit dans [`docs/raspberry-pi.md`](docs/raspberry-pi.md).
+
 L'architecture, les conventions, les tests et les pièges d'Interactive Brokers sont dans
 [`AGENTS.md`](AGENTS.md) et [`options-rs/README.md`](options-rs/README.md).
 

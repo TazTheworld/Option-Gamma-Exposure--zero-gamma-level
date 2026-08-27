@@ -40,6 +40,15 @@ struct Arguments {
     #[arg(long, default_value = "8787")]
     port: u16,
 
+    /// Adresse d'écoute.
+    ///
+    /// Le loopback par défaut, et ce défaut est un choix : ces relevés sont à
+    /// toi. `--ecoute 0.0.0.0` ouvre l'écran au réseau local — ce qu'il faut sur
+    /// une machine sans écran, un Raspberry Pi par exemple, dont l'interface se
+    /// consulte forcément depuis une autre machine.
+    #[arg(long, default_value = "127.0.0.1")]
+    ecoute: String,
+
     /// Horizon d'échéance du profil, en jours.
     #[arg(long, value_name = "N", default_value = "30")]
     dte_max: i64,
@@ -626,6 +635,7 @@ async fn style() -> impl IntoResponse {
 async fn main() -> ExitCode {
     let args = Arc::new(Arguments::parse());
     let port = args.port;
+    let ecoute = args.ecoute.clone();
 
     let routes = Router::new()
         .route("/", get(page))
@@ -637,9 +647,12 @@ async fn main() -> ExitCode {
         .route("/api/profil", get(profil))
         .with_state(args);
 
-    // Uniquement en local : ces relevés sont à toi, et rien ne justifie de les
-    // exposer au réseau.
-    let adresse = format!("127.0.0.1:{port}");
+    // Le loopback par défaut : ces relevés sont à toi, et rien ne justifie de
+    // les exposer au réseau sans qu'on le demande. `--ecoute 0.0.0.0` lève la
+    // restriction pour la machine sans écran, qui n'aurait sinon aucun moyen de
+    // se montrer — l'adresse affichée est alors celle du lien, pas une URL à
+    // cliquer.
+    let adresse = format!("{ecoute}:{port}");
     let ecoute = match tokio::net::TcpListener::bind(&adresse).await {
         Ok(e) => e,
         Err(err) => {
@@ -660,6 +673,14 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le défaut reste local. Ce n'est pas un détail de confort : basculer sur
+    /// `0.0.0.0` expose les relevés à tout le réseau, et cela doit rester une
+    /// décision écrite à la main plutôt qu'un effet de bord d'une modification.
+    #[test]
+    fn l_ecoute_par_defaut_reste_locale() {
+        assert_eq!(Arguments::parse_from(["gex-web"]).ecoute, "127.0.0.1");
+    }
 
     /// Le plus long par défaut : c'est celui du collecteur, et le plus complet.
     #[test]

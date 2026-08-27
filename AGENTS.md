@@ -505,6 +505,8 @@ Le travail se fait directement sur `main`.
 
 - Spécifications : `docs/superpowers/specs/AAAA-MM-JJ-<sujet>-design.md`
 - Plans d'implémentation : `docs/superpowers/plans/AAAA-MM-JJ-<sujet>.md`
+- Déploiement : `docs/raspberry-pi.md` — opérationnel et non conceptuel, il décrit
+  une cible et non un arbitrage, d'où l'absence de date dans son nom.
 
 Ils ne décrivent pas seulement ce qui est retenu, mais **ce qui a été écarté et
 pourquoi** — c'est ce qui évite de refaire deux fois le même arbitrage. Ceux du

@@ -10,6 +10,23 @@ gex-core = { path = "../gex-core" }
 chrono = { workspace = true }
 # Les implementations Apache officielles. C'est ici, et seulement ici, que le
 # projet touche a un fichier : gex-core ne peut pas, par construction.
-parquet = "59"
+#
+# Les features par defaut sont reprises UNE A UNE, moins `zstd`. Ce codec est le
+# seul morceau de C du depot - il tire `cc` et `pkg-config` -, et nous ne nous en
+# servons jamais : rien ne regle la compression a l'ecriture, donc parquet ecrit
+# en UNCOMPRESSED. Le retirer rend l'arbre entierement Rust, donc compilable sur
+# une cible ARM64 sans chaine C croisee.
+#
+# Les autres codecs RESTENT, tous en Rust pur : ils ne servent pas a ecrire mais
+# a lire ce que d'autres outils ont ecrit - `snap` notamment, qui est le defaut
+# de pyarrow, et donc celui des fixtures.
+parquet = { version = "59", default-features = false, features = [
+    "arrow",
+    "snap",
+    "brotli",
+    "flate2-zlib-rs",
+    "lz4",
+    "simdutf8",
+] }
 arrow-array = "59"
 arrow-schema = "59"
