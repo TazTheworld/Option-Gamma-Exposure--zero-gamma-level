@@ -14,11 +14,16 @@ use chrono::NaiveDateTime;
 
 /// Les colonnes du fichier, dans l'ordre où elles y sont écrites.
 ///
-/// Les huit dernières décrivent la séance du sous-jacent. **Aucune source sur
+/// Les neuf dernières décrivent la séance du sous-jacent. **Aucune source sur
 /// futures ne les publie** : elles restent vides depuis qu'IB est la seule
 /// source, et `validate.py` bascule alors sur la mesure à la clôture seule. Le
 /// schéma les garde pour que les historiques déjà écrits restent lisibles.
-pub const COLONNES: [&str; 25] = [
+///
+/// L'ordre n'a plus la portée qu'il avait : [`migrer`] replace les valeurs par
+/// nom, donc insérer une colonne au milieu est aussi sûr que l'ajouter à la fin.
+/// Ce qui reste interdit est de **renommer** une colonne — la migration s'arrête
+/// alors plutôt que de perdre ce qu'elle ne sait plus où mettre.
+pub const COLONNES: [&str; 26] = [
     "timestamp",
     "ticker",
     "dte_max",
@@ -35,6 +40,13 @@ pub const COLONNES: [&str; 25] = [
     "vanna",
     "strikes",
     "expiries",
+    // La volatilité de la monnaie sur l'échéance la plus proche, telle que le
+    // moteur la calcule. **Distincte d'`iv30`**, qui venait du CBOE et est une
+    // volatilité à trente jours constants : les confondre dans une même colonne
+    // mêlerait deux mesures qui ne se comparent pas. Sans elle, la vanna ne peut
+    // pas être confrontée à quoi que ce soit — il n'existerait aucune variation
+    // de volatilité à multiplier par elle.
+    "iv_atm",
     "open",
     "high",
     "low",
@@ -87,6 +99,12 @@ pub struct LigneHistorique {
     pub strikes: usize,
     /// Nombre d'échéances distinctes.
     pub echeances: usize,
+    /// Volatilité implicite à la monnaie sur l'échéance la plus proche.
+    ///
+    /// C'est elle qui rend la vanna mesurable : sans variation de volatilité
+    /// d'un relevé au suivant, il n'y a rien à multiplier par la vanna, donc
+    /// aucun flux de couverture à confronter au mouvement du prix.
+    pub iv_atm: Option<f64>,
 }
 
 /// Un flottant tel que le CSV l'attend, ou rien.
@@ -117,6 +135,7 @@ impl LigneHistorique {
             self.vanna.to_string(),
             self.strikes.to_string(),
             self.echeances.to_string(),
+            champ(self.iv_atm),
         ];
         // Les huit colonnes de contexte de séance, plus le ratio au volume :
         // vides sur futures, gardées pour que le schéma ne bouge pas.
@@ -297,6 +316,7 @@ mod tests {
             vanna: 3_177_811.561_580_234_7,
             strikes: 142,
             echeances: 3,
+            iv_atm: Some(0.184),
         }
     }
 

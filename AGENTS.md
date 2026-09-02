@@ -260,6 +260,28 @@ classerait le régime d'après un GEX qui change de signe rien qu'en changeant
 d'horizon — et une séance = une observation, parce que normalisé en racine du temps, un
 mouvement réel de 0,2 % sur vingt minutes ressort à 1,7 % par jour.
 
+**Ce sont les observations qui comptent, pas les relevés**, et l'écart entre les
+deux surprend : dix-huit relevés n'en ont donné qu'**une**, parce que douze
+d'entre eux tombaient le même jour, certains à trois minutes d'intervalle. Seul
+le dernier relevé de chaque séance et de chaque périmètre est retenu, puis il
+faut deux séances distinctes pour former une paire. `--valider` le dit désormais
+à l'écran dès que l'écart est net — sans quoi un historique bien rempli se lit
+comme une avance qu'on n'a pas.
+
+**Deux des cinq affirmations portent sur un sens, pas sur une amplitude.** Le
+charm et la vanna imposent aux teneurs un flux de couverture dirigé ; les mesurer
+sur une valeur absolue, comme les trois premières, effacerait précisément ce
+qu'elles avancent. D'où `mouvement_signe` à côté de `mouvement_par_jour`, et une
+comparaison qui **soustrait** au lieu de diviser — un rapport entre deux dérives
+de signes opposés serait indistinguable d'une simple réduction.
+
+Le charm garde un seul signe dans tout l'historique observé jusqu'ici, et la
+vanna l'autre : leurs numérateurs sont opposés par construction. Le taux de
+« sens respecté » ne sépare donc pas leur effet d'une dérive générale du marché,
+et l'affirmation le dit à l'écran plutôt que de laisser croire le contraire. Ce
+qui attribue, c'est la comparaison entre fort et faible — et, pour la vanna, le
+fait que le produit avec la variation de volatilité, lui, change bien de signe.
+
 ## Ne jamais faire en silence
 
 **Annoncé à l'écran, jamais fait en silence.** S'applique à toute substitution,

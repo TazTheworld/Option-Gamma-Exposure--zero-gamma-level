@@ -8,6 +8,20 @@
 //!    signe du GEX seul ;
 //! 3. le prix bute sur les murs — il les touche en séance, mais n'y clôture pas.
 //!
+//! Ces trois-là portent sur une **amplitude** : le gamma dit combien le prix
+//! bouge, jamais vers où. Deux autres portent sur un **sens**, et c'est ce qui
+//! les rend différentes à mesurer :
+//!
+//! 4. le charm fait fondre le delta des teneurs ; ils échangent l'inverse pour
+//!    rester couverts, donc le prix devrait dériver à l'opposé de son signe ;
+//! 5. la vanna fait de même à chaque mouvement de volatilité — et c'est le
+//!    **produit** `vanna x variation d'IV` qui change de signe, non la vanna,
+//!    dont le numérateur est l'opposé de celui du charm par construction.
+//!
+//! D'où [`Observation::mouvement_signe`] à côté de
+//! [`Observation::mouvement_par_jour`] : mesurer une dérive sur une valeur
+//! absolue effacerait exactement ce que ces deux affirmations avancent.
+//!
 //! **Ce n'est pas un backtest de stratégie.** On mesure si la description du
 //! terrain est exacte, pas si on peut en tirer de l'argent.
 //!
@@ -56,6 +70,16 @@ pub struct Releve {
     pub call_wall: Option<f64>,
     /// Mur put en gamma.
     pub put_wall: Option<f64>,
+    /// Charm total, en dollars de delta par jour.
+    ///
+    /// Facultatif comme les autres : un historique écrit par une version
+    /// antérieure n'a pas la colonne, et l'absence se dit `None` — jamais zéro,
+    /// qui se lirait comme « le delta ne fond pas ».
+    pub charm: Option<f64>,
+    /// Vanna totale, en dollars de delta par point de volatilité.
+    pub vanna: Option<f64>,
+    /// Volatilité implicite à la monnaie, sur l'échéance la plus proche.
+    pub iv_atm: Option<f64>,
 }
 
 impl Releve {
@@ -164,6 +188,9 @@ pub fn lire_historique(chemin: impl AsRef<Path>) -> Result<Vec<Releve>, ErreurVa
             zero_gamma: flottant(&champs, index("zero_gamma")),
             call_wall: flottant(&champs, index("call_wall")),
             put_wall: flottant(&champs, index("put_wall")),
+            charm: flottant(&champs, index("charm")),
+            vanna: flottant(&champs, index("vanna")),
+            iv_atm: flottant(&champs, index("iv_atm")),
         });
     }
     Ok(releves)
@@ -182,6 +209,31 @@ pub struct Observation {
     pub call_wall_franchi: Option<bool>,
     /// Le prix a-t-il clôturé sous le put wall ?
     pub put_wall_franchi: Option<bool>,
+    /// Mouvement **signé**, ramené à la journée.
+    ///
+    /// Distinct de [`Observation::mouvement_par_jour`], qui est absolu. Les trois
+    /// premières affirmations demandent une amplitude — le gamma dit combien ça
+    /// bouge, pas dans quel sens. Le charm et la vanna, eux, imposent un sens :
+    /// mesurer leur effet sur une valeur absolue le rendrait invisible.
+    pub mouvement_signe: f64,
+    /// Le prix est-il allé dans le sens qu'impose le charm ?
+    ///
+    /// Les teneurs échangent l'**inverse** de la variation de leur delta : un
+    /// charm négatif fait fondre leur delta, ils achètent pour rester couverts,
+    /// et cet achat pousse vers le haut. Le sens attendu est donc l'opposé du
+    /// signe du charm. `None` quand le relevé n'a pas la colonne.
+    pub sens_du_charm: Option<bool>,
+    /// Valeur absolue du charm au moment du relevé.
+    pub charm: Option<f64>,
+    /// Le flux que la vanna impose : `vanna x variation de volatilité`.
+    ///
+    /// **C'est ce produit qui varie de signe, pas la vanna.** La vanna garde le
+    /// sien par construction — son numérateur est l'opposé de celui du charm —
+    /// alors que la volatilité monte et descend. Sans ce produit, l'affirmation
+    /// n'aurait jamais deux côtés à comparer.
+    pub flux_vanna: Option<f64>,
+    /// Le prix est-il allé dans le sens qu'impose ce flux ?
+    pub sens_de_la_vanna: Option<bool>,
 }
 
 /// Apparie chaque relevé au suivant du même périmètre.
@@ -214,6 +266,12 @@ pub fn observer(releves: &[Releve], intervalle_minimal: f64) -> Vec<Observation>
                 continue;
             }
             let rendement = (apres.spot - avant.spot) / avant.spot;
+            // Le flux de vanna demande les DEUX bouts : sans volatilité au
+            // départ et à l'arrivée, il n'y a pas de variation à multiplier.
+            let flux_vanna = match (avant.vanna, avant.iv_atm, apres.iv_atm) {
+                (Some(v), Some(iv0), Some(iv1)) => Some(v * (iv1 - iv0)),
+                _ => None,
+            };
             observations.push(Observation {
                 gex: avant.gex,
                 sous_zero_gamma: avant.zero_gamma.map(|z| avant.spot < z),
@@ -221,8 +279,20 @@ pub fn observer(releves: &[Releve], intervalle_minimal: f64) -> Vec<Observation>
                 // inégaux : un mouvement sur trois jours n'est pas comparable à
                 // un mouvement sur un jour, et la racine est la bonne échelle.
                 mouvement_par_jour: rendement.abs() / ecart.sqrt(),
+                mouvement_signe: rendement / ecart.sqrt(),
                 call_wall_franchi: avant.call_wall.map(|m| apres.spot > m),
                 put_wall_franchi: avant.put_wall.map(|m| apres.spot < m),
+                // Un rendement nul ne va dans aucun sens : le compter comme
+                // conforme gonflerait le taux d'un cas qui ne dit rien.
+                sens_du_charm: avant
+                    .charm
+                    .filter(|c| *c != 0.0 && rendement != 0.0)
+                    .map(|c| rendement.signum() == -c.signum()),
+                charm: avant.charm.map(f64::abs),
+                sens_de_la_vanna: flux_vanna
+                    .filter(|f| *f != 0.0 && rendement != 0.0)
+                    .map(|f| rendement.signum() == -f.signum()),
+                flux_vanna,
             });
         }
     }
@@ -276,7 +346,48 @@ pub fn comparer(a: &[f64], b: &[f64]) -> Comparaison {
     }
 }
 
-fn mediane(valeurs: &[f64]) -> f64 {
+/// Ce que deux groupes donnent en dérive **signée**.
+///
+/// Type distinct de [`Comparaison`], et non par goût de la symétrie : celle-ci
+/// rend un rapport, ce qui n'a aucun sens sur des valeurs signées. Deux dérives
+/// de signes opposés donneraient un quotient négatif qu'on ne saurait pas
+/// distinguer d'une simple réduction, et une médiane proche de zéro le ferait
+/// exploser. Ici l'écart se dit **par soustraction**, en points de pourcentage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Derive {
+    /// Effectif du premier groupe.
+    pub n_a: usize,
+    /// Effectif du second.
+    pub n_b: usize,
+    /// Dérive médiane du premier groupe.
+    pub mediane_a: f64,
+    /// Dérive médiane du second.
+    pub mediane_b: f64,
+    /// `mediane_a - mediane_b`. `None` sous trois observations d'un côté.
+    pub ecart: Option<f64>,
+    /// L'échantillon total suffit-il à conclure ?
+    pub concluant: bool,
+}
+
+/// Compare la dérive signée de deux groupes.
+pub fn comparer_derive(a: &[f64], b: &[f64]) -> Derive {
+    let (ma, mb) = (mediane(a), mediane(b));
+    Derive {
+        n_a: a.len(),
+        n_b: b.len(),
+        mediane_a: ma,
+        mediane_b: mb,
+        ecart: (a.len() >= 3 && b.len() >= 3).then_some(ma - mb),
+        concluant: a.len() + b.len() >= N_MINIMAL,
+    }
+}
+
+/// La médiane d'un échantillon, ou zéro s'il est vide.
+///
+/// Publique parce que le lecteur en a besoin pour couper un échantillon en deux
+/// à sa propre médiane — séparer les relevés à fort charm de ceux à charm faible
+/// demande de savoir où est le milieu.
+pub fn mediane(valeurs: &[f64]) -> f64 {
     if valeurs.is_empty() {
         return 0.0;
     }
@@ -314,6 +425,9 @@ mod tests {
             zero_gamma: Some(29_400.0),
             call_wall: Some(29_600.0),
             put_wall: Some(29_000.0),
+            charm: Some(-154_030_000.0),
+            vanna: Some(9_100_000.0),
+            iv_atm: Some(0.184),
         }
     }
 
@@ -428,6 +542,7 @@ mod tests {
             put_wall_oi: Some(29_000.0),
             charm: -154_030_000.0,
             vanna: 9_100_000.0,
+            iv_atm: Some(0.184),
             strikes: 71,
             echeances: 2,
         };
@@ -446,5 +561,115 @@ mod tests {
     fn un_historique_absent_nomme_ce_qui_l_ecrit() {
         let e = lire_historique("nulle-part/history.csv").unwrap_err();
         assert!(e.to_string().contains("gex NQ"), "{e}");
+    }
+
+    // ---=== Le sens : charm et vanna ===---
+
+    /// Deux relevés d'un jour d'écart, dont on choisit le charm, la vanna et la
+    /// volatilité aux deux bouts.
+    fn paire(spot0: f64, spot1: f64, charm: f64, vanna: f64, iv0: f64, iv1: f64) -> Observation {
+        let mut a = releve("2026-08-24 20:00", spot0, -1e8);
+        let mut b = releve("2026-08-25 20:00", spot1, -1e8);
+        a.charm = Some(charm);
+        a.vanna = Some(vanna);
+        a.iv_atm = Some(iv0);
+        b.iv_atm = Some(iv1);
+        observer(&[a, b], INTERVALLE_MINIMAL)[0]
+    }
+
+    /// Les teneurs échangent l'inverse de la variation de leur delta : un charm
+    /// négatif les fait acheter, ce qui pousse vers le haut. Le sens attendu est
+    /// donc l'opposé du signe du charm.
+    #[test]
+    fn le_sens_attendu_du_charm_est_l_oppose_de_son_signe() {
+        // charm négatif, le prix monte : conforme.
+        assert_eq!(
+            paire(29_000.0, 29_300.0, -1e8, 9e6, 0.18, 0.18).sens_du_charm,
+            Some(true)
+        );
+        // charm négatif, le prix baisse : contraire.
+        assert_eq!(
+            paire(29_000.0, 28_700.0, -1e8, 9e6, 0.18, 0.18).sens_du_charm,
+            Some(false)
+        );
+        // charm positif, le prix baisse : conforme à nouveau.
+        assert_eq!(
+            paire(29_000.0, 28_700.0, 1e8, -9e6, 0.18, 0.18).sens_du_charm,
+            Some(true)
+        );
+    }
+
+    /// Un prix figé ne va dans aucun sens. Le compter comme conforme gonflerait
+    /// le taux d'un cas qui ne dit rien.
+    #[test]
+    fn un_prix_fige_ne_compte_dans_aucun_sens() {
+        let o = paire(29_000.0, 29_000.0, -1e8, 9e6, 0.18, 0.20);
+        assert_eq!(o.sens_du_charm, None);
+        assert_eq!(o.sens_de_la_vanna, None);
+    }
+
+    /// **Ce qui rend l'affirmation sur la vanna concluante.** La vanna garde son
+    /// signe par construction — son numérateur est l'opposé de celui du charm —
+    /// mais la volatilité monte et descend, donc le produit change de signe. Sans
+    /// ça, il n'y aurait jamais deux côtés à comparer.
+    #[test]
+    fn le_flux_de_vanna_change_de_signe_avec_la_volatilite() {
+        let vol_monte = paire(29_000.0, 29_300.0, -1e8, 9e6, 0.18, 0.20);
+        let vol_baisse = paire(29_000.0, 29_300.0, -1e8, 9e6, 0.20, 0.18);
+        let (Some(f1), Some(f2)) = (vol_monte.flux_vanna, vol_baisse.flux_vanna) else {
+            panic!("les deux flux doivent exister");
+        };
+        assert!(f1 > 0.0 && f2 < 0.0, "flux {f1} et {f2}");
+        // Et le même mouvement de prix se lit donc à l'opposé selon le sens de
+        // la volatilité : c'est exactement ce qui rend le test discriminant.
+        assert_eq!(vol_monte.sens_de_la_vanna, Some(false));
+        assert_eq!(vol_baisse.sens_de_la_vanna, Some(true));
+    }
+
+    /// Sans volatilité aux deux bouts, il n'y a pas de variation à multiplier.
+    /// L'absence se dit `None`, jamais zéro — zéro voudrait dire « la
+    /// volatilité n'a pas bougé », ce qui est une mesure et non un manque.
+    #[test]
+    fn sans_volatilite_aux_deux_bouts_il_n_y_a_pas_de_flux() {
+        let mut a = releve("2026-08-24 20:00", 29_000.0, -1e8);
+        let b = releve("2026-08-25 20:00", 29_300.0, -1e8);
+        a.iv_atm = None;
+        let o = observer(&[a, b], INTERVALLE_MINIMAL)[0];
+        assert_eq!(o.flux_vanna, None);
+        assert_eq!(o.sens_de_la_vanna, None);
+        // Le charm, lui, n'a pas besoin de la volatilité.
+        assert!(o.sens_du_charm.is_some());
+    }
+
+    /// Le gamma dit combien le prix bouge, le charm vers où. Mesurer le second
+    /// sur une valeur absolue rendrait son effet invisible.
+    #[test]
+    fn le_mouvement_signe_garde_le_sens_que_l_absolu_efface() {
+        let hausse = paire(29_000.0, 29_300.0, -1e8, 9e6, 0.18, 0.18);
+        let baisse = paire(29_000.0, 28_700.0, -1e8, 9e6, 0.18, 0.18);
+        assert!(hausse.mouvement_signe > 0.0);
+        assert!(baisse.mouvement_signe < 0.0);
+        // L'amplitude, elle, ne les distingue pas.
+        assert!(hausse.mouvement_par_jour > 0.0 && baisse.mouvement_par_jour > 0.0);
+    }
+
+    /// Un rapport n'a pas de sens sur des dérives signées : deux dérives
+    /// opposées donneraient un quotient négatif qu'on confondrait avec une
+    /// simple réduction. L'écart se dit par soustraction.
+    #[test]
+    fn la_derive_se_compare_par_soustraction() {
+        let d = comparer_derive(&[0.02, 0.03, 0.04], &[-0.01, -0.02, -0.03]);
+        assert_eq!(d.mediane_a, 0.03);
+        assert_eq!(d.mediane_b, -0.02);
+        assert_eq!(d.ecart, Some(0.05));
+        // Sous trois de chaque côté, aucun écart n'est rendu.
+        assert_eq!(comparer_derive(&[0.02], &[-0.01]).ecart, None);
+    }
+
+    #[test]
+    fn la_mediane_coupe_l_echantillon_en_deux() {
+        assert_eq!(mediane(&[1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(mediane(&[1.0, 2.0, 3.0, 4.0]), 2.5);
+        assert_eq!(mediane(&[]), 0.0);
     }
 }

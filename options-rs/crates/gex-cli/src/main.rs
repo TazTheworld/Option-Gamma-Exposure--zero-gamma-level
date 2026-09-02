@@ -17,8 +17,8 @@ use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
 use gex_store::historique::{LigneHistorique, Migration, enregistrer};
 use gex_store::validation::{
-    Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, lire_historique, observer,
-    taux_de_franchissement,
+    Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, comparer_derive, lire_historique,
+    mediane, observer, taux_de_franchissement,
 };
 use gex_store::{chemin_courant, lire_releve};
 
@@ -116,10 +116,15 @@ fn annoncer(migration: Migration) {
 
 /// Confronte le modèle aux relevés accumulés.
 ///
-/// Trois affirmations vérifiables : les mouvements sont plus amples en gamma
-/// négatif, la position vis-à-vis du zero gamma décide du régime, et le prix bute
-/// sur les murs. **Ce n'est pas un backtest de stratégie** — on mesure si la
-/// description du terrain est exacte, pas si on peut en tirer de l'argent.
+/// Cinq affirmations vérifiables. Trois portent sur une **amplitude** : les
+/// mouvements sont plus amples en gamma négatif, la position vis-à-vis du zero
+/// gamma décide du régime, et le prix bute sur les murs. Deux portent sur un
+/// **sens** : le charm et la vanna imposent aux teneurs un flux de couverture
+/// dirigé, donc une dérive. Les mesurer sur une valeur absolue, comme les trois
+/// premières, effacerait précisément ce qu'elles avancent.
+///
+/// **Ce n'est pas un backtest de stratégie** — on mesure si la description du
+/// terrain est exacte, pas si on peut en tirer de l'argent.
 fn valider(chemin: &Path) -> Result<(), String> {
     let releves = lire_historique(chemin).map_err(|e| e.to_string())?;
     let obs = observer(&releves, INTERVALLE_MINIMAL);
@@ -130,6 +135,20 @@ fn valider(chemin: &Path) -> Result<(), String> {
         obs.len(),
         chemin.display()
     );
+    // Le nombre qui compte est celui des OBSERVATIONS, pas celui des relevés, et
+    // l'écart entre les deux surprend : seul le dernier relevé de chaque séance
+    // et de chaque périmètre est retenu, puis il faut deux séances distinctes
+    // pour former une paire. Sans cette phrase, un historique de dix-huit lignes
+    // qui n'en produit qu'une se lit comme une avance qu'on n'a pas.
+    if releves.len() > obs.len().saturating_mul(2) {
+        println!(
+            "   Seul le DERNIER relevé de chaque séance et de chaque périmètre compte,
+   et il faut deux séances distinctes pour former une paire. Relancer `gex`
+   plusieurs fois le même jour n'ajoute donc aucune observation.
+"
+        );
+    }
+
     if obs.is_empty() {
         // Rendre des pourcentages sur rien serait pire que de ne rien rendre :
         // ils auraient l'air d'une mesure.
@@ -220,6 +239,113 @@ fn valider(chemin: &Path) -> Result<(), String> {
             Some(taux) => println!("   {nom} : {:.0}% des {} cas", taux * 100.0, cas.len()),
         }
     }
+    // Les deux affirmations qui portent sur un SENS et non sur une amplitude.
+    // Le gamma dit combien le prix bouge ; le charm et la vanna disent vers où.
+    // Les mesurer sur une valeur absolue rendrait leur effet invisible.
+    let sens = |titre: &str,
+                explication: &[&str],
+                cas: Vec<bool>,
+                cles: Vec<f64>,
+                derives: Vec<f64>,
+                fort: &str,
+                faible: &str| {
+        println!("\n{titre}");
+        for l in explication {
+            println!("   {l}");
+        }
+        match taux_de_franchissement(&cas) {
+            None => {
+                println!("   -> aucune observation ne porte cette mesure");
+                return;
+            }
+            Some(taux) => println!(
+                "   sens attendu respecté : {:.0}% des {} cas",
+                taux * 100.0,
+                cas.len()
+            ),
+        }
+
+        // Couper à la médiane de la grandeur elle-même : c'est cette comparaison
+        // qui ATTRIBUE l'effet. Le taux ci-dessus ne le fait pas quand la
+        // grandeur garde un seul signe — il se confondrait alors avec une
+        // dérive générale du marché.
+        let seuil = mediane(&cles);
+        let (mut hauts, mut bas) = (Vec::new(), Vec::new());
+        for (cle, derive) in cles.iter().zip(&derives) {
+            if *cle >= seuil { &mut hauts } else { &mut bas }.push(*derive);
+        }
+        let d = comparer_derive(&hauts, &bas);
+        println!(
+            "   {fort} : {:>3} relevés, dérive médiane {:+.2}% / jour",
+            d.n_a,
+            d.mediane_a * 100.0
+        );
+        println!(
+            "   {faible} : {:>3} relevés, dérive médiane {:+.2}% / jour",
+            d.n_b,
+            d.mediane_b * 100.0
+        );
+        match d.ecart {
+            None => println!("   -> pas assez de relevés de part et d'autre pour attribuer"),
+            Some(e) => {
+                println!("   -> écart de {:+.2} point(s) de dérive", e * 100.0);
+                if !d.concluant {
+                    println!("      l'échantillon est trop court pour conclure");
+                }
+            }
+        }
+    };
+
+    sens(
+        "4. LA DÉRIVE DU CHARM",
+        &[
+            "Le charm fait fondre le delta des teneurs. Ils échangent l'inverse pour",
+            "rester couverts, donc le prix devrait aller à l'OPPOSÉ de son signe.",
+        ],
+        obs.iter().filter_map(|o| o.sens_du_charm).collect(),
+        obs.iter().filter_map(|o| o.charm).collect(),
+        obs.iter()
+            .filter(|o| o.charm.is_some())
+            .map(|o| o.mouvement_signe)
+            .collect(),
+        "charm fort  ",
+        "charm faible",
+    );
+    // Dit, et non tu : tant que le charm garde un seul signe, le taux ne
+    // distingue pas son effet d'une dérive générale du marché.
+    let signes: std::collections::BTreeSet<i8> = releves
+        .iter()
+        .filter_map(|r| r.charm)
+        .filter(|c| *c != 0.0)
+        .map(|c| c.signum() as i8)
+        .collect();
+    if signes.len() == 1 {
+        println!(
+            "   (le charm garde un seul signe dans cet historique : le taux ne sépare
+    pas son effet d'une dérive générale. C'est la comparaison par amplitude
+    qui l'attribue.)"
+        );
+    }
+
+    sens(
+        "5. LE FLUX DE VANNA",
+        &[
+            "La vanna dit de combien le delta bouge par point de volatilité. Le flux",
+            "est vanna x variation d'IV, et les teneurs en échangent l'inverse.",
+            "C'est ce PRODUIT qui change de signe — la vanna, elle, garde le sien.",
+        ],
+        obs.iter().filter_map(|o| o.sens_de_la_vanna).collect(),
+        obs.iter()
+            .filter_map(|o| o.flux_vanna.map(f64::abs))
+            .collect(),
+        obs.iter()
+            .filter(|o| o.flux_vanna.is_some())
+            .map(|o| o.mouvement_signe)
+            .collect(),
+        "flux fort  ",
+        "flux faible",
+    );
+
     if obs.len() < N_MINIMAL {
         println!(
             "
@@ -531,6 +657,7 @@ fn ligne_historique(a: &Analyse, args: &Arguments, dte_max: Option<i64>) -> Lign
             .map(|l| l.ligne.echeance)
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
+        iv_atm: a.iv_atm,
     }
 }
 
