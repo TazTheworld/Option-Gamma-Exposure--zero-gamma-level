@@ -100,7 +100,10 @@ mod tests {
         let err = multiplicateur("ZZZZ").unwrap_err();
         let message = err.to_string();
         assert!(message.contains("ZZZZ"), "l'erreur doit citer la demande");
-        assert!(message.contains("NQ"), "l'erreur doit lister les produits connus");
+        assert!(
+            message.contains("NQ"),
+            "l'erreur doit lister les produits connus"
+        );
         assert!(message.contains("--contract-size"), "et dire quoi faire");
     }
 }

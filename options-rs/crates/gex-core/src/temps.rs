@@ -131,11 +131,7 @@ pub fn debut_de_seance(instant: NaiveDateTime) -> NaiveDateTime {
 }
 
 /// Temps restant en années.
-pub fn temps_restant(
-    echeance: EcheanceNy,
-    releve: InstantReleve,
-    convention: Convention,
-) -> f64 {
+pub fn temps_restant(echeance: EcheanceNy, releve: InstantReleve, convention: Convention) -> f64 {
     match convention {
         Convention::Bourse => {
             let jours = jours_ouvres(releve.0.date(), echeance.0.date());
@@ -188,15 +184,35 @@ mod tests {
     /// l'été, l'hiver, une échéance du matin, et une bascule d'heure traversée.
     const ORACLE_HEURES: [(&str, &str, f64); 5] = [
         // hebdomadaire PM, heure d'été (EDT = UTC-4)
-        ("2026-08-26 16:00:00", "2026-08-25 20:30:16", 2.682_141_045_154_744e-3),
+        (
+            "2026-08-26 16:00:00",
+            "2026-08-25 20:30:16",
+            2.682_141_045_154_744e-3,
+        ),
         // mensuelle AM : réglée le matin, six heures et demie plus tôt
-        ("2026-09-18 09:30:00", "2026-08-25 20:30:16", 6.495_383_054_287_164e-2),
+        (
+            "2026-09-18 09:30:00",
+            "2026-08-25 20:30:16",
+            6.495_383_054_287_164e-2,
+        ),
         // heure d'hiver (EST = UTC-5)
-        ("2026-01-16 16:00:00", "2026-01-15 21:00:00", 2.739_726_027_397_26e-3),
+        (
+            "2026-01-16 16:00:00",
+            "2026-01-15 21:00:00",
+            2.739_726_027_397_26e-3,
+        ),
         // traverse le passage à l'heure d'été : 71 heures, pas 72
-        ("2026-03-09 16:00:00", "2026-03-06 21:00:00", 8.105_022_831_050_229e-3),
+        (
+            "2026-03-09 16:00:00",
+            "2026-03-06 21:00:00",
+            8.105_022_831_050_229e-3,
+        ),
         // une minute avant le règlement
-        ("2026-08-25 16:00:00", "2026-08-25 19:59:00", 1.902_587_519_025_875e-6),
+        (
+            "2026-08-25 16:00:00",
+            "2026-08-25 19:59:00",
+            1.902_587_519_025_875e-6,
+        ),
     ];
 
     #[test]
@@ -222,7 +238,10 @@ mod tests {
             Convention::Heures,
         );
         let heures = t * JOURS_CALENDAIRES * 24.0;
-        assert!((heures - 71.0).abs() < 1e-6, "{heures} heures au lieu de 71");
+        assert!(
+            (heures - 71.0).abs() < 1e-6,
+            "{heures} heures au lieu de 71"
+        );
     }
 
     /// L'été le décalage vaut 4 heures, l'hiver 5. C'est ce décalage-là qui tenait
@@ -246,7 +265,10 @@ mod tests {
         let saut = echeance("2026-03-08 02:30:00").en_utc();
         let attendu =
             NaiveDateTime::parse_from_str("2026-03-08 07:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
-        assert_eq!(saut, attendu, "l'heure inexistante doit avancer d'une heure");
+        assert_eq!(
+            saut, attendu,
+            "l'heure inexistante doit avancer d'une heure"
+        );
     }
 
     #[test]
@@ -317,9 +339,18 @@ mod tests {
         let attendu = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
 
         // Été : 17 h New York = 21 h UTC.
-        assert_eq!(seance("2026-08-26 20:59:00"), attendu("2026-08-25 21:00:00"));
-        assert_eq!(seance("2026-08-26 21:00:00"), attendu("2026-08-26 21:00:00"));
-        assert_eq!(seance("2026-08-27 10:00:00"), attendu("2026-08-26 21:00:00"));
+        assert_eq!(
+            seance("2026-08-26 20:59:00"),
+            attendu("2026-08-25 21:00:00")
+        );
+        assert_eq!(
+            seance("2026-08-26 21:00:00"),
+            attendu("2026-08-26 21:00:00")
+        );
+        assert_eq!(
+            seance("2026-08-27 10:00:00"),
+            attendu("2026-08-26 21:00:00")
+        );
     }
 
     /// L'hiver la bascule tombe à 22 h UTC. Un décalage fixe ferait glisser tous
@@ -331,17 +362,27 @@ mod tests {
         };
         let attendu = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
 
-        assert_eq!(seance("2026-01-15 21:30:00"), attendu("2026-01-14 22:00:00"));
-        assert_eq!(seance("2026-01-15 22:00:00"), attendu("2026-01-15 22:00:00"));
+        assert_eq!(
+            seance("2026-01-15 21:30:00"),
+            attendu("2026-01-14 22:00:00")
+        );
+        assert_eq!(
+            seance("2026-01-15 22:00:00"),
+            attendu("2026-01-15 22:00:00")
+        );
         // Et l'été, une heure plus tôt en UTC pour la même heure locale.
-        assert_eq!(seance("2026-07-15 21:00:00"), attendu("2026-07-15 21:00:00"));
+        assert_eq!(
+            seance("2026-07-15 21:00:00"),
+            attendu("2026-07-15 21:00:00")
+        );
     }
 
     /// Minuit UTC tombe au MILIEU d'une séance, jamais à sa frontière : c'est
     /// tout le sujet.
     #[test]
     fn minuit_utc_n_est_pas_une_frontiere_de_seance() {
-        let minuit = NaiveDateTime::parse_from_str("2026-08-27 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let minuit =
+            NaiveDateTime::parse_from_str("2026-08-27 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
         assert_ne!(debut_de_seance(minuit), minuit);
         assert_eq!(
             debut_de_seance(minuit),

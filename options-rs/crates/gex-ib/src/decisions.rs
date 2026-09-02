@@ -111,11 +111,10 @@ pub fn instant_echeance(
         }
     };
     let (h, m, s) = (lire()?, lire()?, lire()?);
-    let locale = jour
-        .and_time(
-            NaiveTime::from_hms_opt(h, m, s)
-                .ok_or_else(|| ErreurEcheance::HeureIllisible(heure.to_string()))?,
-        );
+    let locale = jour.and_time(
+        NaiveTime::from_hms_opt(h, m, s)
+            .ok_or_else(|| ErreurEcheance::HeureIllisible(heure.to_string()))?,
+    );
 
     let fuseau = fuseau.unwrap_or("").trim();
     if fuseau.is_empty() {
@@ -129,7 +128,9 @@ pub fn instant_echeance(
     // tombent pas forcément le même jour.
     let absolu = resoudre(place, locale);
     Ok(EcheanceNy(
-        absolu.with_timezone(&chrono_tz::America::New_York).naive_local(),
+        absolu
+            .with_timezone(&chrono_tz::America::New_York)
+            .naive_local(),
     ))
 }
 
@@ -265,7 +266,9 @@ pub const BUDGET_LIGNES: usize = 90;
 /// obligerait à réécrire la même fonction deux fois.
 pub fn lots<T: Clone>(contrats: &[T], taille: usize) -> Result<Vec<Vec<T>>, String> {
     if taille < 1 {
-        return Err(format!("taille de lot absurde : {taille} (attendu : au moins 1)"));
+        return Err(format!(
+            "taille de lot absurde : {taille} (attendu : au moins 1)"
+        ));
     }
     Ok(contrats.chunks(taille).map(<[_]>::to_vec).collect())
 }
@@ -554,7 +557,12 @@ mod tests {
             },
         })
         .collect();
-        Chaine::nouvelle(lignes, 25_100.0, InstantReleve(instant("2026-08-25 20:30:00"))).unwrap()
+        Chaine::nouvelle(
+            lignes,
+            25_100.0,
+            InstantReleve(instant("2026-08-25 20:30:00")),
+        )
+        .unwrap()
     }
 
     #[test]

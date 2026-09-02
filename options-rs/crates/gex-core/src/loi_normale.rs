@@ -87,7 +87,10 @@ mod tests {
     /// Le cas qui motive erfc plutôt que erf : sans lui, on rendrait 0.
     #[test]
     fn repartition_reste_fine_loin_dans_la_queue() {
-        assert!(repartition(-30.0) > 0.0, "annulation catastrophique dans la queue");
+        assert!(
+            repartition(-30.0) > 0.0,
+            "annulation catastrophique dans la queue"
+        );
         assert!(repartition(-30.0) < 1e-190);
     }
 }

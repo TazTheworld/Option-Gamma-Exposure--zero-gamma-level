@@ -159,12 +159,17 @@ impl Recolte {
             .avis
             .iter()
             .map(|(code, (n, message))| {
-                format!("[{code}] x{n} {}", message.chars().take(90).collect::<String>())
+                format!(
+                    "[{code}] x{n} {}",
+                    message.chars().take(90).collect::<String>()
+                )
             })
             .collect();
-        morceaux.extend(self.erreurs.iter().map(|(message, n)| {
-            format!("x{n} {}", message.chars().take(90).collect::<String>())
-        }));
+        morceaux.extend(
+            self.erreurs.iter().map(|(message, n)| {
+                format!("x{n} {}", message.chars().take(90).collect::<String>())
+            }),
+        );
         Some(morceaux.join(" | "))
     }
 }

@@ -206,7 +206,12 @@ mod tests {
     }
 
     fn chaine(lignes: Vec<Ligne>) -> Chaine {
-        Chaine::nouvelle(lignes, 29_305.75, InstantReleve(instant("2026-08-25 20:30:16"))).unwrap()
+        Chaine::nouvelle(
+            lignes,
+            29_305.75,
+            InstantReleve(instant("2026-08-25 20:30:16")),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -216,8 +221,11 @@ mod tests {
             ligne("2026-08-26 16:00:00", 29_500.0),
             ligne("2026-08-26 16:00:00", 29_000.0),
         ]);
-        let vu: Vec<(NaiveDateTime, f64)> =
-            c.lignes().iter().map(|l| (l.echeance.0, l.strike)).collect();
+        let vu: Vec<(NaiveDateTime, f64)> = c
+            .lignes()
+            .iter()
+            .map(|l| (l.echeance.0, l.strike))
+            .collect();
         assert_eq!(
             vu,
             vec![

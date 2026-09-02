@@ -182,7 +182,11 @@ mod tests {
     /// dont le format diffère ne se trient plus ensemble.
     #[test]
     fn l_horodatage_est_a_la_minute() {
-        assert!(ligne().en_csv().starts_with("2026-08-25 20:30,NQ,30,iv,heures,"));
+        assert!(
+            ligne()
+                .en_csv()
+                .starts_with("2026-08-25 20:30,NQ,30,iv,heures,")
+        );
     }
 
     /// Un niveau absent laisse la colonne vide, jamais un zéro : zéro est un

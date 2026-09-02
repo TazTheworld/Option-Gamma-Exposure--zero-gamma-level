@@ -33,14 +33,14 @@ use gex_ib::client::{ADRESSE_DEFAUT, ATTENTE_LOT, CLIENT_ID_DEFAUT, Passerelle, 
 use gex_ib::decisions::{ContratOption, avec_conid, lots, perimetre, selection_vif};
 use gex_store::ecriture::{archiver, ecrire_courant, elaguer_archives};
 use gex_store::series::{
-    Barre, PointNiveaux, RETENTION_JOURS, borne_de_retention, chemin_barres, chemin_niveaux,
-    a_la_minute, ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux,
+    Barre, PointNiveaux, RETENTION_JOURS, a_la_minute, borne_de_retention, chemin_barres,
+    chemin_niveaux, ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux,
     faut_il_ecrire_un_point, lire_barres, lire_niveaux, recoller,
 };
 
 use decisions::{
-    MARGE_BANDE, attente_avant_reprise, bande_couverte, faut_il_rebalayer,
-    faut_il_reselectionner, horizons_suivis, socle_reutilisable,
+    MARGE_BANDE, attente_avant_reprise, bande_couverte, faut_il_rebalayer, faut_il_reselectionner,
+    horizons_suivis, socle_reutilisable,
 };
 
 /// Lignes de données entretenues par défaut.
@@ -290,7 +290,11 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
     println!(
         "Connecté à {} — données {}",
         args.adresse,
-        if ib.differe { "DIFFÉRÉES (~15 min)" } else { "temps réel" }
+        if ib.differe {
+            "DIFFÉRÉES (~15 min)"
+        } else {
+            "temps réel"
+        }
     );
 
     let futur = ib
@@ -326,8 +330,8 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
         // parce qu'IB renvoie la dernière barre plusieurs fois pendant qu'elle se
         // forme, et que l'historique d'une reprise recouvre ce qu'on avait déjà.
         if etat.barres.is_empty() {
-            etat.barres = lire_barres(&chemin_barres(&args.dir, &args.produit))
-                .map_err(|e| e.to_string())?;
+            etat.barres =
+                lire_barres(&chemin_barres(&args.dir, &args.produit)).map_err(|e| e.to_string())?;
             etat.niveaux = lire_niveaux(&chemin_niveaux(&args.dir, &args.produit))
                 .map_err(|e| e.to_string())?;
             if !etat.barres.is_empty() {
@@ -420,7 +424,13 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
         };
 
         // --- le vif ---
-        let bande = bande_couverte(&etat.vif.iter().map(|(c, _)| c.cle.strike).collect::<Vec<_>>());
+        let bande = bande_couverte(
+            &etat
+                .vif
+                .iter()
+                .map(|(c, _)| c.cle.strike)
+                .collect::<Vec<_>>(),
+        );
         if faut_il_reselectionner(etat.spot, bande, MARGE_BANDE) {
             let cles: Vec<ContratOption> = etat.catalogue.iter().map(|(c, _)| *c).collect();
             let choisis = avec_conid(&selection_vif(socle_courant, args.budget), &cles);
@@ -433,9 +443,13 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                         .cloned()
                 })
                 .collect();
-            if let Some((bas, haut)) =
-                bande_couverte(&etat.vif.iter().map(|(c, _)| c.cle.strike).collect::<Vec<_>>())
-            {
+            if let Some((bas, haut)) = bande_couverte(
+                &etat
+                    .vif
+                    .iter()
+                    .map(|(c, _)| c.cle.strike)
+                    .collect::<Vec<_>>(),
+            ) {
                 println!(
                     "\n[{}] Vif : {} contrats, bande {bas:.0} - {haut:.0}",
                     instant.format("%H:%M:%S"),
@@ -453,8 +467,10 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
         if let Some(dit) = recolte_vif.diagnostic()
             && !etat.refus_signale
         {
-            eprintln!("
-  IB signale sur le vif : {dit}");
+            eprintln!(
+                "
+  IB signale sur le vif : {dit}"
+            );
             etat.refus_signale = true;
         }
         let valeurs_vif = recolte_vif.valeurs;
@@ -499,8 +515,8 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
             }
 
             let fondue = fusionner(socle_courant, frais, etat.spot).map_err(|e| e.to_string())?;
-            let cible = ecrire_courant(&fondue, &args.dir, &args.produit)
-                .map_err(|e| e.to_string())?;
+            let cible =
+                ecrire_courant(&fondue, &args.dir, &args.produit).map_err(|e| e.to_string())?;
             print!(
                 "\r[{}] future {:>10.2} — {} strikes → {}",
                 maintenant().format("%H:%M:%S"),
@@ -635,7 +651,9 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                         // Une archive qui résiste n'arrête pas la collecte, mais
                         // ne part pas non plus en silence : le dossier grossirait
                         // sans que rien ne l'explique.
-                        Err(e) => eprintln!("  Élagage des archives impossible ({e}) — le dossier va grossir."),
+                        Err(e) => eprintln!(
+                            "  Élagage des archives impossible ({e}) — le dossier va grossir."
+                        ),
                     }
                 }
 
@@ -651,10 +669,14 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                     .is_none_or(|avant| avant.elapsed() >= pas)
             });
             if temps_d_archiver {
-                let chemin = archiver(&fondue, &args.dir, &args.produit)
-                    .map_err(|e| e.to_string())?;
+                let chemin =
+                    archiver(&fondue, &args.dir, &args.produit).map_err(|e| e.to_string())?;
                 etat.derniere_archive = Some(Instant::now());
-                println!("\n[{}] archive : {}", maintenant().format("%H:%M:%S"), chemin.display());
+                println!(
+                    "\n[{}] archive : {}",
+                    maintenant().format("%H:%M:%S"),
+                    chemin.display()
+                );
 
                 // Ce que les archives vont coûter, dit une fois, et MESURÉ sur
                 // celle qu'on vient d'écrire plutôt qu'estimé sur une moyenne.
@@ -696,12 +718,16 @@ fn executer() -> Result<(), String> {
         if drapeau.swap(true, Ordering::Relaxed) {
             // Deuxième Ctrl+C : l'utilisateur insiste, on ne le fait pas attendre
             // la fin du lot en cours.
-            eprintln!("
-Arrêt immédiat.");
+            eprintln!(
+                "
+Arrêt immédiat."
+            );
             std::process::exit(130);
         }
-        eprintln!("
-Arrêt demandé — fin du cycle en cours…");
+        eprintln!(
+            "
+Arrêt demandé — fin du cycle en cours…"
+        );
     })
     .map_err(|e| format!("impossible d'installer l'arrêt propre : {e}"))?;
 
@@ -712,8 +738,10 @@ Arrêt demandé — fin du cycle en cours…");
         let depart = Instant::now();
         match session(&args, &mut etat, &arret) {
             Ok(()) => {
-                println!("
-Déconnecté.");
+                println!(
+                    "
+Déconnecté."
+                );
                 return Ok(());
             }
             // Une coupure n'est PAS une panne : TWS se redémarre de force une
@@ -721,8 +749,10 @@ Déconnecté.");
             // heure de New York. Le collecteur doit encaisser les deux.
             Err(motif) => {
                 if arret.load(Ordering::Relaxed) {
-                    println!("
-Déconnecté.");
+                    println!(
+                        "
+Déconnecté."
+                    );
                     return Ok(());
                 }
                 // Une session qui a tenu n'est pas un échec de connexion : sans

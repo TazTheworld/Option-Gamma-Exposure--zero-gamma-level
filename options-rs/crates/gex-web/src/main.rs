@@ -313,7 +313,11 @@ fn avertissement(analyse: &Analyse, cote: bool) -> Option<String> {
     // générique 100. S'il manque, les murs par volume sont simplement absents du
     // graphique — rien ne distinguerait « personne n'a traité » de « la source ne
     // le sert pas ». Un marché ouvert où AUCUN strike n'a traité n'existe pas.
-    if analyse.par_strike.iter().all(|s| s.call_vol + s.put_vol == 0.0) {
+    if analyse
+        .par_strike
+        .iter()
+        .all(|s| s.call_vol + s.put_vol == 0.0)
+    {
         return Some(format!(
             "Aucun volume sur les {} strikes du relevé : la source ne sert pas le volume \
              des options. Les murs par volume restent vides — ce n'est pas une séance sans \
@@ -356,8 +360,8 @@ async fn barres(
     State(args): State<Arc<Arguments>>,
     axum::extract::Query(demande): axum::extract::Query<Demande>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let lues = gex_store::series::lire_barres(&chemin_barres(&args.dir, &args.produit))
-        .map_err(erreur)?;
+    let lues =
+        gex_store::series::lire_barres(&chemin_barres(&args.dir, &args.produit)).map_err(erreur)?;
     let derniere_transaction = lues.last().map(|b| b.instant.and_utc().timestamp());
 
     let pas = demande.pas();
@@ -403,7 +407,10 @@ async fn niveaux(
     let lus = gex_store::series::lire_niveaux(&chemin_niveaux(&args.dir, &args.produit))
         .map_err(erreur)?;
 
-    let mut horizons: Vec<i64> = lus.iter().filter_map(|p| p.dte_max.map(|h| h as i64)).collect();
+    let mut horizons: Vec<i64> = lus
+        .iter()
+        .filter_map(|p| p.dte_max.map(|h| h as i64))
+        .collect();
     horizons.sort_unstable();
     horizons.dedup();
 
@@ -453,7 +460,12 @@ async fn niveaux(
             dte_max: p.dte_max,
         })
         .collect();
-    Ok(axum::Json(SerieNiveaux { horizons, horizon, pas: nom_pas(pas), points }))
+    Ok(axum::Json(SerieNiveaux {
+        horizons,
+        horizon,
+        pas: nom_pas(pas),
+        points,
+    }))
 }
 
 /// Le profil par strike de l'instant présent.

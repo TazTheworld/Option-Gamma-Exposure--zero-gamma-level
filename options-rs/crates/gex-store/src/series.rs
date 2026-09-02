@@ -242,7 +242,10 @@ pub fn agreger_barres(barres: &[Barre], pas: Pas) -> Vec<Barre> {
                 courant.close = b.close;
                 courant.volume += b.volume;
             }
-            _ => sortie.push(Barre { instant: debut, ..*b }),
+            _ => sortie.push(Barre {
+                instant: debut,
+                ..*b
+            }),
         }
     }
     sortie
@@ -261,7 +264,10 @@ pub fn agreger_niveaux(points: &[PointNiveaux], pas: Pas) -> Vec<PointNiveaux> {
     let mut sortie: Vec<PointNiveaux> = Vec::new();
     for p in points {
         let debut = seau(p.instant, pas);
-        let range = PointNiveaux { instant: debut, ..*p };
+        let range = PointNiveaux {
+            instant: debut,
+            ..*p
+        };
         match sortie.last_mut() {
             Some(courant) if courant.instant == debut => *courant = range,
             _ => sortie.push(range),
@@ -292,12 +298,20 @@ pub fn recoller(anciennes: &[Barre], nouvelles: &[Barre]) -> Vec<Barre> {
 
 /// Ne garde que ce qui tombe après la borne.
 pub fn elaguer_barres(barres: &[Barre], borne: NaiveDateTime) -> Vec<Barre> {
-    barres.iter().copied().filter(|b| b.instant >= borne).collect()
+    barres
+        .iter()
+        .copied()
+        .filter(|b| b.instant >= borne)
+        .collect()
 }
 
 /// Ne garde que ce qui tombe après la borne.
 pub fn elaguer_niveaux(points: &[PointNiveaux], borne: NaiveDateTime) -> Vec<PointNiveaux> {
-    points.iter().copied().filter(|p| p.instant >= borne).collect()
+    points
+        .iter()
+        .copied()
+        .filter(|p| p.instant >= borne)
+        .collect()
 }
 
 /// Le chemin de la série des barres.
@@ -357,7 +371,10 @@ fn lot(
 
 /// Écrit la série des barres.
 pub fn ecrire_barres(barres: &[Barre], cible: &Path) -> Result<(), ErreurReleve> {
-    let instants = barres.iter().map(|b| b.instant.and_utc().timestamp_micros()).collect();
+    let instants = barres
+        .iter()
+        .map(|b| b.instant.and_utc().timestamp_micros())
+        .collect();
     let colonne = |extrait: fn(&Barre) -> f64| -> Vec<Option<f64>> {
         barres.iter().map(|b| Some(extrait(b))).collect()
     };
@@ -376,7 +393,10 @@ pub fn ecrire_barres(barres: &[Barre], cible: &Path) -> Result<(), ErreurReleve>
 
 /// Écrit la série des niveaux.
 pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), ErreurReleve> {
-    let instants = points.iter().map(|p| p.instant.and_utc().timestamp_micros()).collect();
+    let instants = points
+        .iter()
+        .map(|p| p.instant.and_utc().timestamp_micros())
+        .collect();
     let sur = |extrait: fn(&PointNiveaux) -> f64| -> Vec<Option<f64>> {
         points.iter().map(|p| Some(extrait(p))).collect()
     };
@@ -419,10 +439,7 @@ type Colonnes = (Vec<NaiveDateTime>, Vec<Vec<Option<f64>>>);
 ///
 /// Un fichier absent rend une série vide plutôt qu'une erreur : au tout premier
 /// démarrage il n'y a rien à lire, et ce n'est pas une panne.
-fn lire_colonnes(
-    source: &Path,
-    noms: &[&str],
-) -> Result<Colonnes, ErreurReleve> {
+fn lire_colonnes(source: &Path, noms: &[&str]) -> Result<Colonnes, ErreurReleve> {
     if !source.exists() {
         return Ok((Vec::new(), noms.iter().map(|_| Vec::new()).collect()));
     }
@@ -591,8 +608,14 @@ mod tests {
     #[test]
     fn un_point_par_minute_pas_par_duree_ecoulee() {
         let avant = instant("2026-08-26 09:15:02");
-        assert!(!faut_il_ecrire_un_point(Some(avant), instant("2026-08-26 09:15:59")));
-        assert!(faut_il_ecrire_un_point(Some(avant), instant("2026-08-26 09:16:01")));
+        assert!(!faut_il_ecrire_un_point(
+            Some(avant),
+            instant("2026-08-26 09:15:59")
+        ));
+        assert!(faut_il_ecrire_un_point(
+            Some(avant),
+            instant("2026-08-26 09:16:01")
+        ));
         // Cinquante-neuf secondes plus tard mais dans la minute suivante : on écrit.
         assert!(faut_il_ecrire_un_point(
             Some(instant("2026-08-26 09:15:58")),
@@ -617,7 +640,10 @@ mod tests {
 
     #[test]
     fn le_premier_point_s_ecrit_toujours() {
-        assert!(faut_il_ecrire_un_point(None, instant("2026-08-26 09:15:02")));
+        assert!(faut_il_ecrire_un_point(
+            None,
+            instant("2026-08-26 09:15:02")
+        ));
     }
 
     /// Le passage d'heure et de jour ne doit pas passer pour la même minute.
@@ -779,7 +805,12 @@ mod tests {
     fn barres_et_niveaux_partagent_leurs_seaux() {
         let b = barre("2026-08-26 14:07:00", 100.0);
         let p = point("2026-08-26 14:07:00", Some(29_100.0));
-        for pas in [Pas::Minutes(5), Pas::Minutes(15), Pas::Minutes(240), Pas::Seance] {
+        for pas in [
+            Pas::Minutes(5),
+            Pas::Minutes(15),
+            Pas::Minutes(240),
+            Pas::Seance,
+        ] {
             assert_eq!(
                 agreger_barres(&[b], pas)[0].instant,
                 agreger_niveaux(&[p], pas)[0].instant,

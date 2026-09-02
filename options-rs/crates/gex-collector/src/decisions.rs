@@ -85,10 +85,7 @@ pub fn attente_avant_reprise(tentative: u32) -> Attente {
 /// socle est en mémoire ET sur disque, et l'open interest qu'il porte ne bougera
 /// pas avant la publication du soir. Le rebalayer coûterait trois à cinq minutes
 /// pour relire exactement les mêmes chiffres.
-pub fn socle_reutilisable(
-    date_socle: Option<NaiveDateTime>,
-    maintenant: NaiveDateTime,
-) -> bool {
+pub fn socle_reutilisable(date_socle: Option<NaiveDateTime>, maintenant: NaiveDateTime) -> bool {
     !faut_il_rebalayer(date_socle, maintenant)
 }
 
@@ -154,15 +151,27 @@ mod tests {
     #[test]
     fn un_socle_de_la_meme_journee_ne_se_rebalaie_pas() {
         let socle = instant("2026-08-26 05:00:00");
-        assert!(!faut_il_rebalayer(Some(socle), instant("2026-08-26 12:00:00")));
-        assert!(!faut_il_rebalayer(Some(socle), instant("2026-08-26 22:59:00")));
+        assert!(!faut_il_rebalayer(
+            Some(socle),
+            instant("2026-08-26 12:00:00")
+        ));
+        assert!(!faut_il_rebalayer(
+            Some(socle),
+            instant("2026-08-26 22:59:00")
+        ));
     }
 
     #[test]
     fn le_socle_se_rebalaie_apres_la_publication() {
         let socle = instant("2026-08-26 05:00:00");
-        assert!(faut_il_rebalayer(Some(socle), instant("2026-08-26 23:00:00")));
-        assert!(faut_il_rebalayer(Some(socle), instant("2026-08-27 06:00:00")));
+        assert!(faut_il_rebalayer(
+            Some(socle),
+            instant("2026-08-26 23:00:00")
+        ));
+        assert!(faut_il_rebalayer(
+            Some(socle),
+            instant("2026-08-27 06:00:00")
+        ));
     }
 
     #[test]
@@ -204,9 +213,15 @@ mod tests {
     #[test]
     fn le_socle_du_jour_survit_a_une_reconnexion() {
         let socle = instant("2026-08-26 05:00:00");
-        assert!(socle_reutilisable(Some(socle), instant("2026-08-26 14:00:00")));
+        assert!(socle_reutilisable(
+            Some(socle),
+            instant("2026-08-26 14:00:00")
+        ));
         // Passé la publication du CME, il est périmé et doit être rebalayé.
-        assert!(!socle_reutilisable(Some(socle), instant("2026-08-27 06:00:00")));
+        assert!(!socle_reutilisable(
+            Some(socle),
+            instant("2026-08-27 06:00:00")
+        ));
         assert!(!socle_reutilisable(None, instant("2026-08-26 14:00:00")));
     }
 

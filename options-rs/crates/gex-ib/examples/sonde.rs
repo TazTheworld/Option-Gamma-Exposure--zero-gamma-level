@@ -47,12 +47,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, paquet) in paquets.iter().enumerate() {
         println!("  lot {}/{} ...", i + 1, paquets.len());
         let recolte = ib.collecter_lot(paquet.as_slice(), ATTENTE_LOT)?;
-        if let Some(dit) = recolte.diagnostic() { println!("    IB signale : {dit}"); }
-        if let Some(r) = recolte.regime { println!("    donnees servies : {r:?}"); }
+        if let Some(dit) = recolte.diagnostic() {
+            println!("    IB signale : {dit}");
+        }
+        if let Some(r) = recolte.regime {
+            println!("    donnees servies : {r:?}");
+        }
         valeurs.extend(recolte.valeurs);
     }
 
-    let avec_oi = valeurs.values().filter(|v| v.open_interest.is_some()).count();
+    let avec_oi = valeurs
+        .values()
+        .filter(|v| v.open_interest.is_some())
+        .count();
     let avec_iv = valeurs.values().filter(|v| v.iv.is_some()).count();
     let avec_gamma = valeurs.values().filter(|v| v.gamma.is_some()).count();
     let sous_jacent = valeurs.values().find_map(|v| v.sous_jacent);

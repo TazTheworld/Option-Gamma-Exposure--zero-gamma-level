@@ -67,15 +67,13 @@ fn en_lot(chaine: &Chaine) -> Result<RecordBatch, ErreurReleve> {
         DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
     )];
-    let mut colonnes: Vec<arrow_array::ArrayRef> = vec![Arc::new(
-        TimestampMicrosecondArray::from(
-            chaine
-                .lignes()
-                .iter()
-                .map(|l| l.echeance.0.and_utc().timestamp_micros())
-                .collect::<Vec<_>>(),
-        ),
-    )];
+    let mut colonnes: Vec<arrow_array::ArrayRef> = vec![Arc::new(TimestampMicrosecondArray::from(
+        chaine
+            .lignes()
+            .iter()
+            .map(|l| l.echeance.0.and_utc().timestamp_micros())
+            .collect::<Vec<_>>(),
+    ))];
 
     for nom in COLONNES_TEXTE {
         champs.push(Field::new(nom, DataType::Utf8, true));
@@ -121,12 +119,16 @@ fn en_lot(chaine: &Chaine) -> Result<RecordBatch, ErreurReleve> {
         false,
     ));
     colonnes.push(Arc::new(TimestampMicrosecondArray::from(vec![
-        chaine.releve.0.and_utc().timestamp_micros();
+        chaine
+            .releve
+            .0
+            .and_utc()
+            .timestamp_micros(
+            );
         n
     ])));
 
-    RecordBatch::try_new(Arc::new(Schema::new(champs)), colonnes)
-        .map_err(ErreurReleve::Decodage)
+    RecordBatch::try_new(Arc::new(Schema::new(champs)), colonnes).map_err(ErreurReleve::Decodage)
 }
 
 /// Écrit une chaîne au chemin donné, en créant le dossier au besoin.
@@ -159,12 +161,10 @@ pub fn ecrire_courant(
 /// Même horodatage que côté Python — `AAAA-MM-JJ_HHMM` — pour que les deux
 /// familles de fichiers se trient ensemble dans un dossier déjà peuplé.
 pub fn archiver(chaine: &Chaine, dossier: &Path, produit: &str) -> Result<PathBuf, ErreurReleve> {
-    let cible = dossier
-        .join(produit.to_ascii_uppercase())
-        .join(format!(
-            "{}.parquet",
-            chaine.releve.0.format("%Y-%m-%d_%H%M")
-        ));
+    let cible = dossier.join(produit.to_ascii_uppercase()).join(format!(
+        "{}.parquet",
+        chaine.releve.0.format("%Y-%m-%d_%H%M")
+    ));
     ecrire(chaine, &cible)?;
     Ok(cible)
 }
@@ -295,8 +295,14 @@ mod tests {
             // CBOE longtemps écrites à zéro. Sans cette vérification, un
             // câblage manquant côté écriture OU côté lecture rendrait un volume
             // nul partout — et se lirait comme « la source ne le sert pas ».
-            assert!((a.call.volume - b.call.volume).abs() < 1e-9, "volume call perdu");
-            assert!((a.put.volume - b.put.volume).abs() < 1e-9, "volume put perdu");
+            assert!(
+                (a.call.volume - b.call.volume).abs() < 1e-9,
+                "volume call perdu"
+            );
+            assert!(
+                (a.put.volume - b.put.volume).abs() < 1e-9,
+                "volume put perdu"
+            );
             assert!(b.call.volume > 0.0, "la chaîne d'essai doit en porter");
         }
         let _ = std::fs::remove_dir_all(&d);

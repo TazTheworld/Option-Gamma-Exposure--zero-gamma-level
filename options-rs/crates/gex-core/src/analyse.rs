@@ -187,9 +187,8 @@ pub struct GammaMajeur {
 /// interest des échéances lointaines l'emporteraient sans produire de flux à
 /// court terme.
 pub fn gamma_majeur(par_strike: &[AgregatStrike], spot: f64, params: &Parametres) -> GammaMajeur {
-    let dans_la_plage = |a: &&AgregatStrike| {
-        spot > 0.0 && ((a.strike - spot) / spot).abs() <= params.plage_murs
-    };
+    let dans_la_plage =
+        |a: &&AgregatStrike| spot > 0.0 && ((a.strike - spot) / spot).abs() <= params.plage_murs;
     let extreme = |plus_grand: bool| {
         par_strike
             .iter()
@@ -208,12 +207,8 @@ pub fn gamma_majeur(par_strike: &[AgregatStrike], spot: f64, params: &Parametres
         // Un extremum du mauvais signe ne serait pas ce qu'on cherche : sans
         // aucun strike à gamma net positif, il n'y a pas de gamma long majeur, et
         // rendre « le moins négatif » le ferait passer pour un aimant.
-        long: extreme(true).filter(|s| {
-            par_strike.iter().any(|a| a.strike == *s && a.gex > 0.0)
-        }),
-        court: extreme(false).filter(|s| {
-            par_strike.iter().any(|a| a.strike == *s && a.gex < 0.0)
-        }),
+        long: extreme(true).filter(|s| par_strike.iter().any(|a| a.strike == *s && a.gex > 0.0)),
+        court: extreme(false).filter(|s| par_strike.iter().any(|a| a.strike == *s && a.gex < 0.0)),
     }
 }
 
@@ -381,9 +376,7 @@ pub fn filtre_echeances(
     let plancher = dte_min.max(0);
     chaine.filtrer(|l| {
         let dte = dte_calendaire(l.echeance, releve);
-        dte >= plancher
-            && dte_max.is_none_or(|max| dte <= max)
-            && l.echeance.en_utc() > releve.0
+        dte >= plancher && dte_max.is_none_or(|max| dte <= max) && l.echeance.en_utc() > releve.0
     })
 }
 
@@ -442,8 +435,7 @@ pub fn expositions(chaine: &Chaine, params: &Parametres) -> Vec<LigneExposee> {
                 // calls, court les puts. Le thêta d'une option longue est négatif,
                 // donc en être COURT rapporte — la soustraction n'est pas une
                 // faute, elle porte tout le sens du chiffre.
-                theta: (l.call.theta * l.call.open_interest
-                    - l.put.theta * l.put.open_interest)
+                theta: (l.call.theta * l.call.open_interest - l.put.theta * l.put.open_interest)
                     * cs,
             }
         })
@@ -497,10 +489,7 @@ pub fn murs(par_strike: &[AgregatStrike], spot: f64, params: &Parametres) -> Mur
     // Un GEX call nul, ou un GEX put non négatif, veut dire qu'il n'y a pas de
     // mur. Prendre l'extremum quand même rendrait le premier strike de la bande,
     // ce qui n'a aucun sens.
-    fn extremum(
-        candidats: impl Iterator<Item = (f64, f64)>,
-        cherche_maximum: bool,
-    ) -> Option<f64> {
+    fn extremum(candidats: impl Iterator<Item = (f64, f64)>, cherche_maximum: bool) -> Option<f64> {
         let mut meilleur: Option<(f64, f64)> = None;
         for (strike, valeur) in candidats {
             let mieux = match meilleur {
@@ -815,15 +804,12 @@ pub fn croisements_zero(niveaux: &[f64], profil: &[f64]) -> Vec<f64> {
 /// annonçait 91,5 sur un profil croisant en 91, 94 et 106 avec un spot à 100,
 /// alors que la bascule se joue à 106.
 pub fn zero_gamma(croisements: &[f64], spot: f64) -> Option<f64> {
-    croisements
-        .iter()
-        .copied()
-        .min_by(|a, b| {
-            (a - spot)
-                .abs()
-                .partial_cmp(&(b - spot).abs())
-                .expect("croisement fini")
-        })
+    croisements.iter().copied().min_by(|a, b| {
+        (a - spot)
+            .abs()
+            .partial_cmp(&(b - spot).abs())
+            .expect("croisement fini")
+    })
 }
 
 /// Le flux de couverture qu'un mouvement du spot vers chaque niveau **impose**.
@@ -1346,7 +1332,9 @@ mod tests {
     fn un_pour_cent_a_cent_millions_force_cent_millions() {
         // Une grille fine autour du spot, pour que le trapèze soit exact.
         let spot = 29_000.0;
-        let niveaux: Vec<f64> = (0..=200).map(|i| spot * (1.0 + 0.0001 * i as f64)).collect();
+        let niveaux: Vec<f64> = (0..=200)
+            .map(|i| spot * (1.0 + 0.0001 * i as f64))
+            .collect();
         let profil = vec![-100e6; niveaux.len()];
         let c = carburant(&niveaux, &profil, spot);
         // Le niveau à +1 % est le centième pas.
@@ -1435,7 +1423,11 @@ mod tests {
             &chaine_oi(
                 &[(
                     ECHEANCES[0],
-                    vec![(100.0, 3_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 1_000.0)],
+                    vec![
+                        (100.0, 3_000.0, 0.0),
+                        (110.0, 0.0, 0.0),
+                        (120.0, 0.0, 1_000.0),
+                    ],
                 )],
                 110.0,
             ),
@@ -1456,7 +1448,11 @@ mod tests {
             &chaine_oi(
                 &[(
                     ECHEANCES[0],
-                    vec![(100.0, 1_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 3_000.0)],
+                    vec![
+                        (100.0, 1_000.0, 0.0),
+                        (110.0, 0.0, 0.0),
+                        (120.0, 0.0, 3_000.0),
+                    ],
                 )],
                 110.0,
             ),
@@ -1479,7 +1475,11 @@ mod tests {
             &chaine_oi(
                 &[(
                     ECHEANCES[0],
-                    vec![(100.0, 0.0, 3_000.0), (110.0, 0.0, 0.0), (120.0, 1_000.0, 0.0)],
+                    vec![
+                        (100.0, 0.0, 3_000.0),
+                        (110.0, 0.0, 0.0),
+                        (120.0, 1_000.0, 0.0),
+                    ],
                 )],
                 110.0,
             ),
@@ -1499,7 +1499,11 @@ mod tests {
             &[
                 (
                     ECHEANCES[0],
-                    vec![(100.0, 3_000.0, 0.0), (110.0, 0.0, 0.0), (120.0, 0.0, 1_000.0)],
+                    vec![
+                        (100.0, 3_000.0, 0.0),
+                        (110.0, 0.0, 0.0),
+                        (120.0, 0.0, 1_000.0),
+                    ],
                 ),
                 (
                     ECHEANCES[2],
@@ -1539,7 +1543,10 @@ mod tests {
             ),
             &params(),
         );
-        assert_eq!(max_pain(&lignes, EcheanceNy(instant(ECHEANCES[0])), 110.0), None);
+        assert_eq!(
+            max_pain(&lignes, EcheanceNy(instant(ECHEANCES[0])), 110.0),
+            None
+        );
     }
 
     /// Le multiplicateur du contrat multiplie toutes les douleurs par le même
@@ -1637,9 +1644,21 @@ mod tests {
             &params(),
         )
         .unwrap();
-        assert!((a.delta - 0.5 * 100.0 * TAILLE * SPOT).abs() < 1e-6, "delta {}", a.delta);
-        assert!((a.vega - 12.0 * 100.0 * TAILLE).abs() < 1e-9, "vega {}", a.vega);
-        assert!((a.theta + 10.0 * 100.0 * TAILLE).abs() < 1e-9, "thêta {}", a.theta);
+        assert!(
+            (a.delta - 0.5 * 100.0 * TAILLE * SPOT).abs() < 1e-6,
+            "delta {}",
+            a.delta
+        );
+        assert!(
+            (a.vega - 12.0 * 100.0 * TAILLE).abs() < 1e-9,
+            "vega {}",
+            a.vega
+        );
+        assert!(
+            (a.theta + 10.0 * 100.0 * TAILLE).abs() < 1e-9,
+            "thêta {}",
+            a.theta
+        );
     }
 
     /// Ces trois-là n'ont pas de repli recalculé : une source qui ne les publie
@@ -1795,7 +1814,10 @@ mod tests {
         let a = analyser(&chaine_essai(), &params()).unwrap();
         let sans = profil_hors_prochaine(&a, &params(), false).unwrap();
         assert_eq!(sans.len(), a.niveaux.len());
-        assert!(sans != a.profil, "retirer une échéance doit changer le profil");
+        assert!(
+            sans != a.profil,
+            "retirer une échéance doit changer le profil"
+        );
     }
 
     /// Choisir le gamma publié doit changer le GEX, pas le profil : à un niveau

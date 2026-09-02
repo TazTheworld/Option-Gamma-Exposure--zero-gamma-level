@@ -123,7 +123,13 @@ fn colonne_ou_zeros(lot: &RecordBatch, nom: &str) -> Result<Vec<f64>, ErreurRele
         .downcast_ref::<Float64Array>()
         .ok_or(ErreurReleve::TypeInattendu("colonne numérique"))?;
     Ok((0..valeurs.len())
-        .map(|i| if valeurs.is_null(i) { 0.0 } else { valeurs.value(i) })
+        .map(|i| {
+            if valeurs.is_null(i) {
+                0.0
+            } else {
+                valeurs.value(i)
+            }
+        })
         .collect())
 }
 
@@ -244,8 +250,7 @@ mod tests {
     use super::*;
 
     fn fixture() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/nq-2026-08-25.parquet")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/nq-2026-08-25.parquet")
     }
 
     /// Le relevé IB réel du 25 août 2026, collecté en différé depuis TWS.
@@ -299,6 +304,9 @@ mod tests {
     #[test]
     fn le_chemin_courant_est_fixe() {
         let p = chemin_courant("snapshots", "nq");
-        assert!(p.ends_with("NQ/courant.parquet") || p.ends_with("NQ\\courant.parquet"), "{p:?}");
+        assert!(
+            p.ends_with("NQ/courant.parquet") || p.ends_with("NQ\\courant.parquet"),
+            "{p:?}"
+        );
     }
 }

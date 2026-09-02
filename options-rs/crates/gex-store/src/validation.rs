@@ -395,7 +395,10 @@ mod tests {
 
     #[test]
     fn le_taux_de_franchissement_se_mesure() {
-        assert_eq!(taux_de_franchissement(&[true, false, false, false]), Some(0.25));
+        assert_eq!(
+            taux_de_franchissement(&[true, false, false, false]),
+            Some(0.25)
+        );
         assert_eq!(taux_de_franchissement(&[]), None);
     }
 

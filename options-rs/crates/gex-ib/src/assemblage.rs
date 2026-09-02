@@ -141,10 +141,8 @@ pub fn fusionner(socle: &Chaine, vif: &Chaine, spot: f64) -> Result<Chaine, Chai
                 return *l;
             };
             let mut fondue = *l;
-            for (ancien, nouveau) in [
-                (&mut fondue.call, &neuf.call),
-                (&mut fondue.put, &neuf.put),
-            ] {
+            for (ancien, nouveau) in [(&mut fondue.call, &neuf.call), (&mut fondue.put, &neuf.put)]
+            {
                 // Zéro veut dire « pas de donnée », pas « volatilité nulle » :
                 // écraser une IV du socle par un vide du vif rendrait un gamma
                 // nul sur un strike qui en porte.
@@ -240,7 +238,10 @@ mod tests {
     /// médiane le protège d'un contrat isolé qui servirait une valeur périmée.
     #[test]
     fn le_prix_du_sous_jacent_vient_des_ticks() {
-        let contrats = vec![contrat(1, 29_400.0, Sens::Call), contrat(2, 29_500.0, Sens::Call)];
+        let contrats = vec![
+            contrat(1, 29_400.0, Sens::Call),
+            contrat(2, 29_500.0, Sens::Call),
+        ];
         let mut v = HashMap::new();
         v.insert(1, valeurs_typiques());
         v.insert(
@@ -307,7 +308,10 @@ mod tests {
             },
         );
         let c = build_chain(&contrats, &v, releve(), None).unwrap();
-        assert!(c.lignes()[0].call.gamma > 0.0, "le gamma doit être recalculé");
+        assert!(
+            c.lignes()[0].call.gamma > 0.0,
+            "le gamma doit être recalculé"
+        );
     }
 
     #[test]
@@ -406,7 +410,13 @@ mod tests {
         let ligne = |volume: f64, oi: f64| Ligne {
             echeance: EcheanceNy(instant("2026-08-27 16:00:00")),
             strike: 29_300.0,
-            call: Cote { iv: 0.2, gamma: 1e-5, open_interest: oi, volume, ..Default::default() },
+            call: Cote {
+                iv: 0.2,
+                gamma: 1e-5,
+                open_interest: oi,
+                volume,
+                ..Default::default()
+            },
             put: Cote::default(),
         };
         let socle = Chaine::nouvelle(
@@ -423,9 +433,14 @@ mod tests {
         .unwrap();
 
         let f = fusionner(&socle, &vif, 29_300.0).unwrap();
-        assert_eq!(f.lignes()[0].call.volume, 310.0, "le volume doit suivre le vif");
         assert_eq!(
-            f.lignes()[0].call.open_interest, 500.0,
+            f.lignes()[0].call.volume,
+            310.0,
+            "le volume doit suivre le vif"
+        );
+        assert_eq!(
+            f.lignes()[0].call.open_interest,
+            500.0,
             "l'open interest reste celui du socle"
         );
     }
@@ -437,7 +452,12 @@ mod tests {
         let ligne = |volume: f64| Ligne {
             echeance: EcheanceNy(instant("2026-08-27 16:00:00")),
             strike: 29_300.0,
-            call: Cote { iv: 0.2, gamma: 1e-5, volume, ..Default::default() },
+            call: Cote {
+                iv: 0.2,
+                gamma: 1e-5,
+                volume,
+                ..Default::default()
+            },
             put: Cote::default(),
         };
         let socle = Chaine::nouvelle(

@@ -105,8 +105,8 @@ pub fn gamma_exposition(p: &Position, sens: Sens) -> f64 {
         return 0.0;
     }
     let racine_t = p.t.sqrt();
-    let dp = ((p.spot / p.strike).ln() + (p.r - p.q + 0.5 * p.vol * p.vol) * p.t)
-        / (p.vol * racine_t);
+    let dp =
+        ((p.spot / p.strike).ln() + (p.r - p.q + 0.5 * p.vol * p.vol) * p.t) / (p.vol * racine_t);
     let gamma = match sens {
         Sens::Call => (-p.q * p.t).exp() * densite(dp) / (p.spot * p.vol * racine_t),
         Sens::Put => {

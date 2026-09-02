@@ -128,10 +128,16 @@ fn valider(chemin: &Path) -> Result<(), String> {
 
     let dire = |titre: &str, gauche: &str, droite: &str, c: Comparaison| {
         println!("{titre}");
-        println!("   {gauche} : {:>3} relevés, mouvement médian {:.2}% / jour",
-                 c.n_a, c.mediane_a * 100.0);
-        println!("   {droite} : {:>3} relevés, mouvement médian {:.2}% / jour",
-                 c.n_b, c.mediane_b * 100.0);
+        println!(
+            "   {gauche} : {:>3} relevés, mouvement médian {:.2}% / jour",
+            c.n_a,
+            c.mediane_a * 100.0
+        );
+        println!(
+            "   {droite} : {:>3} relevés, mouvement médian {:.2}% / jour",
+            c.n_b,
+            c.mediane_b * 100.0
+        );
         match c.ecart {
             None => println!("   -> pas assez de relevés de part et d'autre pour comparer"),
             Some(e) => {
@@ -140,7 +146,11 @@ fn valider(chemin: &Path) -> Result<(), String> {
                     e.abs() * 100.0,
                     if e > 0.0 { "amples" } else { "faibles" }
                 );
-                let verdict = if e > 0.0 { "conforme au modèle" } else { "CONTRAIRE au modèle" };
+                let verdict = if e > 0.0 {
+                    "conforme au modèle"
+                } else {
+                    "CONTRAIRE au modèle"
+                };
                 if c.concluant {
                     println!("      {verdict}");
                 } else {
@@ -167,19 +177,27 @@ fn valider(chemin: &Path) -> Result<(), String> {
         ),
     );
 
-    println!("
-3. LES MURS TIENNENT-ILS ?");
+    println!(
+        "
+3. LES MURS TIENNENT-ILS ?"
+    );
     for (nom, cas) in [
-        ("call wall franchi", obs.iter().filter_map(|o| o.call_wall_franchi).collect::<Vec<_>>()),
-        ("put wall franchi ", obs.iter().filter_map(|o| o.put_wall_franchi).collect::<Vec<_>>()),
+        (
+            "call wall franchi",
+            obs.iter()
+                .filter_map(|o| o.call_wall_franchi)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "put wall franchi ",
+            obs.iter()
+                .filter_map(|o| o.put_wall_franchi)
+                .collect::<Vec<_>>(),
+        ),
     ] {
         match taux_de_franchissement(&cas) {
             None => println!("   {nom} : aucun mur relevé"),
-            Some(taux) => println!(
-                "   {nom} : {:.0}% des {} cas",
-                taux * 100.0,
-                cas.len()
-            ),
+            Some(taux) => println!("   {nom} : {:.0}% des {} cas", taux * 100.0, cas.len()),
         }
     }
     if obs.len() < N_MINIMAL {
@@ -244,7 +262,11 @@ fn groupe(valeur: f64, decimales: usize) -> String {
         sortie.push('.');
         sortie.push_str(reste);
     }
-    if valeur < 0.0 { format!("-{sortie}") } else { sortie }
+    if valeur < 0.0 {
+        format!("-{sortie}")
+    } else {
+        sortie
+    }
 }
 
 /// L'unité d'affichage, selon l'ordre de grandeur.
@@ -568,7 +590,9 @@ fn suivre(
                         .map_err(|e| format!("historique : {e}"))?;
                     enregistres += 1;
                 } else if !avance {
-                    println!("  (relevé inchangé depuis le passage précédent — rien à enregistrer)");
+                    println!(
+                        "  (relevé inchangé depuis le passage précédent — rien à enregistrer)"
+                    );
                 }
                 vu = Some(a.releve);
                 precedent = Some(a);
