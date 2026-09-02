@@ -23,7 +23,7 @@ use gex_store::validation::{
     Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, comparer_derive, lire_historique,
     mediane, observer, taux_de_franchissement,
 };
-use gex_store::{chemin_courant, lire_releve};
+use gex_store::{cftc, chemin_courant, lire_releve};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -95,6 +95,100 @@ struct Arguments {
     /// relevé.
     #[arg(long)]
     valider: bool,
+
+    /// Confronter le postulat sur le signe au rapport CFTC, au lieu de lire un
+    /// relevé.
+    #[arg(long)]
+    cftc: bool,
+
+    /// Dossier des rapports CFTC déposés par `scripts/cftc-telecharger.sh`.
+    #[arg(long, default_value = "cftc", value_name = "DOSSIER")]
+    cftc_dir: PathBuf,
+}
+
+/// Confronte le postulat sur le signe des teneurs à la mesure de la CFTC.
+///
+/// **Ce n'est pas une validation du GEX**, et le rapport le dit à l'écran : la
+/// mesure porte sur un *delta*, quand le GEX porte sur un *gamma*. Elle peut
+/// affaiblir la convention, jamais confirmer le signe affiché.
+fn confronter_cftc(dossier: &Path) -> Result<(), String> {
+    let lire = |nom: &str, version: &str| -> Result<Vec<cftc::Rapport>, String> {
+        let chemin = dossier.join(nom);
+        let texte = std::fs::read_to_string(&chemin)
+            .map_err(|e| cftc::ErreurCftc::Fichier(e).to_string())?;
+        cftc::lire(&texte, version).map_err(|e| format!("{} : {e}", chemin.display()))
+    };
+    let combine = lire("combine.json", "Combined")?;
+    let futures = lire("futures.json", "FutOnly")?;
+    let r = cftc::confronter(&combine, &futures);
+
+    println!("CONFRONTATION DU POSTULAT SUR LE SIGNE DES TENEURS\n");
+    println!("   La convention du dépôt — teneurs longs des calls, courts des puts —");
+    println!("   implique un delta d'options POSITIF, et durablement.\n");
+
+    let Some(part) = r.part_conforme() else {
+        println!("   Aucune semaine commune aux deux rapports : rien à comparer.");
+        return Ok(());
+    };
+    println!("   {} semaines, du {} au {}\n", r.semaines, r.debut, r.fin);
+    println!(
+        "   delta d'options positif : {:>5}  ({:.1} %)   <- conforme",
+        r.conformes,
+        part * 100.0
+    );
+    println!(
+        "   négatif                 : {:>5}  ({:.1} %)",
+        r.contraires,
+        r.contraires as f64 / r.semaines as f64 * 100.0
+    );
+    if r.nuls > 0 {
+        println!("   nul                     : {:>5}", r.nuls);
+    }
+
+    // Le verdict se dit en clair. Un « 57 % » laissé nu se lirait comme une
+    // confirmation, alors qu'un tirage à pile ou face en donnerait 50.
+    let verdict = if part >= 0.9 {
+        "la convention tient presque toujours"
+    } else if part >= 0.7 {
+        "la convention tient le plus souvent"
+    } else if part >= 0.55 {
+        "à peine mieux qu'un tirage : la convention n'est pas une constante"
+    } else {
+        "CONTRAIRE à la convention"
+    };
+    println!("\n   -> {verdict}\n");
+
+    println!(
+        "   amplitude médiane du delta d'options : {} contrats",
+        groupe(r.amplitude_mediane as f64, 0)
+    );
+    println!(
+        "   open interest optionnel médian       : {} contrats",
+        groupe(r.oi_optionnel_median as f64, 0)
+    );
+    if r.oi_optionnel_median > 0 {
+        let poids = r.amplitude_mediane as f64 / r.oi_optionnel_median as f64;
+        println!(
+            "   -> le livre d'options est neutre en delta à {:.0} % près, quand\n      \
+             « longs des calls ET courts des puts » empilerait deux expositions\n      \
+             de même signe.",
+            poids * 100.0
+        );
+    }
+    println!(
+        "\n   position nette globale : courte {} semaines sur {} ({:.1} %)",
+        r.nettes_courtes,
+        r.semaines,
+        r.nettes_courtes as f64 / r.semaines as f64 * 100.0
+    );
+
+    println!(
+        "\n   Ce test porte sur un DELTA, le GEX sur un gamma : il peut affaiblir la\n   \
+         convention, jamais confirmer le signe affiché. Il est agrégé — aucun signe\n   \
+         par strike — et hebdomadaire. « Dealer / Intermediary » désigne le côté\n   \
+         vendeur au sens large, pas les seuls teneurs d'options."
+    );
+    Ok(())
 }
 
 /// Dit qu'un historique vient d'être réécrit, et où trouver la copie d'avant.
@@ -879,6 +973,10 @@ fn executer() -> Result<(), String> {
 
     if args.valider {
         return valider(&args.history);
+    }
+
+    if args.cftc {
+        return confronter_cftc(&args.cftc_dir);
     }
 
     // --watch relit sa source à intervalle régulier. Sur une archive horodatée

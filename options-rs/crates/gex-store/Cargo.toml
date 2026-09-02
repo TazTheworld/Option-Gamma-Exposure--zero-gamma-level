@@ -8,6 +8,9 @@ license.workspace = true
 [dependencies]
 gex-core = { path = "../gex-core" }
 chrono = { workspace = true }
+# Pur Rust : lire le rapport CFTC ne doit pas reintroduire de code C dans un
+# arbre qu on garde compilable pour aarch64 sans chaine croisee.
+serde_json = "1"
 # Les implementations Apache officielles. C'est ici, et seulement ici, que le
 # projet touche a un fichier : gex-core ne peut pas, par construction.
 #

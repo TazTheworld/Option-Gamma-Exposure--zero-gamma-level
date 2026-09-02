@@ -596,15 +596,32 @@ toujours, les noms de fichiers non.
   les teneurs se couvrent aussi entre eux et avec d'autres options, et l'open
   interest dit où des positions ont été ouvertes, pas comment elles sont gérées
   aujourd'hui.
-  Deux façons de la vérifier au lieu de la supposer. Classer les transactions contre
-  le bid et l'ask rendrait le signe contrat par contrat, mais demande les données
-  tick, que les jambes de spreads polluent. Le rapport *Traders in Financial Futures*
-  de la CFTC donne, lui, la position nette de la catégorie **Dealer / Intermediary**
-  sur `NASDAQ MINI`, futures et options combinés — hebdomadaire, public, gratuit.
-  Agrégé, donc incapable de rendre un signe par strike ; mais suffisant pour
-  confronter le signe global calculé ici à une mesure indépendante, semaine après
-  semaine. Tant qu'aucune des deux n'est faite, le signe du GEX reste une hypothèse,
-  et doit se dire comme telle.
+  **Une première mesure existe désormais, et elle ne conforte pas la convention.**
+  `gex --cftc` confronte le rapport *Traders in Financial Futures* de la CFTC :
+  il donne la position nette de la catégorie **Dealer / Intermediary** sur
+  `NASDAQ MINI` en deux versions, futures seuls et futures **et options**
+  combinés, ces dernières converties en équivalent futures par leur delta. Leur
+  différence est donc le delta net du livre d'options des teneurs — et la
+  convention en prédit le signe, un call long comme un put vendu ayant tous deux
+  un delta positif.
+
+  Sur **1 055 semaines, de juin 2006 à août 2026**, ce delta est positif **56,9 %
+  du temps**. À peine mieux qu'un tirage. Et son amplitude médiane est de **316
+  contrats** pour un open interest optionnel médian de **16 526**, soit 2 % : le
+  livre est quasiment neutre en delta, là où « longs des calls ET courts des
+  puts » empilerait deux expositions de même signe.
+
+  Ce que cela ne dit pas doit être dit aussi. La mesure porte sur un **delta**, le
+  GEX sur un **gamma** : elle peut affaiblir la convention, jamais confirmer le
+  signe affiché. Elle est agrégée — aucun signe par strike — et hebdomadaire.
+  Enfin, « Dealer / Intermediary » désigne le côté vendeur au sens large, pas les
+  seuls teneurs d'options.
+
+  Reste la voie fine, non faite : classer les transactions contre le bid et l'ask
+  rendrait le signe contrat par contrat, mais demande les données tick, que les
+  jambes de spreads polluent. Tant qu'elle ne l'est pas, **le signe du GEX est une
+  hypothèse dont on sait maintenant qu'elle n'est pas une constante**, et il doit
+  se dire comme telle.
 - **Le contexte de séance** — OHLCV, iv30, le ratio GEX/volume — a disparu avec le
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cftc;
 pub mod ecriture;
 pub mod historique;
 pub mod series;

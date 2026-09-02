@@ -315,9 +315,30 @@ chiffre.
 
 > **Ce n'est pas une prévision.** Rien ne dit que le prix ira à ce niveau ; ça dit ce qu'il
 > en coûterait au book s'il y allait. Et le signe même du GEX reste un postulat — la
-> convention « dealers longs les calls, courts les puts » n'est pas mesurée. Si elle est
-> fausse sur un produit, la carte est du mauvais côté. `gex --valider` est le seul endroit
-> qui pourra trancher, et il refuse de conclure sous vingt observations.
+> convention « dealers longs les calls, courts les puts ». Si elle est fausse sur un
+> produit, la carte est du mauvais côté.
+>
+> **`gex --cftc` en donne la première mesure, et elle n'est pas rassurante** : sur
+> 1 055 semaines de rapports CFTC, le delta du livre d'options des teneurs sur NQ n'est
+> positif — ce que la convention implique — que 56,9 % du temps, et son amplitude médiane
+> vaut 2 % de l'open interest optionnel. La convention n'est donc pas une constante. Elle
+> porte sur un delta et non sur un gamma, ce qui l'empêche de trancher le signe affiché,
+> mais elle retire le confort de la supposer vraie.
+
+## Confronter le postulat (`gex --cftc`)
+
+La CFTC publie chaque vendredi la position des teneurs sur `NASDAQ MINI`, en deux
+versions : futures seuls, et futures **et options** combinés. La différence est le delta
+net de leur livre d'options, dont la convention prédit le signe.
+
+```sh
+./scripts/cftc-telecharger.sh   # dépose les deux rapports dans cftc/
+gex --cftc
+```
+
+Le lecteur ne va jamais chercher de données — c'est ce qui fait qu'une séance passée se
+rejoue avec le même code qu'une séance vivante. Le réseau est donc dans le script, et
+nulle part ailleurs.
 
 ## Zero gamma : quel croisement ?
 

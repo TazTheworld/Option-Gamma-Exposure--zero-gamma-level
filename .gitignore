@@ -19,3 +19,8 @@ snapshots/
 # avant d'y toucher. Meme raison que history.csv : ce sont des releves locaux,
 # et les pousser mettrait dans un depot public ce que la ligne au-dessus en sort.
 history.csv.*
+
+# Rapports CFTC telecharges. Meme raison que snapshots/ : une donnee publique
+# qu'un script rejoue en trente secondes n'a pas a vivre dans le depot, et les
+# deux fichiers pesent un demi-mega-octet.
+cftc/
