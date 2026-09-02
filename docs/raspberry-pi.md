@@ -18,16 +18,24 @@ pour que `gex-core` ne puisse pas lire `/usr/share` ; il fait qu'un Pi fraîchem
 flashé, sans tzdata configuré, calcule quand même la bascule de séance à 17 h
 New York.
 
-**L'empreinte est dérisoire.** Mesurée sur la machine de développement :
+**L'empreinte est dérisoire**, et ce n'est pas nous qui dimensionnons la machine.
+Mesurée sur le Pi, en séance, tout en marche :
 
-| | mémoire | pic |
-|---|---|---|
-| `gex-collector` | 31,4 Mo | 32,5 Mo |
-| `gex-web` | 25,7 Mo | 27,5 Mo |
+| | mémoire |
+|---|---|
+| IB Gateway (JVM) | **744 Mo** |
+| `Xvfb` | 27 Mo |
+| `gex-collector` | 22 Mo |
+| `gex-web` | 4 Mo |
 
-Côté disque, `snapshots/` pèse un demi-mégaoctet pour trois fichiers. Avec les
-archives et sept jours de rétention on reste dans les dizaines de mégaoctets — une
-carte SD ne s'en aperçoit pas.
+Gateway pèse vingt-cinq fois les deux binaires réunis. C'est lui, et lui seul,
+qui impose de prendre 8 Go plutôt que 2.
+
+Côté disque, `snapshots/` pèse un demi-mégaoctet pour trois fichiers. Avec la
+rétention par défaut de trente jours et sans archives à la minute — le défaut
+aussi — on reste dans les dizaines de mégaoctets ; une carte SD ne s'en aperçoit
+pas. Ce sont les archives, si on les allume, qui coûtent : compter dix gigaoctets
+pour trente jours.
 
 **Le code compile pour `aarch64-unknown-linux-gnu`** sans une seule modification, ce
 qui a été vérifié sur l'ensemble du workspace, tests et exemples compris.
@@ -106,9 +114,45 @@ donc un serveur X virtuel — `Xvfb` — et, pour que la connexion se refasse se
 le redémarrage quotidien d'IB, un automate : `IBC`. L'image `ib-gateway-docker` monte
 exactement cet assemblage et sert de référence utile.
 
-> À vérifier sur place. Tout ce qui précède sur Gateway vient de sa documentation et
-> de projets tiers, pas d'un essai fait ici : il n'y avait pas de Pi sous la main. Le
-> reste de cette page — compilation, empreinte, services — a été mesuré.
+Tout ce qui précède a maintenant été fait sur une machine réelle — un Pi 4 de
+8 Go sous Raspberry Pi OS Lite 64 bits, Gateway 10.45 et IBC 3.24.2. Les pièges
+rencontrés, qui ne sont dans aucune documentation, sont consignés dans
+`AGENTS.md`.
+
+## Fermer le port de l'API
+
+Gateway écoute sur `*:4001`, et cette session sait passer des ordres. Deux
+réglages de `jts.ini` la bornent — `ApiOnly=true`, et `TrustedIPs=127.0.0.1` qui
+fait refuser toute session venue d'ailleurs. Le port reste pourtant joignable
+depuis le réseau local, donc sondable.
+
+**Il n'existe pas de réglage IBC pour le fermer.** Son `BindAddress` gouverne le
+serveur de commandes d'IBC, pas l'API — le nom trompe, et l'essai est sans effet
+sur `ss -ltn`. Le seul moyen est un pare-feu sur la machine :
+
+```sh
+sudo apt install -y nftables
+sudo tee /etc/nftables.conf >/dev/null <<'EOF'
+#!/usr/sbin/nft -f
+flush ruleset
+table inet filtre {
+    chain entree {
+        type filter hook input priority 0; policy accept;
+        iif "lo" accept
+        tcp dport 4001 drop
+    }
+}
+EOF
+sudo systemctl enable --now nftables
+```
+
+La politique reste `accept` et la règle est unique : ce fichier ne ferme rien
+d'autre, et une erreur ici ne doit pas couper SSH. `iif "lo" accept` laisse
+passer le collecteur, qui tourne sur la même carte.
+
+**Le vérifier depuis une autre machine, jamais depuis le Pi.** Une connexion du
+Pi vers sa propre adresse passe par `lo` et tombe sur la règle d'acceptation :
+le test réussit et ne prouve rien.
 
 ## Compiler
 
@@ -144,25 +188,36 @@ redémarrage quotidien d'IB.
 # /etc/systemd/system/gex-collector.service
 [Unit]
 Description=Collecteur GEX — balaie la chaîne d'options via IB Gateway
+Documentation=https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level
 After=network-online.target ibgateway.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=gex
+Group=gex
 WorkingDirectory=/opt/gex
-ExecStart=/opt/gex/bin/gex-collector NQ --retention 7
-# Les alertes. Le collecteur ne connaît pas Discord : il remet une charge à ce
-# programme, et changer de destination ne demande pas de recompiler. Le webhook
-# vit dans un fichier à part, en 600 — il n'a rien à faire dans une unité que
-# `systemctl cat` affiche à qui la demande.
-Environment=GEX_ALERTE_COMMANDE=/opt/gex/bin/alerte-discord.sh
+# --adresse est indispensable : le défaut du binaire est 7496, le port de TWS.
+# Gateway écoute sur 4001, et le pare-feu n'y laisse passer que la boucle locale.
+ExecStart=/opt/gex/bin/gex-collector NQ --adresse 127.0.0.1:4001
+
+# Les alertes vivent entièrement dans ce fichier, absent par défaut. Y écrire
+# GEX_ALERTE_COMMANDE=/opt/gex/bin/alerte-discord.sh et DISCORD_WEBHOOK=... les
+# allume au redémarrage suivant. Tant qu'il n'existe pas, les bascules ne sont
+# qu'écrites au journal — plutôt qu'un envoi qui échouerait à chaque passage.
 EnvironmentFile=-/etc/gex.env
+
 # IB coupe la session une fois par jour : le collecteur doit y survivre seul.
 Restart=always
 RestartSec=30
+
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/gex
+# AF_UNIX et AF_NETLINK ne sont pas décoratifs : sans eux getaddrinfo échoue.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
@@ -172,20 +227,29 @@ WantedBy=multi-user.target
 # /etc/systemd/system/gex-web.service
 [Unit]
 Description=Écran de séance GEX
+Documentation=https://github.com/TazTheworld/Option-Gamma-Exposure--zero-gamma-level
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=gex
+Group=gex
 WorkingDirectory=/opt/gex
-ExecStart=/opt/gex/bin/gex-web NQ --ecoute 0.0.0.0
+# --ecoute 0.0.0.0 est écrit à la main, et un test du dépôt verrouille le défaut
+# sur la boucle locale : sur une machine sans écran l'interface se consulte
+# forcément d'ailleurs. Ce qui est exposé reste une page en lecture seule.
+ExecStart=/opt/gex/bin/gex-web NQ --ecoute 0.0.0.0 --port 8787
+
 Restart=always
 RestartSec=5
+
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/gex/snapshots
+ProtectHome=true
+ReadWritePaths=/opt/gex
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
@@ -295,13 +359,19 @@ quinzaine de minutes avant que la chaîne soit de nouveau complète.
 
 ## Ce qui reste à faire sur place
 
-1. Installer Gateway ARM64 et vérifier qu'il se connecte, avec `Xvfb` et `IBC`.
-2. Autoriser l'API dans Gateway, et y déclarer l'adresse du Pi si Gateway tourne
-   ailleurs (`--adresse` côté collecteur pointe alors vers cette machine).
-3. Poser Tailscale, relever l'adresse `100.x.y.z` et l'écrire dans
-   `gex-web.service`.
-4. Confirmer qu'une séance entière tient sans redémarrage, et relever la mémoire
-   réellement prise par Gateway.
+Les deux premiers points de cette liste sont faits, et la page les décrit
+maintenant au présent plutôt qu'au conditionnel. Restent :
+
+1. **Poser Tailscale**, relever l'adresse `100.x.y.z` et l'écrire dans
+   `gex-web.service` à la place de `0.0.0.0`. L'écran cesserait alors d'être
+   visible du réseau local, et deviendrait joignable depuis n'importe où.
+2. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
+   figé une fois — alimenté mais sourd, sans trace au journal parce qu'il était
+   volatil. Le journal est désormais persistant, `panic=10` est passé au noyau et
+   une sentinelle surveille les écritures disque ; il faut maintenant du temps
+   pour savoir si cela suffit.
+3. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
+   redéploiement.
 
 Les tests sur l'architecture, eux, n'ont plus à être refaits à la main : la CI les
 rejoue en aarch64 à chaque poussée.

@@ -540,6 +540,66 @@ l'écran se lit « les options sont en avance sur le prix ».
 
 [`greeks_muets`]: options-rs/crates/gex-core/src/analyse.rs
 
+## IB Gateway sur le Pi : ce qui coince
+
+Gateway tourne désormais sur le Pi, en aarch64, sans écran et sans intervention.
+Rien de ce qui suit n'était dans la documentation d'IBKR ; tout a coûté une
+erreur. La procédure est dans `docs/raspberry-pi.md` — ici ne sont que les
+pièges, parce qu'ils se reposeront à la prochaine mise à jour de Gateway.
+
+**IBC recompose le chemin des jars, il ne le lit pas.** L'installeur ARM pose
+Gateway dans `/opt/ibgateway`, sans niveau de version. IBC, lui, cherche
+`${TWS_PATH}/ibgateway/${version}/jars` et refuse de démarrer sur un
+« *Offline TWS/Gateway version 1045 is not installed: can't find jars folder* »
+qui laisse croire à une installation ratée alors que tout est en place. La
+réponse est un arbre de liens — `/opt/ibgw-racine/ibgateway/1045 → /opt/ibgateway`
+— et `TWS_PATH` qui pointe sur la racine inventée, pas sur l'installation.
+
+**`-inline`, sinon IBC ouvre un terminal.** Son script de démarrage lance un
+`xterm` par défaut. Sur une machine sans écran cela échoue sur un
+`xterm: command not found` qui n'a aucun rapport apparent avec Gateway.
+
+**Gateway est une application Swing : il lui faut un serveur X, même sans
+écran.** `Xvfb` dans une unité à part, ordonnée avant celle de Gateway. Ce n'est
+pas un environnement de bureau — c'est le strict nécessaire pour qu'une fenêtre
+puisse exister sans être affichée.
+
+**Le code de sortie 1112 dit « délai d'attente du dialogue de connexion » et ment
+par omission.** Ce n'est pas un mot de passe refusé : c'est le second facteur qui
+attend une validation sur le téléphone. Le journal le dit ailleurs, en
+`dsaViaSms=true` puis `Received CHALLENGE`. Il faut donc des délais larges — cinq
+minutes — et `TWOFA_TIMEOUT_ACTION=exit`, pour que systemd relance proprement
+plutôt que de laisser une session à moitié ouverte.
+
+**`BindAddress` dans la configuration d'IBC ne concerne pas l'API.** Le nom
+invite à croire qu'il restreint le port 4001 ; il gouverne le **serveur de
+commandes d'IBC**, et le port de l'API continue d'écouter sur `*:4001`. Il n'y a
+pas de réglage IBC pour cela. `TrustedIPs=127.0.0.1` fait refuser toute session
+venue d'ailleurs, mais le port reste joignable et donc sondable : le seul moyen
+de le fermer vraiment est un pare-feu sur la machine. Une règle `nftables`
+suffit, politique `accept` et une seule ligne pour 4001, afin qu'une erreur ici
+ne coupe jamais SSH.
+
+**Gateway n'écoute pas sur le port que le collecteur suppose.**
+`ADRESSE_DEFAUT` vaut `127.0.0.1:7496`, qui est celui de **TWS**. Gateway écoute
+sur **4001**. L'unité du collecteur doit donc porter `--adresse 127.0.0.1:4001`
+écrit à la main ; sans lui le collecteur ne trouve rien et le message d'erreur
+parle d'une connexion refusée, pas d'un port mal choisi.
+
+**`ldd` signale `libjvm.so => not found` et c'est un faux signal.** La
+bibliothèque est trouvée à l'exécution par le `rpath` du lanceur. Chercher à la
+« réparer » revient à poser un JRE dont Gateway n'a pas besoin.
+
+**`sudo` ne survit pas à un `setsid` détaché.** Les étapes d'installation qui
+téléchargent dans `/opt` ou prennent le verrou d'apt doivent tourner attachées ;
+détachées, elles échouent sur des permissions refusées qui n'ont rien à voir avec
+les droits réels de l'utilisateur.
+
+Enfin, deux réglages de `jts.ini` doublent la propriété de lecture seule décrite
+plus bas : `ApiOnly=true` et le mode lecture seule de l'API. Le dépôt ne passe
+aucun ordre, mais c'est une propriété de **ce** code ; la session, elle, vit sur
+une machine qui tourne sans surveillance.
+
 ## Le partage entre les deux .md
 
 `README.md` **présente** : ce que le projet mesure, comment le lancer, ce qu'il ne fait
