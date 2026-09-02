@@ -640,6 +640,7 @@ dependencies = [
  "gex-ib",
  "gex-store",
  "ibapi",
+ "serde_json",
 ]
 
 [[package]]

@@ -282,6 +282,45 @@ et l'affirmation le dit à l'écran plutôt que de laisser croire le contraire. 
 qui attribue, c'est la comparaison entre fort et faible — et, pour la vanna, le
 fait que le produit avec la variation de volatilité, lui, change bien de signe.
 
+## Les alertes, et pourquoi elles se taisent presque toujours
+
+Trois événements changent la lecture du terrain et sont **datés** : le GEX qui
+change de signe, le prix qui franchit le zero gamma, le prix qui franchit un mur.
+Ils se poussent, ils ne se consultent pas — d'où `gex-collector/src/alertes.rs`.
+
+Tout le problème est de ne pas crier sur du bruit. Le collecteur voit un relevé
+toutes les quinze secondes ; un GEX qui oscille autour de zéro change de signe
+plusieurs fois par minute, et un prix qui longe un mur le franchit vingt fois de
+suite. Une alerte par oscillation vaut **moins** que pas d'alerte : elle apprend
+en une séance à ne plus regarder. Deux garde-fous, aucun n'est du confort :
+
+- **Le signe du GEX doit tenir** trois passages consécutifs avant d'être annoncé.
+  Un aller-retour ne déclenche rien.
+- **Les niveaux ont une bande morte** d'un millième — vingt-neuf points sur un NQ
+  à 29 000. Dans la bande, aucun côté n'est attribué au prix : un franchissement
+  n'existe que d'un côté franc à l'autre. Et un passage dans la bande n'efface
+  pas le dernier côté connu, sans quoi en ressortir ressemblerait à un
+  franchissement.
+
+**Un seul horizon alerte**, celui de `--alerte-horizon`. Le GEX change de signe
+rien qu'en changeant d'horizon : alerter sur tous enverrait la même bascule
+plusieurs fois, en se contredisant.
+
+**Le premier passage n'annonce rien.** Il enregistre où l'on se trouve. Sans lui,
+un collecteur qui démarre en gamma négatif annoncerait tous les matins un
+basculement qui n'a pas eu lieu. La veilleuse vit dans l'état du collecteur et
+non dans la session : une reconnexion à TWS ne change rien au terrain.
+
+**Le collecteur ne connaît pas Discord.** Il forme une charge et l'écrit sur
+l'entrée standard d'un programme configuré — `scripts/alerte-discord.sh` en est
+un, d'une ligne. Ce n'est pas un détour : où part une alerte est une affaire de
+déploiement, pas de collecte. Et cela garde l'arbre **entièrement Rust**, ce
+qu'un client HTTPS aurait défait — `rustls` tire `ring`, donc du C, et c'est
+précisément pour éviter ça que `zstd` avait été retiré de `gex-store`.
+
+L'alerte part **au journal d'abord, et toujours** : un envoi qui échoue ne doit
+pas effacer l'événement.
+
 ## Ne jamais faire en silence
 
 **Annoncé à l'écran, jamais fait en silence.** S'applique à toute substitution,

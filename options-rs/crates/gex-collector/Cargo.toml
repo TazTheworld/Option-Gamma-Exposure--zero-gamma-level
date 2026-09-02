@@ -16,6 +16,10 @@ gex-store = { path = "../gex-store" }
 # Le collecteur est le SEUL a lire l'horloge : la feature clock est ici, et
 # nulle part ailleurs. C'est ce qui garde tout le calcul reproductible.
 chrono = { version = "0.4", features = ["clock", "std"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 ibapi = { version = "3.3", default-features = false, features = ["sync"] }
 ctrlc = "3.5.2"
+# Pur Rust, aucune dependance a code C : l arbre reste compilable pour aarch64
+# sans chaine croisee, ce qui est la raison pour laquelle zstd en avait ete
+# retire. Sert uniquement a former la charge des alertes.
+serde_json = "1"

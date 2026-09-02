@@ -152,6 +152,12 @@ Type=simple
 User=gex
 WorkingDirectory=/opt/gex
 ExecStart=/opt/gex/bin/gex-collector NQ --retention 7
+# Les alertes. Le collecteur ne connaît pas Discord : il remet une charge à ce
+# programme, et changer de destination ne demande pas de recompiler. Le webhook
+# vit dans un fichier à part, en 600 — il n'a rien à faire dans une unité que
+# `systemctl cat` affiche à qui la demande.
+Environment=GEX_ALERTE_COMMANDE=/opt/gex/bin/alerte-discord.sh
+EnvironmentFile=-/etc/gex.env
 # IB coupe la session une fois par jour : le collecteur doit y survivre seul.
 Restart=always
 RestartSec=30

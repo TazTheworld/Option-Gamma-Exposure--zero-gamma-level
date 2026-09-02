@@ -12,10 +12,11 @@
 
 #![forbid(unsafe_code)]
 
+mod alertes;
 mod decisions;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -151,6 +152,60 @@ struct Arguments {
     /// Identifiant client.
     #[arg(long, default_value_t = CLIENT_ID_DEFAUT)]
     client_id: i32,
+
+    /// Programme qui reçoit les alertes sur son entrée standard.
+    ///
+    /// Le collecteur ne connaît pas Discord : il forme une charge et la remet à
+    /// ce programme. Un `curl` d'une ligne suffit — voir `scripts/`. Sans lui,
+    /// les basculements sont écrits au journal et rien n'est envoyé.
+    #[arg(long, value_name = "PROGRAMME", env = "GEX_ALERTE_COMMANDE")]
+    alerte_commande: Option<PathBuf>,
+
+    /// Horizon, en jours, sur lequel les alertes sont mesurées.
+    ///
+    /// Un seul. Le collecteur analyse plusieurs horizons à chaque passage, et
+    /// alerter sur tous enverrait la même bascule autant de fois qu'il y a de
+    /// périmètres — en se contredisant, puisque le GEX change de signe rien
+    /// qu'en changeant d'horizon.
+    #[arg(long, value_name = "N", default_value_t = 30)]
+    alerte_horizon: i64,
+
+    /// Passages consécutifs pendant lesquels un nouveau signe du GEX doit tenir.
+    #[arg(long, value_name = "N", default_value_t = alertes::CONFIRMATIONS_DEFAUT)]
+    alerte_confirmations: u32,
+
+    /// Demi-largeur de la bande morte autour d'un niveau, en fraction.
+    #[arg(long, value_name = "FRACTION", default_value_t = alertes::MARGE_DEFAUT)]
+    alerte_marge: f64,
+}
+
+/// Remet une charge au programme d'envoi.
+///
+/// **La seule E/S du dispositif d'alerte**, et elle est ici plutôt que dans
+/// `alertes` pour que la décision reste vérifiable sans rien lancer.
+///
+/// On attend la fin du programme. Une alerte est rare — quelques-unes par séance
+/// —, donc le coût est nul en pratique ; mais un programme qui ne rendrait
+/// jamais la main figerait la collecte. C'est au script de se donner un délai
+/// maximal, et celui qui est fourni le fait.
+fn remettre(programme: &Path, charge: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut enfant = std::process::Command::new(programme)
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    enfant
+        .stdin
+        .take()
+        .expect("l'entrée standard vient d'être demandée")
+        .write_all(charge.as_bytes())?;
+    let etat = enfant.wait()?;
+    if etat.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "le programme d'alerte a rendu {etat}"
+        )))
+    }
 }
 
 /// L'instant courant, en UTC et sans fuseau attaché.
@@ -259,6 +314,12 @@ struct Etat {
     niveaux: Vec<PointNiveaux>,
     /// La minute du dernier point écrit.
     derniere_minute: Option<chrono::NaiveDateTime>,
+    /// Ce qui distingue un basculement d'une oscillation.
+    ///
+    /// Dans l'état plutôt qu'en variable de session : une reconnexion à TWS ne
+    /// change rien au terrain, et repartir de zéro ferait ré-annoncer le régime
+    /// courant à chaque redémarrage quotidien de la passerelle.
+    veilleuse: Option<alertes::Veilleuse>,
     /// L'absence de vif a-t-elle déjà été dite ? Sans ce drapeau, le message
     /// reviendrait à chaque tour et noierait le reste du journal.
     vif_absent_signale: bool,
@@ -605,6 +666,42 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                             // déjà réglée. On saute celui-là, les autres passent.
                             Err(_) => continue,
                         };
+
+                        // Un seul horizon alerte. Le GEX change de signe rien
+                        // qu'en changeant d'horizon : alerter sur tous enverrait
+                        // la même bascule plusieurs fois, en se contredisant.
+                        if horizon == args.alerte_horizon {
+                            let observe = alertes::Etat {
+                                spot: a.spot,
+                                gex: a.gex,
+                                zero_gamma: a.zero_gamma,
+                                call_wall: a.murs.call,
+                                put_wall: a.murs.put,
+                            };
+                            let veilleuse = etat.veilleuse.get_or_insert_with(|| {
+                                alertes::Veilleuse::neuve(
+                                    args.alerte_confirmations,
+                                    args.alerte_marge,
+                                )
+                            });
+                            for bascule in veilleuse.observer(&observe) {
+                                // Au journal d'abord, et toujours : un envoi qui
+                                // échoue ne doit pas effacer l'événement.
+                                println!("  ALERTE {}", bascule.titre());
+                                if let Some(programme) = &args.alerte_commande {
+                                    let charge = alertes::charge_json(
+                                        &bascule,
+                                        &observe,
+                                        &args.produit.to_uppercase(),
+                                        horizon,
+                                        &instant.format("%Y-%m-%d %H:%M").to_string(),
+                                    );
+                                    if let Err(e) = remettre(programme, &charge) {
+                                        println!("    alerte non remise : {e}");
+                                    }
+                                }
+                            }
+                        }
                         etat.niveaux.push(PointNiveaux {
                             instant: a_la_minute(instant),
                             spot: a.spot,
@@ -790,5 +887,45 @@ fn main() -> ExitCode {
             eprintln!("\nErreur : {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un programme qui lit son entrée standard et existe sur les deux systèmes
+    /// où ce dépôt se compile.
+    fn avaleur() -> &'static str {
+        // `sort` et non `more` : `more` écrit une bannière sur la sortie et se
+        // comporte en pagineur, `sort` avale son entrée et rend zéro.
+        if cfg!(windows) { "sort" } else { "cat" }
+    }
+
+    /// `remettre` est la seule E/S du dispositif d'alerte, donc la seule pièce
+    /// que les tests d'`alertes` ne couvrent pas. Sans ce test, rien ne dirait
+    /// que la charge atteint vraiment le programme d'envoi.
+    #[test]
+    fn la_charge_atteint_le_programme_d_envoi() {
+        assert!(remettre(Path::new(avaleur()), "{\"essai\":1}").is_ok());
+    }
+
+    /// Un programme absent ne doit pas faire tomber le collecteur : l'alerte est
+    /// déjà au journal, et une séance vaut mieux qu'un envoi.
+    #[test]
+    fn un_programme_absent_rend_une_erreur_sans_paniquer() {
+        let e = remettre(Path::new("aucun-programme-de-ce-nom-ici"), "{}");
+        assert!(e.is_err());
+    }
+
+    /// Un envoi qui échoue doit se dire. Le script fourni utilise `--fail`, donc
+    /// un webhook refusé rend un code non nul, et ce code doit remonter.
+    ///
+    /// Restreint aux systèmes qui ont un programme d'échec franc. Windows n'en a
+    /// pas d'équivalent simple ; la CI tourne sous Linux, donc ce test y passe.
+    #[cfg(unix)]
+    #[test]
+    fn un_code_de_retour_non_nul_remonte() {
+        assert!(remettre(Path::new("false"), "{}").is_err());
     }
 }
