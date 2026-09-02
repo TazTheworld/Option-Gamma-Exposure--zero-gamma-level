@@ -15,7 +15,7 @@ cargo build --release                 # gex et gex-collector dans target/release
 
 **Il n'y a rien d'autre à installer.** Ni Python, ni environnement virtuel, ni
 paquet : `cargo` suffit, et la chaîne complète — collecte, calcul, lecture — tient
-dans les cinq crates.
+dans les six crates.
 
 Les déclarations d'initiés, qui vivaient ici, sont parties dans leur propre dépôt
 (`insiders`) : elles ne partageaient aucun code avec le gamma exposure, et les
@@ -520,9 +520,22 @@ toujours, les noms de fichiers non.
 ## Ce qui reste à faire
 
 - **Le sens réel du flux des teneurs de marché.** La convention en place — les
-  dealers sont longs des calls et courts des puts — est un postulat, pas une mesure.
-  Classer les transactions contre le bid et l'ask donnerait le vrai signe. Tant que
-  ce n'est pas fait, le signe du GEX est une hypothèse, et devrait se dire comme telle.
+  dealers sont longs des calls et courts des puts — n'est pas une invention de ce
+  dépôt : c'est celle de Barbon & Buraschi, *Gamma Fragility* (2020), qui mesurent
+  l'effet et le trouvent maximal à **trente minutes**, l'horizon auquel les teneurs
+  réajustent leur couverture. Elle reste pour autant **empirique et non mécanique** :
+  les teneurs se couvrent aussi entre eux et avec d'autres options, et l'open
+  interest dit où des positions ont été ouvertes, pas comment elles sont gérées
+  aujourd'hui.
+  Deux façons de la vérifier au lieu de la supposer. Classer les transactions contre
+  le bid et l'ask rendrait le signe contrat par contrat, mais demande les données
+  tick, que les jambes de spreads polluent. Le rapport *Traders in Financial Futures*
+  de la CFTC donne, lui, la position nette de la catégorie **Dealer / Intermediary**
+  sur `NASDAQ MINI`, futures et options combinés — hebdomadaire, public, gratuit.
+  Agrégé, donc incapable de rendre un signe par strike ; mais suffisant pour
+  confronter le signe global calculé ici à une mesure indépendante, semaine après
+  semaine. Tant qu'aucune des deux n'est faite, le signe du GEX reste une hypothèse,
+  et doit se dire comme telle.
 - **Le contexte de séance** — OHLCV, iv30, le ratio GEX/volume — a disparu avec le
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà

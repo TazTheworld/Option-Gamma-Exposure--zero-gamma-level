@@ -394,7 +394,7 @@ ordre n'est passé nulle part.
 
 ## Sous le capot
 
-**Rust de bout en bout**, collecteur compris, en cinq crates. Aucune autre dépendance :
+**Rust de bout en bout**, collecteur compris, en six crates. Aucune autre dépendance :
 ni Python, ni environnement virtuel, ni paquet à installer. La discipline y est
 structurelle plutôt que conventionnelle — la crate qui produit les chiffres ne déclare
 aucune dépendance capable d'ouvrir un fichier, un socket, ni même de lire l'horloge, et
