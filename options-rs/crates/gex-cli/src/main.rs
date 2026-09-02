@@ -12,7 +12,10 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, ValueEnum};
-use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser, greeks_muets};
+use gex_core::analyse::{
+    Analyse, Parametres, RegimeVol, SourceGamma, analyser, croisements_zero, greeks_muets,
+    profil_hors_prochaine, zero_gamma,
+};
 use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
 use gex_store::historique::{LigneHistorique, Migration, enregistrer};
@@ -516,7 +519,13 @@ fn optionnel(valeur: Option<f64>, decimales: usize) -> String {
 }
 
 /// Le rapport de séance, dans la forme qu'avait le moteur Python.
-fn afficher(a: &Analyse, produit: &str, args: &Arguments, dte_max: Option<i64>) {
+fn afficher(
+    a: &Analyse,
+    produit: &str,
+    args: &Arguments,
+    params: &Parametres,
+    dte_max: Option<i64>,
+) {
     let dec = if a.spot < 10.0 { 4 } else { 2 };
     let echeances = a
         .lignes
@@ -554,6 +563,40 @@ fn afficher(a: &Analyse, produit: &str, args: &Arguments, dte_max: Option<i64>) 
         groupe(a.gex / ech, 2)
     );
     println!("Zero Gamma : {}", optionnel(a.zero_gamma, dec));
+    // Ce que devient la frontière une fois l'échéance la plus proche réglée.
+    //
+    // Le CME liste une échéance NQ **chaque jour de semaine**, et le gamma du
+    // jour même pèse plusieurs fois celui d'une hebdomadaire. Une part du
+    // terrain se dissout donc à chaque clôture : le zero gamma d'aujourd'hui
+    // n'est pas celui de demain matin, et l'écart entre les deux dit combien de
+    // la carte tient à des contrats qui n'existeront plus ce soir.
+    if let Some(profil) = profil_hors_prochaine(a, params, false) {
+        let apres = zero_gamma(&croisements_zero(&a.niveaux, &profil), a.spot);
+        let dte_proche = a.lignes.iter().map(|l| l.dte).min().unwrap_or_default();
+        let total: f64 = a.lignes.iter().map(|l| l.gex).sum();
+        let proche: f64 = a
+            .lignes
+            .iter()
+            .filter(|l| l.dte == dte_proche)
+            .map(|l| l.gex)
+            .sum();
+        let part = if total == 0.0 {
+            "part inconnue".to_string()
+        } else {
+            format!("{:.0} % du GEX", proche.abs() / total.abs() * 100.0)
+        };
+        let ecart = match (a.zero_gamma, apres) {
+            (Some(av), Some(ap)) => format!("   {} pts", groupe_signe(ap - av, dec)),
+            // Le dire : si la frontière n'existe plus sans l'échéance du jour,
+            // c'est qu'elle reposait entièrement sur elle.
+            (Some(_), None) => "   la frontière disparaît avec elle".to_string(),
+            _ => String::new(),
+        };
+        println!(
+            "   sans l'échéance à {dte_proche} j ({part}) : {}{ecart}",
+            optionnel(apres, dec)
+        );
+    }
     println!(
         "Call Wall  : {:>12} (gamma)   {:>12} (open interest)",
         optionnel(a.murs.call, dec),
@@ -752,7 +795,13 @@ fn un_passage(
 ) -> Result<Analyse, String> {
     let chaine = lire_releve(source).map_err(|e| e.to_string())?;
     let analyse = analyser(&chaine, params).map_err(|e| e.to_string())?;
-    afficher(&analyse, &args.produit.to_uppercase(), args, dte_max);
+    afficher(
+        &analyse,
+        &args.produit.to_uppercase(),
+        args,
+        params,
+        dte_max,
+    );
     Ok(analyse)
 }
 
