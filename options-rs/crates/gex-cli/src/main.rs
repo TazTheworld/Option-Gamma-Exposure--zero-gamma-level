@@ -15,7 +15,7 @@ use clap::{Parser, ValueEnum};
 use gex_core::analyse::{Analyse, Parametres, RegimeVol, SourceGamma, analyser, greeks_muets};
 use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
-use gex_store::historique::{LigneHistorique, enregistrer};
+use gex_store::historique::{LigneHistorique, Migration, enregistrer};
 use gex_store::validation::{
     Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, lire_historique, observer,
     taux_de_franchissement,
@@ -92,6 +92,26 @@ struct Arguments {
     /// relevé.
     #[arg(long)]
     valider: bool,
+}
+
+/// Dit qu'un historique vient d'être réécrit, et où trouver la copie d'avant.
+///
+/// **Jamais en silence.** Le fichier porte des relevés qu'aucune source ne
+/// redonnera — IB ne sert pas d'open interest historique —, et une réécriture
+/// qui ne s'annonce pas est une réécriture qu'on ne pense pas à vérifier.
+fn annoncer(migration: Migration) {
+    if let Migration::Faite {
+        ajoutees,
+        releves,
+        sauvegarde,
+    } = migration
+    {
+        println!(
+            "  historique mis à niveau : {releves} relevé(s) reporté(s), colonne(s) ajoutée(s) : {}",
+            ajoutees.join(", ")
+        );
+        println!("  copie d'avant conservée : {}", sauvegarde.display());
+    }
 }
 
 /// Confronte le modèle aux relevés accumulés.
@@ -586,8 +606,10 @@ fn suivre(
                 }
                 let avance = vu != Some(a.releve);
                 if avance && !args.no_history {
-                    enregistrer(&args.history, &ligne_historique(&a, args, dte_max))
-                        .map_err(|e| format!("historique : {e}"))?;
+                    annoncer(
+                        enregistrer(&args.history, &ligne_historique(&a, args, dte_max))
+                            .map_err(|e| format!("historique : {e}"))?,
+                    );
                     enregistres += 1;
                 } else if !avance {
                     println!(
@@ -679,8 +701,10 @@ fn executer() -> Result<(), String> {
     }
     let analyse = un_passage(&source, &params, &args, dte_max)?;
     if !args.no_history {
-        enregistrer(&args.history, &ligne_historique(&analyse, &args, dte_max))
-            .map_err(|e| format!("historique : {e}"))?;
+        annoncer(
+            enregistrer(&args.history, &ligne_historique(&analyse, &args, dte_max))
+                .map_err(|e| format!("historique : {e}"))?,
+        );
     }
     Ok(())
 }

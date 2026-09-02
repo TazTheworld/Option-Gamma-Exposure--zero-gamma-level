@@ -14,3 +14,8 @@ snapshots/
 
 # Journaux du collecteur et du serveur : une trace locale, pas du code.
 *.log
+
+# Les copies laissees par une migration d'en-tete, et celles faites a la main
+# avant d'y toucher. Meme raison que history.csv : ce sont des releves locaux,
+# et les pousser mettrait dans un depot public ce que la ligne au-dessus en sort.
+history.csv.*

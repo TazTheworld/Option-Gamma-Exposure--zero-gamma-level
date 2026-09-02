@@ -270,6 +270,14 @@ Et échouer bruyamment vaut mieux que rendre du vide : une chaîne vide donnerai
 GEX de zéro, qui est un chiffre et non une erreur. Un processus figé est pire
 encore — il passe pour un processus qui travaille.
 
+La règle vaut aussi pour ce qu'on fait aux fichiers déjà écrits. Quand le schéma
+de `history.csv` change, `enregistrer` **migre l'en-tête** avant d'ajouter la
+ligne — sans quoi les nouveaux relevés auraient un champ de plus que l'en-tête, et
+`lire_historique`, qui cherche ses colonnes par nom, les aurait toutes décalées
+d'un cran sans un mot. Les valeurs sont replacées **par nom**, une copie d'avant
+est gardée, et le lecteur l'annonce à l'écran : un fichier qu'aucune source ne
+redonnera ne se réécrit pas discrètement.
+
 Le corollaire vaut pour les séries : quand le marché ne cote pas, la série des
 niveaux **n'écrit rien** plutôt qu'un point à zéro. Une ligne plate se lirait comme
 « le gamma est nul » là où la donnée dit « je ne cote pas ». Les barres, elles,
@@ -542,10 +550,8 @@ toujours, les noms de fichiers non.
   une partie.
 - **Le max pain n'est pas validé.** Il est mesuré, stocké dans la série des niveaux
   et affiché, mais `--valider` ne le confronte à rien : le « pinning » reste une
-  théorie que ce dépôt décrit sans la juger. Le mesurer demande une colonne
-  `max_pain` dans `history.csv`, et **ce n'est pas un simple ajout** :
-  `lire_historique` cherche bien ses colonnes par nom et tolère les absentes, mais
-  `enregistrer` n'écrit l'en-tête qu'à la création du fichier. Une colonne de plus
-  produirait donc des lignes à 26 champs sous un en-tête à 25 — perdues en silence.
-  Il faut d'abord traiter la migration de l'en-tête, puis écrire la quatrième
-  affirmation.
+  théorie que ce dépôt décrit sans la juger. **Le verrou est levé** :
+  `enregistrer` migre désormais l'en-tête d'un historique existant, en replaçant
+  les valeurs par nom et en gardant une copie d'avant. Ajouter `max_pain` à
+  `COLONNES` et au relevé suffit maintenant ; restent la quatrième affirmation à
+  écrire, et l'échantillon à laisser se constituer.
