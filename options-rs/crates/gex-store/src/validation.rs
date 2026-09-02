@@ -22,6 +22,14 @@
 //! [`Observation::mouvement_par_jour`] : mesurer une dérive sur une valeur
 //! absolue effacerait exactement ce que ces deux affirmations avancent.
 //!
+//! La sixième porte sur une **attraction**, ce qui demande encore autre chose :
+//!
+//! 6. le prix est attiré vers le max pain — mais se rapprocher ne le prouve
+//!    pas, puisqu'un prix qui revient vers sa moyenne se rapproche de tout
+//!    niveau proche. C'est la comparaison entre les observations parties de
+//!    près et celles parties de loin qui distingue, le pinning agissant
+//!    localement.
+//!
 //! **Ce n'est pas un backtest de stratégie.** On mesure si la description du
 //! terrain est exacte, pas si on peut en tirer de l'argent.
 //!
@@ -80,6 +88,8 @@ pub struct Releve {
     pub vanna: Option<f64>,
     /// Volatilité implicite à la monnaie, sur l'échéance la plus proche.
     pub iv_atm: Option<f64>,
+    /// Le max pain de l'échéance la plus proche.
+    pub max_pain: Option<f64>,
 }
 
 impl Releve {
@@ -191,6 +201,7 @@ pub fn lire_historique(chemin: impl AsRef<Path>) -> Result<Vec<Releve>, ErreurVa
             charm: flottant(&champs, index("charm")),
             vanna: flottant(&champs, index("vanna")),
             iv_atm: flottant(&champs, index("iv_atm")),
+            max_pain: flottant(&champs, index("max_pain")),
         });
     }
     Ok(releves)
@@ -234,6 +245,16 @@ pub struct Observation {
     pub flux_vanna: Option<f64>,
     /// Le prix est-il allé dans le sens qu'impose ce flux ?
     pub sens_de_la_vanna: Option<bool>,
+    /// Le prix s'est-il rapproché du max pain ?
+    ///
+    /// **Se rapprocher ne prouve rien à soi seul.** Un prix qui revient vers sa
+    /// moyenne se rapproche de tout niveau proche de lui, max pain compris.
+    /// C'est la comparaison entre les observations parties de loin et celles
+    /// parties de près qui distingue un effet d'attraction d'un simple retour :
+    /// le pinning agit localement, donc il devrait se voir surtout de près.
+    pub vers_le_max_pain: Option<bool>,
+    /// Distance de départ au max pain, en fraction du spot.
+    pub distance_max_pain: Option<f64>,
 }
 
 /// Apparie chaque relevé au suivant du même périmètre.
@@ -293,6 +314,13 @@ pub fn observer(releves: &[Releve], intervalle_minimal: f64) -> Vec<Observation>
                     .filter(|f| *f != 0.0 && rendement != 0.0)
                     .map(|f| rendement.signum() == -f.signum()),
                 flux_vanna,
+                // Le max pain de DÉPART, jamais celui d'arrivée : c'est le
+                // niveau que l'on connaissait avant le mouvement. Le juger sur
+                // celui qu'on découvre après reviendrait à prédire le passé.
+                vers_le_max_pain: avant
+                    .max_pain
+                    .map(|m| (apres.spot - m).abs() < (avant.spot - m).abs()),
+                distance_max_pain: avant.max_pain.map(|m| (avant.spot - m).abs() / avant.spot),
             });
         }
     }
@@ -428,6 +456,7 @@ mod tests {
             charm: Some(-154_030_000.0),
             vanna: Some(9_100_000.0),
             iv_atm: Some(0.184),
+            max_pain: Some(29_850.0),
         }
     }
 
@@ -543,6 +572,7 @@ mod tests {
             charm: -154_030_000.0,
             vanna: 9_100_000.0,
             iv_atm: Some(0.184),
+            max_pain: Some(29_850.0),
             strikes: 71,
             echeances: 2,
         };
@@ -664,6 +694,66 @@ mod tests {
         assert_eq!(d.ecart, Some(0.05));
         // Sous trois de chaque côté, aucun écart n'est rendu.
         assert_eq!(comparer_derive(&[0.02], &[-0.01]).ecart, None);
+    }
+
+    // ---=== Le max pain ===---
+
+    /// Deux relevés d'un jour d'écart, dont on choisit le max pain de départ.
+    fn paire_mp(spot0: f64, spot1: f64, max_pain: Option<f64>) -> Observation {
+        let mut a = releve("2026-08-24 20:00", spot0, -1e8);
+        let b = releve("2026-08-25 20:00", spot1, -1e8);
+        a.max_pain = max_pain;
+        observer(&[a, b], INTERVALLE_MINIMAL)[0]
+    }
+
+    #[test]
+    fn le_rapprochement_du_max_pain_se_mesure_dans_les_deux_sens() {
+        // Le prix part sous le max pain et monte vers lui.
+        assert_eq!(
+            paire_mp(29_000.0, 29_500.0, Some(29_850.0)).vers_le_max_pain,
+            Some(true)
+        );
+        // Il part sous et s'en éloigne encore.
+        assert_eq!(
+            paire_mp(29_000.0, 28_500.0, Some(29_850.0)).vers_le_max_pain,
+            Some(false)
+        );
+        // Et par au-dessus : le rapprochement n'a pas de côté privilégié.
+        assert_eq!(
+            paire_mp(30_000.0, 29_900.0, Some(29_850.0)).vers_le_max_pain,
+            Some(true)
+        );
+    }
+
+    /// C'est le max pain de DÉPART qui compte. Juger sur celui qu'on découvre
+    /// après le mouvement reviendrait à prédire le passé.
+    #[test]
+    fn c_est_le_max_pain_d_avant_qui_est_retenu() {
+        let mut a = releve("2026-08-24 20:00", 29_000.0, -1e8);
+        let mut b = releve("2026-08-25 20:00", 29_500.0, -1e8);
+        a.max_pain = Some(29_850.0);
+        // Un max pain d'arrivée qui rendrait le verdict opposé s'il était lu.
+        b.max_pain = Some(28_000.0);
+        assert_eq!(
+            observer(&[a, b], INTERVALLE_MINIMAL)[0].vers_le_max_pain,
+            Some(true)
+        );
+    }
+
+    /// La distance de départ est ce qui permet de distinguer une attraction
+    /// d'un simple retour à la moyenne : le pinning agit localement.
+    #[test]
+    fn la_distance_de_depart_est_relative_au_spot() {
+        let o = paire_mp(29_000.0, 29_500.0, Some(29_290.0));
+        let d = o.distance_max_pain.unwrap();
+        assert!((d - 0.01).abs() < 1e-9, "distance {d} au lieu de 1 %");
+    }
+
+    #[test]
+    fn sans_max_pain_il_n_y_a_rien_a_mesurer() {
+        let o = paire_mp(29_000.0, 29_500.0, None);
+        assert_eq!(o.vers_le_max_pain, None);
+        assert_eq!(o.distance_max_pain, None);
     }
 
     #[test]

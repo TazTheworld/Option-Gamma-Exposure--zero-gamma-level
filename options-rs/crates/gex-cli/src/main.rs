@@ -116,12 +116,14 @@ fn annoncer(migration: Migration) {
 
 /// Confronte le modèle aux relevés accumulés.
 ///
-/// Cinq affirmations vérifiables. Trois portent sur une **amplitude** : les
+/// Six affirmations vérifiables. Trois portent sur une **amplitude** : les
 /// mouvements sont plus amples en gamma négatif, la position vis-à-vis du zero
 /// gamma décide du régime, et le prix bute sur les murs. Deux portent sur un
 /// **sens** : le charm et la vanna imposent aux teneurs un flux de couverture
 /// dirigé, donc une dérive. Les mesurer sur une valeur absolue, comme les trois
-/// premières, effacerait précisément ce qu'elles avancent.
+/// premières, effacerait précisément ce qu'elles avancent. La sixième porte sur une
+/// **attraction** — le max pain — et demande de comparer ce qui part de près à ce
+/// qui part de loin, faute de quoi un simple retour à la moyenne s'y confondrait.
 ///
 /// **Ce n'est pas un backtest de stratégie** — on mesure si la description du
 /// terrain est exacte, pas si on peut en tirer de l'argent.
@@ -345,6 +347,62 @@ fn valider(chemin: &Path) -> Result<(), String> {
         "flux fort  ",
         "flux faible",
     );
+
+    // La sixième affirmation compare deux TAUX et non deux dérives : « le prix
+    // s'est-il rapproché » est un oui ou un non, pas une amplitude.
+    println!("\n6. LE PRIX VA-T-IL VERS LE MAX PAIN ?");
+    println!("   Le « pinning » veut que le prix soit attiré vers le strike qui coûte le");
+    println!("   moins cher aux vendeurs d'options. Se rapprocher ne suffit pas à le");
+    println!("   prouver : un prix qui revient vers sa moyenne se rapproche de tout");
+    println!("   niveau proche de lui, max pain compris.");
+    let avec_mp: Vec<(f64, bool)> = obs
+        .iter()
+        .filter_map(|o| Some((o.distance_max_pain?, o.vers_le_max_pain?)))
+        .collect();
+    if avec_mp.is_empty() {
+        println!("   -> aucune observation ne porte de max pain");
+    } else {
+        let tous: Vec<bool> = avec_mp.iter().map(|(_, v)| *v).collect();
+        println!(
+            "   rapprochement : {:.0}% des {} cas",
+            taux_de_franchissement(&tous).unwrap_or(0.0) * 100.0,
+            tous.len()
+        );
+        // Ce qui distingue une attraction d'un simple retour à la moyenne : le
+        // pinning agit LOCALEMENT, donc il doit se voir surtout de près.
+        let seuil = mediane(&avec_mp.iter().map(|(d, _)| *d).collect::<Vec<_>>());
+        let (mut pres, mut loin) = (Vec::new(), Vec::new());
+        for (distance, rapproche) in &avec_mp {
+            if *distance <= seuil {
+                &mut pres
+            } else {
+                &mut loin
+            }
+            .push(*rapproche);
+        }
+        for (nom, cas) in [("parti de près", &pres), ("parti de loin", &loin)] {
+            match taux_de_franchissement(cas) {
+                None => println!("   {nom} : aucun cas"),
+                Some(t) => println!(
+                    "   {nom} : {:>3} relevés, rapprochement {:.0}%",
+                    cas.len(),
+                    t * 100.0
+                ),
+            }
+        }
+        match (taux_de_franchissement(&pres), taux_de_franchissement(&loin)) {
+            (Some(p), Some(l)) if pres.len() >= 3 && loin.len() >= 3 => {
+                println!(
+                    "   -> écart de {:+.0} point(s) en faveur du près",
+                    (p - l) * 100.0
+                );
+                if tous.len() < N_MINIMAL {
+                    println!("      l'échantillon est trop court pour conclure");
+                }
+            }
+            _ => println!("   -> pas assez de cas de part et d'autre pour distinguer"),
+        }
+    }
 
     if obs.len() < N_MINIMAL {
         println!(
@@ -658,6 +716,7 @@ fn ligne_historique(a: &Analyse, args: &Arguments, dte_max: Option<i64>) -> Lign
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
         iv_atm: a.iv_atm,
+        max_pain: a.max_pain,
     }
 }
 

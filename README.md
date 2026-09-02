@@ -346,9 +346,15 @@ cristallise qu'au règlement, et deux échéances règlent deux jours différent
 additionner supposerait que le prix est le même les deux jours.
 
 C'est une **description de l'open interest**, au même titre que les murs — pas une
-prévision. La théorie du « pinning » autour du max pain reste contestée, et **rien dans ce
-dépôt ne la vérifie** : `gex --valider` confronte cinq affirmations aux séances observées,
-et celle-ci n'en fait pas partie.
+prévision. La théorie du « pinning » autour du max pain reste contestée, et le dépôt ne la
+prend pas pour acquise : elle est désormais la **sixième affirmation** que `gex --valider`
+confronte aux séances observées, et elle a autant de valeur si la réponse est négative.
+
+Sa mesure demande une précaution que les cinq autres n'exigent pas. Se rapprocher du max
+pain ne prouve rien à soi seul — un prix qui revient vers sa moyenne se rapproche de tout
+niveau proche de lui. Ce qui distingue une attraction d'un simple retour, c'est de comparer
+les séances parties **de près** à celles parties **de loin** : le pinning agit localement,
+donc il doit se voir surtout de près.
 
 > Ne pas le confondre avec le zero gamma. Le zero gamma vient des **greeks** et bouge quand
 > le prix bouge ; le max pain vient de l'**open interest seul** et ne bouge que quand
@@ -360,7 +366,7 @@ et celle-ci n'en fait pas partie.
 gex --valider
 ```
 
-Chaque relevé s'ajoute à `history.csv`, et `--valider` confronte cinq affirmations à ce
+Chaque relevé s'ajoute à `history.csv`, et `--valider` confronte six affirmations à ce
 qui s'est réellement passé : les mouvements sont-ils plus amples en gamma négatif ? La
 position vis-à-vis du zero gamma décide-t-elle du régime ? Le prix bute-t-il sur les murs ?
 

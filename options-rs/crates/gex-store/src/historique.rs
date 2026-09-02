@@ -23,7 +23,7 @@ use chrono::NaiveDateTime;
 /// nom, donc insérer une colonne au milieu est aussi sûr que l'ajouter à la fin.
 /// Ce qui reste interdit est de **renommer** une colonne — la migration s'arrête
 /// alors plutôt que de perdre ce qu'elle ne sait plus où mettre.
-pub const COLONNES: [&str; 26] = [
+pub const COLONNES: [&str; 27] = [
     "timestamp",
     "ticker",
     "dte_max",
@@ -47,6 +47,10 @@ pub const COLONNES: [&str; 26] = [
     // pas être confrontée à quoi que ce soit — il n'existerait aucune variation
     // de volatilité à multiplier par elle.
     "iv_atm",
+    // Le strike qui minimise la valeur totale des options à l'échéance la plus
+    // proche. Mesuré et affiché depuis le début, mais confronté à rien : le
+    // « pinning » restait une théorie que le dépôt décrivait sans la juger.
+    "max_pain",
     "open",
     "high",
     "low",
@@ -105,6 +109,13 @@ pub struct LigneHistorique {
     /// d'un relevé au suivant, il n'y a rien à multiplier par la vanna, donc
     /// aucun flux de couverture à confronter au mouvement du prix.
     pub iv_atm: Option<f64>,
+    /// Le max pain de l'échéance la plus proche.
+    ///
+    /// Sans lui dans l'historique, le « pinning » ne peut être ni confirmé ni
+    /// démenti : il faut le niveau **et** le prix qui a suivi, donc deux relevés
+    /// séparés — ce que la série des niveaux, bornée à trente jours et écrite à
+    /// la minute, ne donne pas sous la même forme.
+    pub max_pain: Option<f64>,
 }
 
 /// Un flottant tel que le CSV l'attend, ou rien.
@@ -136,6 +147,7 @@ impl LigneHistorique {
             self.strikes.to_string(),
             self.echeances.to_string(),
             champ(self.iv_atm),
+            champ(self.max_pain),
         ];
         // Les huit colonnes de contexte de séance, plus le ratio au volume :
         // vides sur futures, gardées pour que le schéma ne bouge pas.
@@ -317,6 +329,7 @@ mod tests {
             strikes: 142,
             echeances: 3,
             iv_atm: Some(0.184),
+            max_pain: Some(29_850.0),
         }
     }
 

@@ -570,10 +570,10 @@ toujours, les noms de fichiers non.
   CBOE. Le schéma d'historique garde ses colonnes vides pour que les fichiers déjà
   écrits restent lisibles ; IB pourrait les servir, et les barres en portent déjà
   une partie.
-- **Le max pain n'est pas validé.** Il est mesuré, stocké dans la série des niveaux
-  et affiché, mais `--valider` ne le confronte à rien : le « pinning » reste une
-  théorie que ce dépôt décrit sans la juger. **Le verrou est levé** :
-  `enregistrer` migre désormais l'en-tête d'un historique existant, en replaçant
-  les valeurs par nom et en gardant une copie d'avant. Ajouter `max_pain` à
-  `COLONNES` et au relevé suffit maintenant ; restent la quatrième affirmation à
-  écrire, et l'échantillon à laisser se constituer.
+- **L'échantillon, et rien d'autre.** Les six affirmations sont écrites et
+  testées ; ce qui manque est ce qu'aucun code ne remplace. Dix-huit relevés
+  n'ont donné qu'**une** observation, et trois des six mesures — la vanna, le max
+  pain, et le charm au-delà de son taux — demandent en plus des relevés **neufs**,
+  puisque `iv_atm` et `max_pain` n'existent pas dans les anciens. IB ne servant
+  pas d'open interest historique, une séance non collectée est perdue pour
+  toujours : c'est la seule dette du dépôt que le temps aggrave.
