@@ -1,10 +1,20 @@
-# Pourquoi cette CI tourne sur DEUX architectures.
+# Pourquoi cette CI ne fait presque rien.
 #
-# Le poste de développement est en x86_64, la machine visée est un Raspberry Pi
-# en aarch64. Un dépôt qui ne vérifie qu'une des deux ne découvre l'écart qu'au
-# déploiement — au moment précis où l'on n'a plus sous la main de quoi le
-# corriger. Les tests tournent donc sur les deux, et c'est le travail de l'ARM64
-# qui répond à la question que la machine de développement ne peut pas poser.
+# Elle avait ete retiree une fois, deliberement, parce qu'elle rejouait ce que
+# `cargo test` et `cargo clippy` font deja sur le poste avant de pousser. Le
+# raisonnement tenait : une CI qui repete un geste qu'on fait de toute facon
+# n'apprend rien, et son feu vert finit par ne plus rien vouloir dire.
+#
+# Il reste pourtant une question que le poste ne peut pas poser. Le
+# developpement se fait en x86_64, la machine visee est un Raspberry Pi en
+# aarch64, et aucune commande lancee a la main sur le poste ne dira si l'arbre
+# tient sur l'autre architecture. C'est le seul travail garde ici, et c'est
+# pourquoi la CI se reduit a lui.
+#
+# `cargo clippy` reste a la main, comme le dit AGENTS.md. Le formatage, lui, est
+# verifie : il ne l'etait pas tant que le depot portait quatre-vingt-dix ecarts
+# anterieurs, le compte est desormais a zero, et c'est la condition que l'ancien
+# fichier posait lui-meme pour le brancher.
 name: CI
 
 on:
@@ -16,40 +26,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  x86:
-    name: Tests et clippy (x86_64)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: options-rs
-      - name: Tests
-        run: cargo test --workspace --manifest-path options-rs/Cargo.toml
-      - name: Clippy
-        run: >
-          cargo clippy --workspace --all-targets
-          --manifest-path options-rs/Cargo.toml -- -D warnings
-      # `cargo fmt` n'est PAS vérifié ici, et c'est délibéré : le dépôt porte
-      # quatre-vingt-neuf écarts antérieurs à cette CI. Les mettre au barrage
-      # rendrait rouge une branche saine, ce qui apprend en deux jours à ne plus
-      # regarder le rouge. À reprendre dans un commit dédié, puis à brancher ici
-      # une fois le compte ramené à zéro.
-
   aarch64:
     name: Tests sur l'architecture du Pi
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: options-rs
-      # Compilation NATIVE, pas croisée : le runner est lui-même en aarch64, donc
-      # les tests s'exécutent vraiment sur l'architecture de destination au lieu
-      # d'être seulement compilés pour elle.
+      # Compilation NATIVE, pas croisee : le runner est lui-meme en aarch64, donc
+      # les tests s'executent vraiment sur l'architecture de destination au lieu
+      # d'etre seulement compiles pour elle.
       - name: Tests
         run: cargo test --workspace --manifest-path options-rs/Cargo.toml
+      - name: Formatage
+        run: cargo fmt --all --check --manifest-path options-rs/Cargo.toml

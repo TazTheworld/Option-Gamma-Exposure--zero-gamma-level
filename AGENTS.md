@@ -129,8 +129,12 @@ lit comme une séance qui s'arrête — pas comme une erreur.
 
 **Aucun test ne touche au réseau, ni à TWS.** La suite doit passer sur une machine
 qui n'a ni passerelle ni connexion — un test qui aurait besoin d'un appel réseau
-teste la mauvaise chose. Il n'y a pas d'intégration continue pour le rappeler :
-`cargo test --workspace` et `cargo clippy` se lancent à la main, avant de pousser.
+teste la mauvaise chose.
+
+`cargo test --workspace` et `cargo clippy` **se lancent à la main, avant de
+pousser**. L'intégration continue ne les remplace pas : elle ne fait qu'une chose,
+rejouer les tests sur `aarch64` — l'architecture du Raspberry Pi —, et vérifier le
+formatage. C'est la seule question que le poste, en x86_64, ne peut pas poser.
 
 Les jeux d'essai sont **construits depuis des paramètres connus** — spot, IV, open
 interest placés à des strikes choisis — pour vérifier qu'on retrouve la vérité

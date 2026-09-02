@@ -256,9 +256,11 @@ montage que Tailscale, pour un besoin que tu n'as peut-être pas.
 
 Deux workflows vivent dans `.github/workflows`.
 
-**`ci.yml`** rejoue les tests et clippy à chaque poussée, sur x86_64 **et** sur
-aarch64. Le second est celui qui compte ici : il exécute vraiment la suite sur
-l'architecture du Pi, ce que la machine de développement ne sait pas faire.
+**`ci.yml`** rejoue les tests sur aarch64 à chaque poussée, et vérifie le
+formatage. C'est tout ce qu'il fait, et c'est délibéré : il exécute vraiment la
+suite sur l'architecture du Pi, ce que la machine de développement ne sait pas
+faire. Les tests x86 et clippy se lancent à la main avant de pousser — les
+rejouer ici n'aurait rien appris.
 
 **`release.yml`** construit les binaires ARM64 et les attache à une version. Le
 runner aarch64 de GitHub est gratuit sur un dépôt public et compile nativement,

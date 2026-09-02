@@ -227,8 +227,10 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Il n'y a pas d'intégration continue : ces deux commandes se lancent à la main,
-avant de pousser.
+Ces deux commandes se lancent **à la main, avant de pousser**. L'intégration
+continue ne les rejoue pas : elle ne fait que ce que ce poste ne peut pas faire —
+lancer les tests sur `aarch64`, l'architecture du Raspberry Pi — et vérifier le
+formatage.
 
 Aucun test ne touche au réseau, comme dans le dépôt Python. La méthode de Brent
 est écrite ici plutôt qu'empruntée : soixante lignes, contre une dépendance qui
