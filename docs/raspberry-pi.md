@@ -288,14 +288,16 @@ des ordres. Ce dépôt ne le fait jamais — mais c'est une propriété de ce co
 de la machine. Rediriger un port vers un service sans authentification, devant une
 machine qui porte cette session, est le seul montage vraiment à éviter.
 
-Il n'y en a d'ailleurs pas besoin.
+Il n'y en a d'ailleurs pas besoin : un tunnel sortant rend la même chose sans
+rien ouvrir. C'est **Cloudflare Tunnel** qui a été retenu, et il tourne.
+Tailscale est décrit d'abord parce qu'il reste le choix le plus sûr — et parce
+que ce qui l'a écarté ici est un besoin précis, pas un défaut.
 
-### Tailscale : le plus simple et le plus sûr à la fois
+### Tailscale : le plus sûr, mais il faut l'installer partout
 
-Les deux vont rarement ensemble. Tailscale monte un réseau privé entre tes
-appareils — le Pi, ton portable, ton téléphone. Aucune redirection de port, aucun
-DNS dynamique à entretenir, aucun certificat. Gratuit pour un usage personnel,
-paquet ARM64 disponible.
+Tailscale monte un réseau privé entre tes appareils — le Pi, ton portable, ton
+téléphone. Aucune redirection de port, aucun DNS dynamique à entretenir, aucun
+certificat. Gratuit pour un usage personnel, paquet ARM64 disponible.
 
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -314,13 +316,58 @@ L'écran n'est alors même plus visible depuis ton réseau local : seuls tes pro
 appareils l'atteignent, où qu'ils soient. Avec MagicDNS, l'adresse devient
 `http://raspberrypi:8787` depuis n'importe lequel d'entre eux.
 
-### Cloudflare Tunnel, si tu veux une vraie URL publique
+### Cloudflare Tunnel — ce qui est en place
 
-Pour ouvrir l'écran depuis un appareil sur lequel tu ne peux rien installer,
-`cloudflared` monte un tunnel **sortant** — donc toujours aucun port ouvert — et
-rend une adresse en HTTPS. Mets Cloudflare Access devant : sans lui, l'adresse est
-publique et l'écran n'a aucune authentification à lui. C'est nettement plus de
-montage que Tailscale, pour un besoin que tu n'as peut-être pas.
+C'est la solution retenue, et elle tourne : l'écran est sur
+**`https://gex.unfiltr.app`**.
+
+`cloudflared` monte un tunnel **sortant** — le Pi se connecte à Cloudflare, rien
+n'entre — et rend une adresse en HTTPS joignable depuis n'importe quel appareil,
+y compris ceux sur lesquels on ne peut rien installer. C'est ce dernier point qui
+l'a emporté sur Tailscale.
+
+Le montage tient en trois commandes, une fois `cloudflared` installé depuis le
+dépôt officiel de Cloudflare :
+
+```sh
+cloudflared tunnel login          # ouvre un navigateur, autorise la zone
+cloudflared tunnel create gex-pi
+cloudflared tunnel route dns gex-pi gex.unfiltr.app
+```
+
+La configuration n'a qu'une route, et le refus explicite qui la suit compte
+autant qu'elle :
+
+```yaml
+# /etc/cloudflared/config.yml
+tunnel: <uuid>
+credentials-file: /etc/cloudflared/<uuid>.json
+
+ingress:
+  - hostname: gex.unfiltr.app
+    service: http://127.0.0.1:8787
+  - service: http_status:404
+```
+
+Le `http_status:404` final garantit que le tunnel ne peut servir de porte vers
+rien d'autre sur cette machine — et surtout pas vers le 4001 de Gateway. Un
+tunnel sans cette règle de fermeture est un tunnel dont on ne connaît pas la
+surface.
+
+L'unité systemd porte `--no-autoupdate` : le paquet vient d'apt, et sans ce
+drapeau `cloudflared` se remplace tout seul puis se redémarre à un moment qu'on
+n'a pas choisi.
+
+#### L'adresse est publique, et c'est un choix
+
+**Il n'y a pas de Cloudflare Access devant.** L'écran n'ayant aucune
+authentification à lui, quiconque connaît l'adresse lit les niveaux — spot, murs,
+zéro gamma. Le choix a été fait en connaissance de cause ; il se révoque en deux
+clics dans le tableau de bord Cloudflare, sans rien retoucher sur le Pi.
+
+Ce que cela n'expose pas, en revanche, mérite d'être dit : le tunnel ne mappe que
+le 8787, `nftables` ferme le 4001, et la session Gateway reste injoignable
+depuis l'extérieur comme depuis le réseau local.
 
 ## Mettre à jour sans recompiler
 
@@ -359,12 +406,15 @@ quinzaine de minutes avant que la chaîne soit de nouveau complète.
 
 ## Ce qui reste à faire sur place
 
-Les deux premiers points de cette liste sont faits, et la page les décrit
-maintenant au présent plutôt qu'au conditionnel. Restent :
+L'accès à distance et le pare-feu se sont ajoutés à la liste des choses faites.
+Restent :
 
-1. **Poser Tailscale**, relever l'adresse `100.x.y.z` et l'écrire dans
-   `gex-web.service` à la place de `0.0.0.0`. L'écran cesserait alors d'être
-   visible du réseau local, et deviendrait joignable depuis n'importe où.
+1. **Enregistrer la ligne d'historique quotidienne.** Le collecteur écrit les
+   parquet ; c'est le binaire `gex` qui ajoute la ligne à `history.csv`, et rien
+   ne le lance sur le Pi. Les relevés s'accumulent donc, mais pas les
+   observations qui alimentent les six affirmations — et une séance non
+   enregistrée est perdue pour toujours. Un timer systemd après la clôture
+   suffirait.
 2. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
    figé une fois — alimenté mais sourd, sans trace au journal parce qu'il était
    volatil. Le journal est désormais persistant, `panic=10` est passé au noyau et
