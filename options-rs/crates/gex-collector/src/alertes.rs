@@ -283,7 +283,24 @@ pub fn charge_json(
         format!("GEX {:+.0}", etat.gex),
     ];
     match bascule {
-        Bascule::ZeroGamma { niveau, .. } => lignes.push(format!("zero gamma {niveau:.2}")),
+        Bascule::ZeroGamma { niveau, .. } => {
+            lignes.push(format!("zero gamma {niveau:.2}"));
+            // La zone vient du SIGNE DU GEX, jamais du sens du franchissement.
+            //
+            // La tentation serait de dire « franchi par le haut, donc on passe en
+            // zone positive ». C'est faux dès que les ailes sont chargées : le
+            // profil croise zéro plusieurs fois, on n'en retient qu'un, et
+            // au-dessus de celui-là le gamma peut très bien rester négatif. Le
+            // dépôt le dit déjà de son côté écran — « c'est faux quand il y en a
+            // trois » — et c'est précisément dans ce cas-là qu'une alerte compte.
+            //
+            // Le signe du GEX, lui, ne se déduit pas : il est mesuré.
+            lignes.push(if etat.gex < 0.0 {
+                "zone NÉGATIVE — les couvertures amplifient".to_string()
+            } else {
+                "zone POSITIVE — les couvertures amortissent".to_string()
+            });
+        }
         Bascule::Mur { nom, niveau, .. } => lignes.push(format!("{nom} {niveau:.2}")),
         Bascule::RegimeGamma { .. } => {
             if let Some(z) = etat.zero_gamma {
@@ -470,6 +487,47 @@ mod tests {
         let corps = v["embeds"][0]["description"].as_str().unwrap();
         assert!(corps.contains("zero gamma 29000.00"), "{corps}");
         assert!(corps.contains("horizon <= 30 j"), "{corps}");
+    }
+
+    /// La zone annoncée suit le GEX, pas le sens du franchissement.
+    ///
+    /// C'est toute la difficulté du zero gamma : le profil croise zéro plusieurs
+    /// fois dès que les ailes sont chargées, on n'en retient qu'un, et « franchi
+    /// par le haut donc zone positive » devient faux. Ce test prend exactement ce
+    /// cas — un franchissement vers le haut alors que le GEX reste négatif — et
+    /// exige que le message dise NÉGATIVE. Sans lui, la déduction commode
+    /// reviendrait un jour dans le code sans que rien ne l'arrête.
+    #[test]
+    fn la_zone_suit_le_gex_et_non_le_sens_du_franchissement() {
+        let monte_mais_negatif = charge_json(
+            &Bascule::ZeroGamma {
+                niveau: 29_000.0,
+                vers_le_haut: true,
+            },
+            &etat(29_200.0, -1e8),
+            "NQ",
+            30,
+            "2026-09-02 14:05",
+        );
+        let v: serde_json::Value = serde_json::from_str(&monte_mais_negatif).unwrap();
+        let corps = v["embeds"][0]["description"].as_str().unwrap();
+        assert!(corps.contains("zone NÉGATIVE"), "{corps}");
+        assert!(corps.contains("amplifient"), "{corps}");
+
+        let descend_mais_positif = charge_json(
+            &Bascule::ZeroGamma {
+                niveau: 29_000.0,
+                vers_le_haut: false,
+            },
+            &etat(28_800.0, 1e8),
+            "NQ",
+            30,
+            "2026-09-02 14:05",
+        );
+        let v: serde_json::Value = serde_json::from_str(&descend_mais_positif).unwrap();
+        let corps = v["embeds"][0]["description"].as_str().unwrap();
+        assert!(corps.contains("zone POSITIVE"), "{corps}");
+        assert!(corps.contains("amortissent"), "{corps}");
     }
 
     /// Une donnée recopiée depuis un champ texte ne doit jamais devenir une
