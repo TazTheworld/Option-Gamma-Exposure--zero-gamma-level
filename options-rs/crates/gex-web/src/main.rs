@@ -21,7 +21,7 @@ use axum::routing::get;
 use clap::Parser;
 use gex_core::analyse::{Analyse, Parametres, analyser, greeks_muets};
 use gex_core::contrat::multiplicateur;
-use gex_store::series::{Pas, chemin_barres, chemin_niveaux};
+use gex_store::series::{Pas, chemin_barres, chemin_niveaux, lire_barres, spot_perime};
 use gex_store::{chemin_courant, lire_releve};
 use serde::Serialize;
 use tower_http::compression::CompressionLayer;
@@ -313,7 +313,14 @@ fn nom_horizon(jours: Option<i64>) -> String {
 /// se contenter de moins sous prétexte qu'il est joli. Un book dont le delta, le
 /// vega ou le thêta valent exactement zéro n'est pas un book neutre : c'est une
 /// source qui ne les publie pas, et ces trois-là n'ont aucun repli recalculé.
-fn avertissement(analyse: &Analyse, cote: bool) -> Option<String> {
+fn avertissement(analyse: &Analyse, cote: bool, perime: Option<String>) -> Option<String> {
+    // En tête, avant tout le reste : les autres avertissements décrivent une
+    // mesure absente, celui-ci une mesure FAUSSE. Un écran qui parlerait du vega
+    // manquant pendant que le prix est figé depuis onze heures aurait choisi de
+    // signaler le moindre des deux problèmes.
+    if let Some(p) = perime {
+        return Some(p);
+    }
     if !cote {
         return Some("Aucun open interest dans le relevé : le marché ne cote pas.".to_string());
     }
@@ -590,7 +597,18 @@ async fn profil(
             releve: Some(chaine.releve.0.and_utc().timestamp()),
             spot: Some(analyse.spot),
             strikes: strikes.len(),
-            avertissement: avertissement(&analyse, cote),
+            avertissement: avertissement(
+                &analyse,
+                cote,
+                // Les barres viennent de requêtes historiques : elles sont restées
+                // vivantes pendant la panne du 3 septembre 2026, quand les ticks
+                // d'option servaient un prix figé. C'est le seul recoupement
+                // disponible qui ne dépende pas de ce qui tombe.
+                lire_barres(&chemin_barres(&args.dir, &args.produit))
+                    .ok()
+                    .and_then(|b| spot_perime(analyse.spot, &b))
+                    .map(|p| p.phrase()),
+            ),
         },
         strikes,
         regime: analyse

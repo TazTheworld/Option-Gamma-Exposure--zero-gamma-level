@@ -36,7 +36,7 @@ use gex_store::ecriture::{archiver, ecrire_courant, elaguer_archives};
 use gex_store::series::{
     Barre, PointNiveaux, RETENTION_JOURS, a_la_minute, borne_de_retention, chemin_barres,
     chemin_niveaux, ecrire_barres, ecrire_niveaux, elaguer_barres, elaguer_niveaux,
-    faut_il_ecrire_un_point, lire_barres, lire_niveaux, recoller,
+    faut_il_ecrire_un_point, lire_barres, lire_niveaux, recoller, spot_perime,
 };
 
 use decisions::{
@@ -323,6 +323,13 @@ struct Etat {
     /// L'absence de vif a-t-elle déjà été dite ? Sans ce drapeau, le message
     /// reviendrait à chaque tour et noierait le reste du journal.
     vif_absent_signale: bool,
+    /// Le prix figé a-t-il déjà été signalé ?
+    ///
+    /// Même raison que les deux précédents, et la même conséquence quand le
+    /// drapeau manque : le 3 septembre 2026, un prix périmé pendant onze heures
+    /// n'a produit aucune ligne de journal. Le drapeau sert ici à en produire
+    /// exactement deux — une quand ça part, une quand ça revient.
+    spot_perime_signale: bool,
     /// Idem pour un marché qui ne cote pas.
     rien_ne_cote_signale: bool,
     /// Et pour un refus d'IB sur le vif.
@@ -573,6 +580,32 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                 let mut tries = vus;
                 tries.sort_by(|a, b| a.partial_cmp(b).expect("prix fini"));
                 etat.spot = tries[tries.len() / 2];
+            }
+
+            // Le prix servi est-il encore crédible ?
+            //
+            // La médiane ci-dessus ne teste que la PRÉSENCE des `undPrice`. Le
+            // 3 septembre 2026 ils sont restés présents et figés onze heures :
+            // le collecteur a publié des niveaux calculés contre 29 152 pendant
+            // que le sous-jacent traitait à 29 511, sans une ligne de journal.
+            //
+            // Les barres viennent de requêtes historiques — un autre mécanisme,
+            // resté vivant pendant toute la panne. C'est le seul contrôle
+            // disponible qui ne dépende pas de ce qui est tombé.
+            //
+            // On ne corrige pas le prix pour autant : si les ticks sont périmés,
+            // les IV le sont aussi, et remplacer le seul spot peindrait une
+            // fraîcheur qui n'existe pas. On le dit, c'est tout — mais on le dit.
+            match spot_perime(etat.spot, &etat.barres) {
+                Some(p) if !etat.spot_perime_signale => {
+                    println!("\n  ATTENTION : {}", p.phrase());
+                    etat.spot_perime_signale = true;
+                }
+                None if etat.spot_perime_signale => {
+                    println!("\n  Le prix servi a repris sa marche.");
+                    etat.spot_perime_signale = false;
+                }
+                _ => {}
             }
 
             let fondue = fusionner(socle_courant, frais, etat.spot).map_err(|e| e.to_string())?;

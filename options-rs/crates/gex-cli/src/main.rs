@@ -19,6 +19,7 @@ use gex_core::analyse::{
 use gex_core::contrat::multiplicateur;
 use gex_core::temps::{Convention, InstantReleve};
 use gex_store::historique::{LigneHistorique, Migration, enregistrer};
+use gex_store::series::{chemin_barres, lire_barres, spot_perime};
 use gex_store::validation::{
     Comparaison, INTERVALLE_MINIMAL, N_MINIMAL, comparer, comparer_derive, lire_historique,
     mediane, observer, taux_de_franchissement,
@@ -1050,10 +1051,28 @@ fn executer() -> Result<(), String> {
     }
     let analyse = un_passage(&source, &params, &args, dte_max)?;
     if !args.no_history {
-        annoncer(
-            enregistrer(&args.history, &ligne_historique(&analyse, &args, dte_max))
-                .map_err(|e| format!("historique : {e}"))?,
-        );
+        // Une ligne d'historique est définitive. On n'en écrit pas une qui repose
+        // sur un prix dont on doute.
+        //
+        // Le 3 septembre 2026, deux lignes ont été enregistrées pendant que la
+        // source servait un prix figé depuis onze heures : spot, GEX, zéro gamma
+        // et murs, tout y est faux, et rien dans le fichier ne le dit. Elles ne
+        // se rattrapent pas — IB ne sert pas d'open interest historique, donc la
+        // séance ne se rejoue pas.
+        //
+        // Refuser vaut donc mieux qu'écrire : une observation manquante se voit,
+        // une observation fausse se moyenne avec les autres.
+        let barres = lire_barres(&chemin_barres(&args.dir, &args.produit)).unwrap_or_default();
+        match spot_perime(analyse.spot, &barres) {
+            Some(p) => {
+                eprintln!("\nRien n'a été enregistré dans l'historique.");
+                eprintln!("{}", p.phrase());
+            }
+            None => annoncer(
+                enregistrer(&args.history, &ligne_historique(&analyse, &args, dte_max))
+                    .map_err(|e| format!("historique : {e}"))?,
+            ),
+        }
     }
     Ok(())
 }

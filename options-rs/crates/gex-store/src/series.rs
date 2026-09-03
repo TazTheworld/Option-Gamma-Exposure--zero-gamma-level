@@ -140,6 +140,86 @@ pub struct PointNiveaux {
     pub short_gamma: Option<f64>,
 }
 
+/// L'écart toléré entre le prix servi par la source et le dernier prix traité.
+///
+/// Un demi pour cent, soit environ 145 points sur le NQ. Le seuil est choisi
+/// large à dessein : les deux chiffres ne viennent pas du même mécanisme — le
+/// premier des ticks d'option, le second des barres historiques — et un écart de
+/// quelques points en séance rapide n'a rien d'anormal. Il ne s'agit pas de
+/// mesurer une divergence fine mais d'attraper une source qui a cessé de servir.
+///
+/// La panne du 3 septembre 2026 valait **1,2 %** au moment où elle a été vue, et
+/// elle durait depuis onze heures. Ce seuil l'aurait signalée dans la minute.
+pub const ECART_TOLERE: f64 = 0.005;
+
+/// Le prix servi est-il encore crédible face au dernier prix traité ?
+///
+/// # Pourquoi cette confrontation existe
+///
+/// Le spot du collecteur n'est pas la cotation du future : c'est la **médiane des
+/// `undPrice`** qu'IB glisse dans chaque tick d'option. Quand la source cesse de
+/// rafraîchir ces ticks, les valeurs restent *présentes* mais périmées — et un
+/// code qui ne teste que leur présence continue de publier sans rien remarquer.
+///
+/// C'est exactement ce qui s'est produit le 3 septembre 2026 : onze heures de
+/// niveaux calculés contre un prix de 29 152 pendant que le sous-jacent traitait
+/// à 29 511. L'écran fonctionnait, servait fidèlement des chiffres faux, et rien
+/// dans le dépôt ne pouvait le dire.
+///
+/// Les barres, elles, viennent de requêtes **historiques** — un tout autre
+/// mécanisme, resté vivant pendant toute la panne. Les confronter est donc le
+/// seul contrôle disponible qui ne dépende pas de ce qui est tombé.
+///
+/// Rend `None` quand tout va bien, ou quand il n'y a rien à comparer : sans
+/// barre, l'absence de contrôle ne doit pas se lire comme un contrôle réussi.
+pub fn spot_perime(spot: f64, barres: &[Barre]) -> Option<Perime> {
+    let dernier = barres.last()?;
+    if spot <= 0.0 || dernier.close <= 0.0 {
+        return None;
+    }
+    let fraction = (spot - dernier.close).abs() / spot;
+    (fraction > ECART_TOLERE).then_some(Perime {
+        spot,
+        dernier_traite: dernier.close,
+        instant_traite: dernier.instant,
+        fraction,
+    })
+}
+
+/// Ce qu'on sait d'un prix qui a cessé de suivre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Perime {
+    /// Le prix servi par la source, celui dont on doute.
+    pub spot: f64,
+    /// La clôture de la dernière barre, qui elle a continué d'arriver.
+    pub dernier_traite: f64,
+    /// L'instant de cette barre, en UTC.
+    pub instant_traite: NaiveDateTime,
+    /// L'écart, en fraction du prix servi.
+    pub fraction: f64,
+}
+
+impl Perime {
+    /// L'écart en points du sous-jacent.
+    pub fn points(&self) -> f64 {
+        self.dernier_traite - self.spot
+    }
+
+    /// Ce qu'on en dit, en une phrase, à qui lit le journal ou l'écran.
+    pub fn phrase(&self) -> String {
+        format!(
+            "Le prix servi par la source ({:.2}) s'écarte de {:+.0} points du dernier prix \
+             traité ({:.2} à {}). C'est {:.1} % — au-delà du demi pour cent toléré. Les ticks \
+             d'option ne se rafraîchissent probablement plus : niveaux, zéro gamma et murs \
+             sont calculés contre un prix qui n'existe plus.",
+            self.spot,
+            self.points(),
+            self.dernier_traite,
+            self.instant_traite.format("%H:%M UTC"),
+            self.fraction * 100.0,
+        )
+    }
+}
 /// La minute a-t-elle changé depuis le dernier point écrit ?
 ///
 /// Comparer des durées écoulées dériverait : le collecteur tourne toutes les
@@ -591,6 +671,56 @@ mod tests {
         }
     }
 
+    /// La panne du 3 septembre 2026, rejouée sur ses vrais chiffres.
+    ///
+    /// Onze heures de niveaux calculés contre 29 152 pendant que le sous-jacent
+    /// traitait à 29 511. Ce test est le témoin : si un jour il cesse de passer,
+    /// c'est que le garde-fou a été desserré.
+    #[test]
+    fn un_prix_fige_est_repere() {
+        let barres = vec![
+            barre("2026-09-03 20:44:00", 29_510.75),
+            barre("2026-09-03 20:45:00", 29_511.00),
+        ];
+        let p = spot_perime(29_152.06, &barres).expect("l'écart vaut 1,2 %, il doit être vu");
+        assert_eq!(p.dernier_traite, 29_511.00);
+        assert!((p.points() - 358.94).abs() < 0.01, "{}", p.points());
+        assert!(p.fraction > 0.012 && p.fraction < 0.013, "{}", p.fraction);
+        let phrase = p.phrase();
+        assert!(phrase.contains("29152.06"), "{phrase}");
+        assert!(phrase.contains("20:45 UTC"), "{phrase}");
+    }
+
+    /// Une séance normale ne doit rien déclencher.
+    ///
+    /// Les deux chiffres ne viennent pas du même mécanisme, donc ils ne
+    /// coïncident jamais exactement. Un garde-fou qui crierait sur quelques
+    /// points s'apprendrait à ignorer en une séance.
+    #[test]
+    fn un_ecart_ordinaire_ne_declenche_pas() {
+        let barres = vec![barre("2026-09-03 20:45:00", 29_500.00)];
+        assert_eq!(spot_perime(29_499.25, &barres), None);
+        assert_eq!(spot_perime(29_420.00, &barres), None, "0,27 % : toléré");
+        assert!(
+            spot_perime(29_300.00, &barres).is_some(),
+            "0,68 % : au-delà du seuil"
+        );
+    }
+
+    /// Sans barre, il n'y a pas de contrôle — et surtout pas un contrôle réussi.
+    ///
+    /// Rendre `None` ici est un choix qui se défend mal en apparence : il donne
+    /// la même réponse que « tout va bien ». Mais l'appelant, lui, sait s'il a
+    /// des barres ; lui faire croire à une confrontation qui n'a pas eu lieu
+    /// serait pire.
+    #[test]
+    fn sans_barre_aucune_confrontation() {
+        assert_eq!(spot_perime(29_152.06, &[]), None);
+        assert_eq!(
+            spot_perime(0.0, &[barre("2026-09-03 20:45:00", 29_500.0)]),
+            None
+        );
+    }
     fn point(quand: &str, zero: Option<f64>) -> PointNiveaux {
         PointNiveaux {
             instant: instant(quand),
