@@ -414,8 +414,8 @@ quinzaine de minutes avant que la chaîne soit de nouveau complète.
 
 ## Ce qui reste à faire sur place
 
-L'accès à distance et le pare-feu se sont ajoutés à la liste des choses faites.
-Restent :
+L'accès à distance, le pare-feu et le redémarrage nocturne de Gateway sont
+réglés. Restent :
 
 1. **Enregistrer la ligne d'historique quotidienne.** Le collecteur écrit les
    parquet ; c'est le binaire `gex` qui ajoute la ligne à `history.csv`, et rien
@@ -423,12 +423,18 @@ Restent :
    observations qui alimentent les six affirmations — et une séance non
    enregistrée est perdue pour toujours. Un timer systemd après la clôture
    suffirait.
-2. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
+2. **Stabiliser le réseau, ou le câbler.** Le Wi-Fi décroche **23 fois par
+   jour** : signal à −68 dBm sur 2,4 GHz, et la borne répond `status=30`
+   — « association rejetée temporairement ». Chaque décrochage tue les
+   connexions QUIC du tunnel, d'où des 502 passagers sur l'écran. `power_save`
+   est déjà désactivé, donc ce n'est pas la piste. `eth0` est libre et aucun
+   câble n'y est branché : c'est la seule correction qui ferme vraiment le sujet.
+3. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
    figé une fois — alimenté mais sourd, sans trace au journal parce qu'il était
    volatil. Le journal est désormais persistant, `panic=10` est passé au noyau et
    une sentinelle surveille les écritures disque ; il faut maintenant du temps
    pour savoir si cela suffit.
-3. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
+4. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
    redéploiement.
 
 Les tests sur l'architecture, eux, n'ont plus à être refaits à la main : la CI les

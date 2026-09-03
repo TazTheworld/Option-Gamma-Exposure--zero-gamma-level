@@ -571,6 +571,35 @@ attend une validation sur le téléphone. Le journal le dit ailleurs, en
 minutes — et `TWOFA_TIMEOUT_ACTION=exit`, pour que systemd relance proprement
 plutôt que de laisser une session à moitié ouverte.
 
+**`AutoRestartTime` vide coûte sept heures de collecte par nuit.** C'est le piège
+le plus cher de la liste, et il ne se voit pas : tout a l'air de marcher. Sans
+cette valeur, Gateway fait chaque nuit un redémarrage **à froid**, qui exige une
+authentification complète — donc le second facteur, donc quelqu'un devant son
+téléphone à 23 h 45. Le journal d'IBC le dit sans détour, encore faut-il le
+lire : `autorestart file not found: full authentication will be required`.
+
+Mesuré ici le 3 septembre 2026 : session perdue à 23 h 52, revenue à 7 h 12,
+**93 tentatives de reconnexion** entre les deux. Sept heures vingt d'une séance
+qu'aucun rattrapage ne rendra, puisqu'IB ne sert pas d'open interest historique.
+
+Le réglage à poser est `AutoRestartTime=11:45 PM` — format `HH:MM AM/PM`, une
+seule espace, dans le fuseau déclaré à `jts.ini`. Il bascule Gateway de
+l'auto-déconnexion vers l'auto-redémarrage, qui reprend la session **sans
+ré-authentifier**. L'interruption tombe alors à cinq secondes, et le collecteur
+garde son socle du jour au lieu de rebalayer douze minutes.
+
+Il faut lui adjoindre `ColdRestartTime`, parce qu'IBKR impose malgré tout un
+arrêt complet hebdomadaire : IBC le fait proprement le dimanche à l'heure
+choisie, qui doit être postérieure à 01 h 00 US/Eastern **dans le fuseau local**
+— l'écart varie de cinq à sept heures selon les bascules d'heure d'été, donc
+viser large. Ce redémarrage-là redemande le second facteur, une fois par semaine
+et à une heure qu'on choisit plutôt que de la subir.
+
+Enfin, poser ces valeurs ne suffit pas : elles ne s'appliquent qu'au démarrage
+suivant d'IBC, et ce démarrage-là est encore un démarrage à froid. Il faut donc
+le déclencher soi-même, téléphone en main, plutôt que de le laisser tomber la
+nuit.
+
 **`BindAddress` dans la configuration d'IBC ne concerne pas l'API.** Le nom
 invite à croire qu'il restreint le port 4001 ; il gouverne le **serveur de
 commandes d'IBC**, et le port de l'API continue d'écouter sur `*:4001`. Il n'y a
