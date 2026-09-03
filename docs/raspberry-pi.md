@@ -37,6 +37,14 @@ aussi — on reste dans les dizaines de mégaoctets ; une carte SD ne s'en aper�
 pas. Ce sont les archives, si on les allume, qui coûtent : compter dix gigaoctets
 pour trente jours.
 
+Côté réseau, l'écran est le seul poste qui compte : il redemande les trois séries
+toutes les quinze secondes. Elles pesaient **1 028 Ko par passage** — 4 Mo par
+minute et par onglet ouvert, portés par le Wi-Fi du Pi. Depuis que `gex-web`
+comprime lui-même, c'est **169 Ko**, et une requête en réseau local est passée de
+0,36 à 0,09 s. Cloudflare comprimait déjà pour les navigateurs venus du tunnel,
+ce qui masquait le coût vu de l'extérieur mais ne l'enlevait ni du trajet
+Pi → Cloudflare, ni des accès locaux.
+
 **Le code compile pour `aarch64-unknown-linux-gnu`** sans une seule modification, ce
 qui a été vérifié sur l'ensemble du workspace, tests et exemples compris.
 
