@@ -265,11 +265,22 @@ impl Veilleuse {
 /// outil de transformation JSON sur la machine qui veille.
 ///
 /// Aucune E/S ici : la fonction rend une chaîne, elle n'envoie rien.
+/// Le mot qui nomme la zone de gamma, depuis le SIGNE du GEX et rien d'autre.
+///
+/// Surtout pas depuis le sens du franchissement : le profil croise zéro
+/// plusieurs fois dès que les ailes sont chargées, on n'en retient qu'un, et
+/// au-dessus de celui-là le gamma peut très bien rester négatif.
+fn zone(gex: f64) -> &'static str {
+    if gex < 0.0 { "NÉGATIVE" } else { "POSITIVE" }
+}
+
 pub fn charge_json(
     bascule: &Bascule,
     etat: &Etat,
     produit: &str,
     horizon: i64,
+    // Le GEX du périmètre 0DTE, quand la séance en a un.
+    gex_0dte: Option<f64>,
     instant: &str,
 ) -> String {
     let couleur = match bascule {
@@ -295,11 +306,15 @@ pub fn charge_json(
             // trois » — et c'est précisément dans ce cas-là qu'une alerte compte.
             //
             // Le signe du GEX, lui, ne se déduit pas : il est mesuré.
-            lignes.push(if etat.gex < 0.0 {
-                "zone NÉGATIVE — les couvertures amplifient".to_string()
-            } else {
-                "zone POSITIVE — les couvertures amortissent".to_string()
-            });
+            lignes.push(format!(
+                "zone {} — les couvertures {}",
+                zone(etat.gex),
+                if etat.gex < 0.0 {
+                    "amplifient"
+                } else {
+                    "amortissent"
+                }
+            ));
         }
         Bascule::Mur { nom, niveau, .. } => lignes.push(format!("{nom} {niveau:.2}")),
         Bascule::RegimeGamma { .. } => {
@@ -307,6 +322,20 @@ pub fn charge_json(
                 lignes.push(format!("zero gamma {z:.2}"));
             }
         }
+    }
+    // Le 0DTE, toujours, et sur toutes les bascules.
+    //
+    // Ce n'est pas une seconde alerte : c'est le même événement vu d'un autre
+    // périmètre. Le collecteur n'alerte que sur un horizon, et à raison — le GEX
+    // change de signe rien qu'en changeant d'horizon, donc alerter sur tous
+    // enverrait la même bascule plusieurs fois en se contredisant. Mais taire le
+    // 0DTE reviendrait à cacher là où le gamma se trouve vraiment : mesuré le
+    // 3 septembre 2026, les échéances à 0-1 jour portaient 83 % du GEX.
+    //
+    // La ligne n'apparaît pas hors séance, quand le périmètre est vide : l'échéance
+    // du jour est déjà réglée et « 0DTE » ne contient plus rien.
+    if let Some(g) = gex_0dte {
+        lignes.push(format!("0DTE : zone {} (GEX {g:+.0})", zone(g)));
     }
     lignes.push(format!("horizon <= {horizon} j  |  {instant}"));
 
@@ -477,7 +506,7 @@ mod tests {
             niveau: 29_000.0,
             vers_le_haut: false,
         };
-        let charge = charge_json(&b, &e, "NQ", 30, "2026-09-02 14:05");
+        let charge = charge_json(&b, &e, "NQ", 30, None, "2026-09-02 14:05");
         let v: serde_json::Value = serde_json::from_str(&charge).expect("JSON valide");
         let titre = v["embeds"][0]["title"].as_str().unwrap();
         assert!(
@@ -507,6 +536,7 @@ mod tests {
             &etat(29_200.0, -1e8),
             "NQ",
             30,
+            None,
             "2026-09-02 14:05",
         );
         let v: serde_json::Value = serde_json::from_str(&monte_mais_negatif).unwrap();
@@ -522,12 +552,63 @@ mod tests {
             &etat(28_800.0, 1e8),
             "NQ",
             30,
+            None,
             "2026-09-02 14:05",
         );
         let v: serde_json::Value = serde_json::from_str(&descend_mais_positif).unwrap();
         let corps = v["embeds"][0]["description"].as_str().unwrap();
         assert!(corps.contains("zone POSITIVE"), "{corps}");
         assert!(corps.contains("amortissent"), "{corps}");
+    }
+
+    /// Le 0DTE est rapporté à part, et peut contredire l'horizon qui a alerté.
+    ///
+    /// C'est le cas qui justifie la ligne : le GEX change de signe rien qu'en
+    /// changeant d'horizon, donc un régime positif à trente jours n'empêche pas
+    /// le périmètre du jour d'être négatif — et c'est celui-là qui porte la
+    /// majeure partie du gamma. Un message qui n'annoncerait que l'horizon large
+    /// dirait « les couvertures amortissent » le jour où elles amplifient.
+    #[test]
+    fn le_0dte_est_rapporte_meme_quand_il_contredit_l_horizon() {
+        let charge = charge_json(
+            &Bascule::ZeroGamma {
+                niveau: 29_000.0,
+                vers_le_haut: true,
+            },
+            &etat(29_200.0, 1e8),
+            "NQ",
+            30,
+            Some(-4e7),
+            "2026-09-02 14:05",
+        );
+        let v: serde_json::Value = serde_json::from_str(&charge).unwrap();
+        let corps = v["embeds"][0]["description"].as_str().unwrap();
+        assert!(corps.contains("zone POSITIVE"), "l'horizon large : {corps}");
+        assert!(corps.contains("0DTE : zone NÉGATIVE"), "{corps}");
+        assert!(corps.contains("-40000000"), "le GEX du 0DTE : {corps}");
+    }
+
+    /// Hors séance le périmètre du jour est vide, et la ligne disparaît.
+    ///
+    /// L'échéance du jour est déjà réglée : annoncer « 0DTE : zone POSITIVE »
+    /// avec un GEX nul décrirait un régime là où il n'y a plus rien.
+    #[test]
+    fn sans_0dte_la_ligne_n_apparait_pas() {
+        let charge = charge_json(
+            &Bascule::ZeroGamma {
+                niveau: 29_000.0,
+                vers_le_haut: true,
+            },
+            &etat(29_200.0, -1e8),
+            "NQ",
+            30,
+            None,
+            "2026-09-02 14:05",
+        );
+        let v: serde_json::Value = serde_json::from_str(&charge).unwrap();
+        let corps = v["embeds"][0]["description"].as_str().unwrap();
+        assert!(!corps.contains("0DTE"), "{corps}");
+        assert!(corps.contains("zone NÉGATIVE"), "{corps}");
     }
 
     /// Une donnée recopiée depuis un champ texte ne doit jamais devenir une
@@ -542,6 +623,7 @@ mod tests {
             &etat(29_000.0, -1e8),
             "@everyone",
             30,
+            None,
             "2026-09-02 14:05",
         );
         let v: serde_json::Value = serde_json::from_str(&charge).unwrap();

@@ -650,6 +650,10 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                 //
                 // Le point de niveaux n'existe que si quelque chose cote.
                 if cote {
+                    // Le 0DTE est calculé AVANT l'horizon qui alerte, dans le
+                    // même passage : `horizons_suivis` trie par ordre croissant.
+                    // Le retenir ici ne coûte donc pas une analyse de plus.
+                    let mut gex_0dte: Option<f64> = None;
                     for horizon in horizons_suivis(args.dte_max) {
                         let a = match analyser(
                             &fondue,
@@ -666,6 +670,10 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                             // déjà réglée. On saute celui-là, les autres passent.
                             Err(_) => continue,
                         };
+
+                        if horizon == 0 {
+                            gex_0dte = Some(a.gex);
+                        }
 
                         // Un seul horizon alerte. Le GEX change de signe rien
                         // qu'en changeant d'horizon : alerter sur tous enverrait
@@ -694,6 +702,7 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                                         &observe,
                                         &args.produit.to_uppercase(),
                                         horizon,
+                                        gex_0dte,
                                         &instant.format("%Y-%m-%d %H:%M").to_string(),
                                     );
                                     if let Err(e) = remettre(programme, &charge) {
