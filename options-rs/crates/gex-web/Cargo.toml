@@ -19,3 +19,14 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# La compression des réponses. Mesuré le 3 septembre 2026 : l'écran recharge
+# toutes les quinze secondes et tire 1,03 Mo de JSON à chaque passage, soit 4 Mo
+# par minute et par onglet ouvert. Gzip ramène `/api/niveaux` de 605 Ko à une
+# centaine. Cloudflare comprimait déjà pour les navigateurs qui passent par le
+# tunnel — mais ni le trajet Pi → Cloudflare, ni les accès en réseau local, n'en
+# profitaient, et c'est le Wi-Fi du Pi qui portait la différence.
+#
+# gzip et brotli seulement : `compression-zstd` tirerait `zstd-sys`, donc du C, et
+# l'arbre doit rester en Rust pur pour compiler sur aarch64 sans chaîne C. C'est
+# la raison qui avait déjà fait retirer le codec zstd de `parquet`.
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"] }

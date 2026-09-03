@@ -24,6 +24,7 @@ use gex_core::contrat::multiplicateur;
 use gex_store::series::{Pas, chemin_barres, chemin_niveaux};
 use gex_store::{chemin_courant, lire_releve};
 use serde::Serialize;
+use tower_http::compression::CompressionLayer;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "gex-web", about = "L'écran de séance, servi en local")]
@@ -657,7 +658,13 @@ async fn main() -> ExitCode {
         .route("/api/barres", get(barres))
         .route("/api/niveaux", get(niveaux))
         .route("/api/profil", get(profil))
-        .with_state(args);
+        .with_state(args)
+        // La compression, posée sur toutes les routes. L'écran redemande les trois
+        // séries toutes les quinze secondes : sans elle, un onglet ouvert tire 4 Mo
+        // par minute, et c'est le Wi-Fi du Pi qui les porte. Le navigateur choisit
+        // brotli ou gzip ; ce qui n'annonce ni l'un ni l'autre reçoit le clair, donc
+        // rien ne se casse.
+        .layer(CompressionLayer::new());
 
     // Le loopback par défaut : ces relevés sont à toi, et rien ne justifie de
     // les exposer au réseau sans qu'on le demande. `--ecoute 0.0.0.0` lève la
