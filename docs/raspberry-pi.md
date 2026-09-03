@@ -269,6 +269,33 @@ sudo systemctl enable --now gex-collector gex-web
 journalctl -u gex-collector -f
 ```
 
+### Et le timer qui écrit l'historique
+
+Les deux services ne suffisent pas. Le collecteur écrit les parquet ; c'est le
+binaire `gex` qui ajoute une ligne à `history.csv`, et **rien ne le lance de
+lui-même**. Sur une machine sans personne devant, cela veut dire des relevés qui
+s'accumulent et des observations qui n'arrivent jamais — or ce sont elles qui
+alimentent les six affirmations de `--valider`, et IB ne servant pas d'open
+interest historique, une séance non enregistrée est perdue pour toujours.
+
+```ini
+# /etc/systemd/system/gex-historique.timer
+[Timer]
+OnCalendar=Mon..Fri 22:05
+Persistent=true
+```
+
+22 h 05 à Paris, soit 16 h 05 à New York : juste après la clôture du cash, et
+bien avant la coupure technique du CME comme avant le redémarrage de Gateway.
+
+`Persistent=true` rattrape au démarrage suivant si le Pi était éteint à l'heure
+dite. Une ligne à une heure inhabituelle vaut mieux qu'une séance perdue, et le
+lecteur refuse de toute façon d'enregistrer deux fois le même relevé.
+
+Le service correspondant est un `Type=oneshot` qui lance `gex NQ` dans
+`/opt/gex`. Il ne parle pas à IB — il relit `snapshots/NQ/courant.parquet` — donc
+il continue de fonctionner même si Gateway est coupé.
+
 ## Joindre l'écran depuis une autre machine
 
 `gex-web` écoute sur le loopback par défaut, et **ce défaut est un choix** : ces
@@ -414,27 +441,21 @@ quinzaine de minutes avant que la chaîne soit de nouveau complète.
 
 ## Ce qui reste à faire sur place
 
-L'accès à distance, le pare-feu et le redémarrage nocturne de Gateway sont
-réglés. Restent :
+L'accès à distance, le pare-feu, le redémarrage nocturne de Gateway et
+l'enregistrement quotidien de l'historique sont réglés. Restent :
 
-1. **Enregistrer la ligne d'historique quotidienne.** Le collecteur écrit les
-   parquet ; c'est le binaire `gex` qui ajoute la ligne à `history.csv`, et rien
-   ne le lance sur le Pi. Les relevés s'accumulent donc, mais pas les
-   observations qui alimentent les six affirmations — et une séance non
-   enregistrée est perdue pour toujours. Un timer systemd après la clôture
-   suffirait.
-2. **Stabiliser le réseau, ou le câbler.** Le Wi-Fi décroche **23 fois par
+1. **Stabiliser le réseau, ou le câbler.** Le Wi-Fi décroche **23 fois par
    jour** : signal à −68 dBm sur 2,4 GHz, et la borne répond `status=30`
    — « association rejetée temporairement ». Chaque décrochage tue les
    connexions QUIC du tunnel, d'où des 502 passagers sur l'écran. `power_save`
    est déjà désactivé, donc ce n'est pas la piste. `eth0` est libre et aucun
    câble n'y est branché : c'est la seule correction qui ferme vraiment le sujet.
-3. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
+2. **Confirmer qu'une séance entière tient sans redémarrage.** Le Pi s'est déjà
    figé une fois — alimenté mais sourd, sans trace au journal parce qu'il était
    volatil. Le journal est désormais persistant, `panic=10` est passé au noyau et
    une sentinelle surveille les écritures disque ; il faut maintenant du temps
    pour savoir si cela suffit.
-4. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
+3. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
    redéploiement.
 
 Les tests sur l'architecture, eux, n'ont plus à être refaits à la main : la CI les
