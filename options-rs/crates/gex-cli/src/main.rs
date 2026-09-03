@@ -691,15 +691,31 @@ fn afficher(
             optionnel(apres, dec)
         );
     }
+    // L'écart entre les deux murs est la seule chose que leur juxtaposition
+    // n'apprend pas d'elle-même. Mesuré sur 1 414 relevés : ils ne désignent le
+    // même strike que 15,6 % du temps côté call et 5,7 % côté put, et l'écart
+    // médian vaut 400 puis 1 000 points. Ce ne sont donc pas deux avis sur un
+    // même niveau mais deux mesures à deux distances — le gamma colle à la
+    // monnaie, l'open interest s'accumule loin, sur des strikes ronds.
+    //
+    // Le signe dit de quel côté : positif, l'open interest se tient au-delà du
+    // mur gamma. C'est sa COMPRESSION qui vaut d'être vue, puisqu'elle signale
+    // que le positionnement accumulé et la sensibilité du moment convergent.
+    let ecart_murs = |gamma: Option<f64>, oi: Option<f64>| match (gamma, oi) {
+        (Some(g), Some(o)) => format!("   écart {} pts", groupe_signe(o - g, dec)),
+        _ => String::new(),
+    };
     println!(
-        "Call Wall  : {:>12} (gamma)   {:>12} (open interest)",
+        "Call Wall  : {:>12} (gamma)   {:>12} (open interest){}",
         optionnel(a.murs.call, dec),
-        optionnel(a.murs.call_oi, dec)
+        optionnel(a.murs.call_oi, dec),
+        ecart_murs(a.murs.call, a.murs.call_oi)
     );
     println!(
-        "Put Wall   : {:>12} (gamma)   {:>12} (open interest)",
+        "Put Wall   : {:>12} (gamma)   {:>12} (open interest){}",
         optionnel(a.murs.put, dec),
-        optionnel(a.murs.put_oi, dec)
+        optionnel(a.murs.put_oi, dec),
+        ecart_murs(a.murs.put, a.murs.put_oi)
     );
     // Max pain : le strike où les options de l'échéance la plus proche valent le
     // moins au règlement. Une description de l'open interest, pas une prévision —

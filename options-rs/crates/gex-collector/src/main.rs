@@ -715,6 +715,8 @@ fn session(args: &Arguments, etat: &mut Etat, arret: &Arc<AtomicBool>) -> Result
                             put_wall_oi: a.murs.put_oi,
                             call_wall_vol: a.murs.call_vol,
                             put_wall_vol: a.murs.put_vol,
+                            long_gamma: a.gamma_majeur.long,
+                            short_gamma: a.gamma_majeur.court,
                             iv_atm: a.iv_atm,
                             skew: a.skew,
                             max_pain: a.max_pain,

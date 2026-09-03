@@ -124,6 +124,20 @@ pub struct PointNiveaux {
     /// se déplace vers le spot n'a pas le même sens qu'un max pain immobile que
     /// le prix rejoint.
     pub max_pain: Option<f64>,
+    /// Les deux strikes où le gamma **net** est le plus concentré.
+    ///
+    /// Ils n'étaient pas dans la série : l'écran les tirait du relevé courant, et
+    /// ils n'avaient donc aucune trace. C'était une lacune circulaire — on ne
+    /// pouvait pas savoir s'ils méritaient leurs deux lignes, faute de pouvoir
+    /// mesurer à quelle fréquence ils se séparent des murs gamma. Les enregistrer
+    /// tranche la question au lieu de la discuter.
+    ///
+    /// À ne pas confondre avec les murs, qui répondent à autre chose : un mur est
+    /// calculé d'un seul côté du spot, ceux-ci prennent le GEX net sans regarder
+    /// de quel côté il tombe.
+    pub long_gamma: Option<f64>,
+    /// Le strike au GEX net le plus négatif.
+    pub short_gamma: Option<f64>,
 }
 
 /// La minute a-t-elle changé depuis le dernier point écrit ?
@@ -426,6 +440,8 @@ pub fn ecrire_niveaux(points: &[PointNiveaux], cible: &Path) -> Result<(), Erreu
             ("dte_max", peut_etre(|p| p.dte_max)),
             ("call_wall_vol", peut_etre(|p| p.call_wall_vol)),
             ("put_wall_vol", peut_etre(|p| p.put_wall_vol)),
+            ("long_gamma", peut_etre(|p| p.long_gamma)),
+            ("short_gamma", peut_etre(|p| p.short_gamma)),
         ],
     )?;
     ecrire_atomique(&lot, cible)
@@ -521,6 +537,8 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             "dte_max",
             "call_wall_vol",
             "put_wall_vol",
+            "long_gamma",
+            "short_gamma",
         ],
     )?;
     Ok(instants
@@ -548,6 +566,8 @@ pub fn lire_niveaux(source: &Path) -> Result<Vec<PointNiveaux>, ErreurReleve> {
             dte_max: c[15][i],
             call_wall_vol: c[16][i],
             put_wall_vol: c[17][i],
+            long_gamma: c[18][i],
+            short_gamma: c[19][i],
         })
         .collect())
 }
@@ -592,6 +612,8 @@ mod tests {
             call_wall_vol: Some(29_650.0),
             put_wall_vol: Some(29_050.0),
             put_wall_oi: Some(29_000.0),
+            long_gamma: Some(29_300.0),
+            short_gamma: Some(29_050.0),
         }
     }
 
@@ -928,6 +950,11 @@ mod tests {
         assert_eq!(relus[0].dte_max, None, "horizon inconnu, pas supposé");
         assert_eq!(relus[0].zero_gamma, Some(29_400.0), "le reste est intact");
         assert_eq!(relus[0].put_wall_oi, p.put_wall_oi);
+        // Les deux strikes de gamma majeur sont arrivés en septembre 2026 : les
+        // points d'avant n'en portent pas, et vide doit rester vide. Zéro serait
+        // un prix, et l'écran tracerait une concentration de gamma au plancher.
+        assert_eq!(relus[0].long_gamma, None, "colonne absente, pas un zéro");
+        assert_eq!(relus[0].short_gamma, None);
         let _ = std::fs::remove_dir_all(&d);
     }
 

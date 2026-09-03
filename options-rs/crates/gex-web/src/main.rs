@@ -93,6 +93,13 @@ struct Niveau {
     /// position, par opposition aux positions accumulees depuis des semaines.
     call_wall_vol: Option<f64>,
     put_wall_vol: Option<f64>,
+    /// Les deux strikes où le gamma NET est le plus concentré.
+    ///
+    /// Dans la série depuis septembre 2026 seulement : ils ne venaient jusque-là
+    /// que du relevé courant, donc sans trace. `None` sur les points écrits
+    /// avant.
+    long_gamma: Option<f64>,
+    short_gamma: Option<f64>,
     /// La volatilité implicite à la monnaie, et la pente du smile.
     ///
     /// Ni l'une ni l'autre n'est un prix : elles vont dans leur propre bande, pas
@@ -452,6 +459,8 @@ async fn niveaux(
             put_wall_oi: p.put_wall_oi,
             call_wall_vol: p.call_wall_vol,
             put_wall_vol: p.put_wall_vol,
+            long_gamma: p.long_gamma,
+            short_gamma: p.short_gamma,
             iv_atm: p.iv_atm,
             skew: p.skew,
             max_pain: p.max_pain,
