@@ -210,7 +210,7 @@ WorkingDirectory=/opt/gex
 ExecStart=/opt/gex/bin/gex-collector NQ --adresse 127.0.0.1:4001
 
 # Les alertes vivent entièrement dans ce fichier, absent par défaut. Y écrire
-# GEX_ALERTE_COMMANDE=/opt/gex/bin/alerte-discord.sh et DISCORD_WEBHOOK=... les
+# GEX_ALERTE_COMMANDE=/opt/gex/bin/alerte-discord.sh et GEX_DISCORD_WEBHOOK=... les
 # allume au redémarrage suivant. Tant qu'il n'existe pas, les bascules ne sont
 # qu'écrites au journal — plutôt qu'un envoi qui échouerait à chaque passage.
 EnvironmentFile=-/etc/gex.env
@@ -441,8 +441,9 @@ quinzaine de minutes avant que la chaîne soit de nouveau complète.
 
 ## Ce qui reste à faire sur place
 
-L'accès à distance, le pare-feu, le redémarrage nocturne de Gateway et
-l'enregistrement quotidien de l'historique sont réglés. Restent :
+L'accès à distance, le pare-feu, le redémarrage nocturne de Gateway,
+l'enregistrement quotidien de l'historique et les alertes Discord sont
+réglés. Restent :
 
 1. **Stabiliser le réseau, ou le câbler.** Le Wi-Fi décroche **23 fois par
    jour** : signal à −68 dBm sur 2,4 GHz, et la borne répond `status=30`
@@ -455,8 +456,6 @@ l'enregistrement quotidien de l'historique sont réglés. Restent :
    volatil. Le journal est désormais persistant, `panic=10` est passé au noyau et
    une sentinelle surveille les écritures disque ; il faut maintenant du temps
    pour savoir si cela suffit.
-3. **Remonter les alertes**, en écrivant `/etc/gex.env`. Deux lignes, aucun
-   redéploiement.
 
 Les tests sur l'architecture, eux, n'ont plus à être refaits à la main : la CI les
 rejoue en aarch64 à chaque poussée.
